@@ -28,6 +28,6 @@ libdavfuse.c: config.h config.mk
 libdavfuse.o: libdavfuse.c
 	@${CC} -c ${CFLAGS} -fPIC $<
 
-libdavfuse.so: libdavfuse.o
-	@${LD} -shared -soname libdavfuse.so.${MAJOR_VERSION} -o libdavfuse.so.${MAJOR_VERSION} $<
+libdavfuse.so.${MAJOR_VERSION}: libdavfuse.o
+	${LD} -shared -soname $@ -o $@ $<
 
