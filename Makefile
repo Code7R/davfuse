@@ -21,11 +21,12 @@ generate-davfuse.sh: config.mk
 
 davfuse: generate-davfuse.sh
 	@LIBDIR=${LIBDIR} sh generate-davfuse.sh > davfuse
+	@chmod a+x davfuse
 
 libdavfuse.c: config.h config.mk
 
 libdavfuse.o: libdavfuse.c
-	@{CC} -c ${CFLAGS} -fPIC $<
+	@${CC} -c ${CFLAGS} -fPIC $<
 
 libdavfuse.so: libdavfuse.o
 	@${LD} -shared -soname libdavfuse.so.${MAJOR_VERSION} -o libdavfuse.so.${MAJOR_VERSION} $<

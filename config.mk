@@ -16,7 +16,7 @@ LIBS = -L/usr/lib -lc
 
 # flags
 CPPFLAGS = -DVERSION=\"${VERSION}\"
-CFLAGS += -std=c99 -pedantic -Wall -Os ${INCS} ${CPPFLAGS}
+CFLAGS += -std=c99 -pedantic -Wall -Werror -Os ${INCS} ${CPPFLAGS}
 LDFLAGS += -s ${LIBS}
 
 # compiler and linker

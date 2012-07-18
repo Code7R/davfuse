@@ -7,5 +7,5 @@ cat <<EOF
 # Usage:
 #	davfuse <command> <command options and arguments>
 
-LD_PRELOAD=\${LIBDIR}/libaoss.so\${LD_PRELOAD:+:\$LD_PRELOAD} exec "\$@"
+LD_PRELOAD=${LIBDIR}/libdavfuse.so\${LD_PRELOAD:+:\$LD_PRELOAD} exec "\$@"
 EOF
