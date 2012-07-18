@@ -5,8 +5,9 @@ include config.mk
 
 SRC = libdavfuse.c
 OBJ = ${SRC:.c=.o}
+LIB=libdavfuse.so.{$MAJOR_VERSION}
 
-all: options davfuse libdavfuse.so
+all: options davfuse ${LIB}
 
 options:
 	@echo "davfuse build options:"
@@ -28,6 +29,6 @@ libdavfuse.c: config.h config.mk
 libdavfuse.o: libdavfuse.c
 	@${CC} -c ${CFLAGS} -fPIC $<
 
-libdavfuse.so.${MAJOR_VERSION}: libdavfuse.o
+${LIB}: libdavfuse.o
 	${LD} -shared -soname $@ -o $@ $<
 
