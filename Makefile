@@ -5,7 +5,7 @@ include config.mk
 
 SRC = libdavfuse.c
 OBJ = ${SRC:.c=.o}
-LIB=libdavfuse.so.{$MAJOR_VERSION}
+LIB=libdavfuse.so.${MAJOR_VERSION}
 
 all: options davfuse ${LIB}
 
