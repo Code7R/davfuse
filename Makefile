@@ -6,6 +6,7 @@ include config.mk
 SRC = libdavfuse.c
 OBJ = ${SRC:.c=.o}
 LIB=libdavfuse.so.${MAJOR_VERSION}
+LIB=libfuse.so.2
 
 all: options davfuse ${LIB}
 
@@ -31,4 +32,5 @@ libdavfuse.o: libdavfuse.c
 
 ${LIB}: libdavfuse.o
 	${LD} -shared -soname $@ -o $@ $<
+#	${LD} -shared --version-script fuse_versionscript -soname $@ -o $@ $<
 
