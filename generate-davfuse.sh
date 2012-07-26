@@ -7,5 +7,5 @@ cat <<EOF
 # Usage:
 #	davfuse <command> <command options and arguments>
 
-LD_PRELOAD=${LIBDIR}/libdavfuse.so\${LD_PRELOAD:+:\$LD_PRELOAD} exec "\$@"
+LD_LIBRARY_PATH=${PRIVATE_LIBDIR}\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH} exec "\$@"
 EOF

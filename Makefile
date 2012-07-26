@@ -5,8 +5,7 @@ include config.mk
 
 SRC = libdavfuse.c
 OBJ = ${SRC:.c=.o}
-LIB=libdavfuse.so.${MAJOR_VERSION}
-LIB=libfuse.so.2
+LIB = libfuse.so.2
 
 all: options davfuse ${LIB}
 
@@ -22,7 +21,7 @@ config.h:
 generate-davfuse.sh: config.mk
 
 davfuse: generate-davfuse.sh
-	@LIBDIR=${LIBDIR} sh generate-davfuse.sh > davfuse
+	@PRIVATE_LIBDIR=. sh generate-davfuse.sh > davfuse
 	@chmod a+x davfuse
 
 libdavfuse.c: config.h config.mk
@@ -31,6 +30,4 @@ libdavfuse.o: libdavfuse.c
 	@${CC} -c ${CFLAGS} -fPIC $<
 
 ${LIB}: libdavfuse.o
-	${LD} -shared -soname $@ -o $@ $<
-#	${LD} -shared --version-script fuse_versionscript -soname $@ -o $@ $<
-
+	${LD} -shared --version-script fuse_versionscript -soname $@ -o $@ $<
