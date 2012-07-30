@@ -3,7 +3,7 @@
 
 include config.mk
 
-SRC = libdavfuse.c
+SRC = libdavfuse.c fdevent_${FDEVENT_SOURCE}.c
 OBJ = ${SRC:.c=.o}
 LIB = libfuse.so.2
 
@@ -24,10 +24,19 @@ davfuse: generate-davfuse.sh
 	@PRIVATE_LIBDIR=. sh generate-davfuse.sh > davfuse
 	@chmod a+x davfuse
 
-libdavfuse.c: config.h config.mk
+${SRC}: config.h config.mk
 
-libdavfuse.o: libdavfuse.c
-	@${CC} -c ${CFLAGS} -fPIC $<
+fdevent.h: fdevent_${FDEVENT_SOURCE}.h
+	@cp $< fdevent.h
 
-${LIB}: libdavfuse.o
-	${LD} -shared --version-script fuse_versionscript -soname $@ -o $@ $<
+libdavfuse.c: fdevent.h fuse.h
+
+.c.o:
+	@echo CC -fPIC $<
+	@${CC} ${CFLAGS} -c -fPIC $<
+
+${OBJ}: ${SRC}
+
+${LIB}: ${OBJ}
+	@echo LD -shared --version-script fuse_versionscript -soname $@ $^
+	@${LD} -shared --version-script fuse_versionscript -soname $@ -o $@ $^

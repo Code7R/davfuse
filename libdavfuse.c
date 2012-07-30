@@ -15,8 +15,12 @@
 #define FUSE_USE_VERSION 26
 #include "fuse.h"
 
+#include "fdevent.h"
+
 #define DEFAULT_LISTEN_BACKLOG 5
 #define MAX_LINE_LENGTH 1024
+
+#define UNUSED(x) (void)(x)
 
 typedef struct {
   unsigned int singlethread : 1;
@@ -57,6 +61,7 @@ static int parse_command_line(int argc, char *argv[], FuseOptions *options) {
 
 static int parse_environment(DavOptions *options) {
   /* nothing for now */
+  UNUSED(options);
   return 0;
 }
 
@@ -72,11 +77,13 @@ static int create_server_socket(DavOptions *options) {
   int socket_fd = -1;
   struct sockaddr_in listen_addr;
 
+  UNUSED(options);
+
   memset(&listen_addr, 0, sizeof(listen_addr));
 
   /* TODO: use `options` */
   listen_addr.sin_family = AF_INET;
-  listen_addr.sin_port = 80;
+  listen_addr.sin_port = htons(80);
   listen_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
   socket_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -105,6 +112,7 @@ static int create_server_socket(DavOptions *options) {
   return -1;
 }
 
+#if 0
 static int accept_client(int server_socket) {
   struct sockaddr_in client_addr;
   socklen_t size = sizeof(client_addr);
@@ -118,7 +126,7 @@ static void init_get_line_state(GetLineState *gls) {
 
 /* like strchr, except doesn't care about '\0' and uses `n` */
 static char *find_chr(const char *str, int c, size_t n) {
-  int i;
+  unsigned int i;
 
   for (i = 0; i < n; i++) {
     if (str[i] == c) {
@@ -164,6 +172,14 @@ static char *my_getline(int fd, GetLineState *gls) {
   /* NOTREACHED */
   return NULL;
 }
+#endif
+
+static void connect_handler(int fd, StreamEvents events, void *ud) {
+  UNUSED(fd);
+  UNUSED(events);
+  UNUSED(ud);
+  printf("new connect!\n");
+}
 
 /* From "fuse_versionscript" the version of this symbol is FUSE_2.6 */
 int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
@@ -172,6 +188,11 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
   FuseOptions fuse_options;
   int ret;
   int server_fd;
+  FDEventLoop loop;
+
+  UNUSED(op);
+  UNUSED(op_size);
+  UNUSED(user_data);
 
   /* Initialize options to 0 */
   memset(&fuse_options, 0, sizeof(fuse_options));
@@ -199,6 +220,21 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
     print_error("Couldn't create server socket");
     return -1;
   }
+
+  fdevent_init(&loop);
+
+  FDEventWatchKey key;
+  bool ret1;
+  ret1 = fdevent_add_watch(&loop, server_fd,
+                           (StreamEvents) {.read = true, .write = false},
+                           connect_handler, NULL, &key);
+
+  if (ret1) {
+    printf("success!\n");
+    fdevent_main_loop(&loop);
+  }
+
+#if 0
 
   /* We currently only handle one client at a time */
   while (1) {
@@ -229,6 +265,7 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
       close(client_socket);
     }
   }
+#endif
 
   return 0;
 }
