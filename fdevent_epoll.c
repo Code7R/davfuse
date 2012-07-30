@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "fdevent_epoll.h"
+#include "logging.h"
 
 #define DEFAULT_WATCHER_TABLE_SIZE 10
 #define EVENTS_PER_LOOP 10
@@ -49,7 +50,8 @@ compute_event_set_for_fd(FDEventWatcher *ll) {
   return event_set;
 }
 
-static FDEventWatcherList *watcher_list_for_fd(FDEventLoop *loop, int fd) {
+static FDEventWatcherList *
+watcher_list_for_fd(FDEventLoop *loop, int fd) {
   FDEventWatcherList *wll;
 
   wll = loop->fd_to_watchers[fd % loop->fd_to_watcher_size];
@@ -236,7 +238,7 @@ fdevent_main_loop(FDEventLoop *loop) {
         /* not sure whose at fault here, either
            epoll gave us a bad fd or our internal data structures
            are corrupted */
-        /* TODO: log error here */
+        log_warning("epoll_wait() gave us a bad fd: %d", events[i].data.fd);
         continue;
       }
 

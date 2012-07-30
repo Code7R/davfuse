@@ -3,7 +3,7 @@
 
 include config.mk
 
-SRC = libdavfuse.c fdevent_${FDEVENT_SOURCE}.c
+SRC = libdavfuse.c fdevent_${FDEVENT_SOURCE}.c logging.c
 OBJ = ${SRC:.c=.o}
 LIB = libfuse.so.2
 

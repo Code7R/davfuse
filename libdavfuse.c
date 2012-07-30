@@ -5,10 +5,12 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <unistd.h>
+
+#include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
 /* We import the public FUSE header because we interact
    with code that uses the public API */
@@ -16,6 +18,7 @@
 #include "fuse.h"
 
 #include "fdevent.h"
+#include "logging.h"
 
 #define DEFAULT_LISTEN_BACKLOG 5
 #define MAX_LINE_LENGTH 1024
@@ -23,11 +26,11 @@
 #define UNUSED(x) (void)(x)
 
 typedef struct {
-  unsigned int singlethread : 1;
+  bool singlethread : 1;
 } FuseOptions;
 
 typedef struct {
-  int dummy;
+  log_level_t log_level;
 } DavOptions;
 
 typedef struct {
@@ -36,7 +39,10 @@ typedef struct {
   char *buf_end;
 } GetLineState;
 
-static int parse_command_line(int argc, char *argv[], FuseOptions *options) {
+/* TODO: support varargs */
+
+static int
+parse_command_line(int argc, char *argv[], FuseOptions *options) {
   int i;
 
   for (i = 1; i < argc; ++i) {
@@ -49,7 +55,7 @@ static int parse_command_line(int argc, char *argv[], FuseOptions *options) {
 
     switch (arg[1]) {
     case 's':
-      options->singlethread = 1;
+      options->singlethread = true;
       break;
     default:
       break;
@@ -59,19 +65,15 @@ static int parse_command_line(int argc, char *argv[], FuseOptions *options) {
   return 0;
 }
 
-static int parse_environment(DavOptions *options) {
-  /* nothing for now */
-  UNUSED(options);
+static int
+parse_environment(DavOptions *options) {
+  /* default for now */
+  options->log_level = LOG_DEBUG;
   return 0;
 }
 
-/* TODO: support varargs */
-static void print_error(const char *err) {
-  fprintf(stderr, err);
-  fprintf(stderr, "\n");
-}
-
-static int create_server_socket(DavOptions *options) {
+static int
+create_server_socket(DavOptions *options) {
   int listen_backlog = DEFAULT_LISTEN_BACKLOG;
   int ret;
   int socket_fd = -1;
@@ -112,20 +114,24 @@ static int create_server_socket(DavOptions *options) {
   return -1;
 }
 
-#if 0
-static int accept_client(int server_socket) {
+static int
+accept_client(int server_socket) {
   struct sockaddr_in client_addr;
   socklen_t size = sizeof(client_addr);
   return accept(server_socket, (struct sockaddr *) &client_addr, &size);
 }
 
-static void init_get_line_state(GetLineState *gls) {
+#if 0
+
+static void
+init_get_line_state(GetLineState *gls) {
   gls->buf_start = gls->buf;
   gls->buf_end = gls->buf_start;
 }
 
 /* like strchr, except doesn't care about '\0' and uses `n` */
-static char *find_chr(const char *str, int c, size_t n) {
+static char *
+find_chr(const char *str, int c, size_t n) {
   unsigned int i;
 
   for (i = 0; i < n; i++) {
@@ -137,7 +143,8 @@ static char *find_chr(const char *str, int c, size_t n) {
   return NULL;
 }
 
-static char *my_getline(int fd, GetLineState *gls) {
+static char *
+my_getline(int fd, GetLineState *gls) {
   /* realign buffer to beginning */
   memmove(gls->buf, gls->buf_start, gls->buf_end - gls->buf_start);
   gls->buf_end = gls->buf + (gls->buf_end - gls->buf_start);
@@ -174,65 +181,19 @@ static char *my_getline(int fd, GetLineState *gls) {
 }
 #endif
 
-static void connect_handler(int fd, StreamEvents events, void *ud) {
+static void
+accept_handler(int fd, StreamEvents events, void *ud) {
+  int client_fd;
+
   UNUSED(fd);
   UNUSED(events);
   UNUSED(ud);
+
+  client_fd = accept_client(fd);
+
+  UNUSED(client_fd);
+
   printf("new connect!\n");
-}
-
-/* From "fuse_versionscript" the version of this symbol is FUSE_2.6 */
-int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
-                   size_t op_size, void *user_data) {
-  DavOptions dav_options;
-  FuseOptions fuse_options;
-  int ret;
-  int server_fd;
-  FDEventLoop loop;
-
-  UNUSED(op);
-  UNUSED(op_size);
-  UNUSED(user_data);
-
-  /* Initialize options to 0 */
-  memset(&fuse_options, 0, sizeof(fuse_options));
-  memset(&dav_options, 0, sizeof(dav_options));
-
-  ret = parse_command_line(argc, argv, &fuse_options);
-  if (ret) {
-    print_error("Error parsing command line");
-    return -1;
-  }
-
-  if (!fuse_options.singlethread) {
-    print_error("We only support single threaded mode right now");
-    return -1;
-  }
-
-  ret = parse_environment(&dav_options);
-  if (ret) {
-    print_error("Error parsing DAVFUSE_OPTIONS environment variable");
-    return -1;
-  }
-
-  server_fd = create_server_socket(&dav_options);
-  if (server_fd < 0) {
-    print_error("Couldn't create server socket");
-    return -1;
-  }
-
-  fdevent_init(&loop);
-
-  FDEventWatchKey key;
-  bool ret1;
-  ret1 = fdevent_add_watch(&loop, server_fd,
-                           (StreamEvents) {.read = true, .write = false},
-                           connect_handler, NULL, &key);
-
-  if (ret1) {
-    printf("success!\n");
-    fdevent_main_loop(&loop);
-  }
 
 #if 0
 
@@ -244,7 +205,7 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
 
     client_socket = accept_client(server_fd);
     if (client_socket < 0) {
-      print_error("Bad client socket!");
+      log_error("Bad client socket!");
       goto request_cleanup;
     }
 
@@ -266,6 +227,69 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
     }
   }
 #endif
+}
 
-  return 0;
+/* From "fuse_versionscript" the version of this symbol is FUSE_2.6 */
+int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
+                   size_t op_size, void *user_data) {
+  DavOptions dav_options;
+  FuseOptions fuse_options;
+  int ret;
+  int server_fd;
+  FDEventLoop loop;
+  FDEventWatchKey server_watch_key;
+
+  UNUSED(op);
+  UNUSED(op_size);
+  UNUSED(user_data);
+
+  /* Initialize options to 0 */
+  memset(&fuse_options, 0, sizeof(fuse_options));
+  memset(&dav_options, 0, sizeof(dav_options));
+
+  ret = parse_environment(&dav_options);
+  if (ret) {
+    log_critical("Error parsing DAVFUSE_OPTIONS environment variable");
+    return -1;
+  }
+
+  init_logging(stderr, dav_options.log_level);
+
+  ret = parse_command_line(argc, argv, &fuse_options);
+  if (ret) {
+    log_critical("Error parsing command line");
+    return -1;
+  }
+
+  if (!fuse_options.singlethread) {
+    log_critical("We only support single threaded mode right now");
+    return -1;
+  }
+
+  server_fd = create_server_socket(&dav_options);
+  if (server_fd < 0) {
+    log_critical("Couldn't create server socket");
+    return -1;
+  }
+
+  fdevent_init(&loop);
+
+  {
+    bool ret;
+
+    ret = fdevent_add_watch(&loop, server_fd,
+                            (StreamEvents) {.read = true, .write = false},
+                            accept_handler, NULL, &server_watch_key);
+
+    if (!ret) {
+      log_critical("Couldn't watch server socket");
+      return -1;
+    }
+  }
+
+  /* this currently runs forever,
+     only returns if there is an error watching sockets */
+  fdevent_main_loop(&loop);
+
+  return -1;
 }
