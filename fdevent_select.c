@@ -113,20 +113,18 @@ fdevent_main_loop(FDEventLoop *loop) {
     ll = loop->ll;
     while (ll) {
       FDEventLink *tmpll;
-      union {
-        StreamEvents events;
-        int have_events;
-      } dummy;
+      StreamEvents events;
 
       /* do this first in case this link gets removed
          while calling `handler() `*/
       tmpll = ll->next;
 
-      dummy.events.read = FD_ISSET(ll->ew.fd, &readfds);
-      dummy.events.write = FD_ISSET(ll->ew.fd, &writefds);
+      events = (StreamEvents) {.read = FD_ISSET(ll->ew.fd, &readfds),
+                               .write = FD_ISSET(ll->ew.fd, &writefds)};
 
-      if (dummy.events.read || dummy.events.write) {
-        ll->ew.handler(ll->ew.fd, dummy.events, ll->ew.ud);
+      if ((events.read && ll->events.read) ||
+          (events.write && ll->events.write)) {
+        ll->ew.handler(ll->ew.fd, events, ll->ew.ud);
       }
 
       ll = tmpll;

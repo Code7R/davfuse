@@ -248,7 +248,9 @@ fdevent_main_loop(FDEventLoop *loop) {
         FDEventWatcher *lltmp;
 
         lltmp = ll->next;
-        if (events[i].events & stream_event_to_event_set(ll->events)) {
+
+        if ((stream_events.read && ll->events.read) ||
+            (stream_events.write && ll->events.write)) {
           ll->handler(ll->fd, stream_events, ll->ud);
         }
 
