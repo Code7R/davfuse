@@ -28,8 +28,9 @@ extern log_level_t _logging_cur_level;
   }                                             \
   while (0)
 
-#define log_critical(...) log(LOG_CRITICAL, __VA_ARGS__)
 #define log_warning(...) log(LOG_WARNING, __VA_ARGS__)
+#define log_error(...) log(LOG_ERROR, __VA_ARGS__)
+#define log_critical(...) log(LOG_CRITICAL, __VA_ARGS__)
 
 bool
 init_logging(FILE *log_destination, log_level_t level);

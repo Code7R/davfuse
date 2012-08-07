@@ -2,14 +2,18 @@
 #define _XOPEN_SOURCE
 #define _FILE_OFFSET_BITS 64
 
-#include <sys/socket.h>
-#include <netinet/in.h>
+/* POSIX includes */
 #include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
+/* C Standard includes */
 #include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* We import the public FUSE header because we interact
@@ -17,11 +21,13 @@
 #define FUSE_USE_VERSION 26
 #include "fuse.h"
 
+/* local includes */
+#include "coroutine.h"
 #include "fdevent.h"
 #include "logging.h"
 
 #define DEFAULT_LISTEN_BACKLOG 5
-#define MAX_LINE_LENGTH 1024
+#define MAX_LINE_SIZE 1024
 
 #define UNUSED(x) (void)(x)
 
@@ -34,12 +40,23 @@ typedef struct {
 } DavOptions;
 
 typedef struct {
-  char buf[MAX_LINE_LENGTH];
+  char buf[MAX_LINE_SIZE];
   char *buf_start;
   char *buf_end;
+  coroutine_position_t coropos;
 } GetLineState;
 
-/* TODO: support varargs */
+typedef struct {
+  FDEventLoop *loop;
+} ServerContext;
+
+typedef struct {
+  int fd;
+  FDEventWatchKey watch_key;
+  coroutine_position_t coropos;
+  GetLineState gls;
+  char *line;
+} ClientConnection;
 
 static int
 parse_command_line(int argc, char *argv[], FuseOptions *options) {
@@ -121,12 +138,17 @@ accept_client(int server_socket) {
   return accept(server_socket, (struct sockaddr *) &client_addr, &size);
 }
 
-#if 0
+static int
+close_client(int client_socket) {
+  return close(client_socket);
+}
+
 
 static void
-init_get_line_state(GetLineState *gls) {
+init_getline(GetLineState *gls) {
   gls->buf_start = gls->buf;
   gls->buf_end = gls->buf_start;
+  gls->coropos = CORO_POS_INIT;
 }
 
 /* like strchr, except doesn't care about '\0' and uses `n` */
@@ -143,26 +165,28 @@ find_chr(const char *str, int c, size_t n) {
   return NULL;
 }
 
-static char *
-my_getline(int fd, GetLineState *gls) {
+static bool
+c_getline(int fd, GetLineState *gls, char **out) {
+  CRBEGIN(gls->coropos);
+
   /* realign buffer to beginning */
   memmove(gls->buf, gls->buf_start, gls->buf_end - gls->buf_start);
   gls->buf_end = gls->buf + (gls->buf_end - gls->buf_start);
   gls->buf_start = gls->buf;
 
-  while (1) {
+  while (true) {
     char *newline_ptr;
     ssize_t ret;
 
     /* if we've read too much data without seeing a newline
        that's an error */
     if (gls->buf_end >= (gls->buf + sizeof(gls->buf))) {
-      return NULL;
+      break;
     }
 
     ret = read(fd, gls->buf_end, (gls->buf + sizeof(gls->buf)) - gls->buf_end);
     if (ret < 0) {
-      return NULL;
+      break;
     }
 
     /* search the new buffer for a newline */
@@ -172,61 +196,98 @@ my_getline(int fd, GetLineState *gls) {
     if (newline_ptr) {
       *newline_ptr = '\0';
       gls->buf_start = newline_ptr + 1;
-      return gls->buf;
+      *out = gls->buf_start;
+      CRHALT(gls->coropos);
     }
   }
 
-  /* NOTREACHED */
-  return NULL;
+  *out = NULL;
+  CREND();
 }
-#endif
+
+static bool
+client_coroutine(ClientConnection *cc) {
+#define GETLINE() do {                                            \
+    init_getline(&cc->gls);                                       \
+    CRLOOP(c_getline(cc->fd, &cc->gls, &cc->line), cc->coropos);  \
+    if (!cc->line) {                                              \
+      log_error("Line expected but didn't get one!");             \
+    }                                                             \
+  } while (0)
+
+  CRBEGIN(cc->coropos);
+
+  /* read out client http request */
+
+  /* first read the http version string */
+  GETLINE();
+  {
+    char *saveptr;
+    char *token;
+
+    token = strtok_r(cc->line, " \t", &saveptr);
+
+    UNUSED(token);
+  }
+
+  CREND();
+#undef GETLINE
+}
+
+static void
+client_handler(int fd, StreamEvents events, void *ud) {
+  UNUSED(fd);
+  UNUSED(events);
+
+  /* TODO: check return code to see if done */
+  client_coroutine(ud);
+}
 
 static void
 accept_handler(int fd, StreamEvents events, void *ud) {
-  int client_fd;
+  ServerContext *sc = (ServerContext *) ud;
+  int client_fd = -1;
+  ClientConnection *cc = NULL;
+  bool ret;
 
   UNUSED(fd);
   UNUSED(events);
   UNUSED(ud);
 
   client_fd = accept_client(fd);
-
-  UNUSED(client_fd);
-
-  printf("new connect!\n");
-
-#if 0
-
-  /* We currently only handle one client at a time */
-  while (1) {
-    const char *line;
-    GetLineState line_state;
-    int client_socket = -1;
-
-    client_socket = accept_client(server_fd);
-    if (client_socket < 0) {
-      log_error("Bad client socket!");
-      goto request_cleanup;
-    }
-
-    init_get_line_state(&line_state);
-
-    /* read request */
-    line = my_getline(client_socket, &line_state);
-    if (!line) {
-      goto request_cleanup;
-    }
-
-    /* TODO check HTTP version */
-    if (line[0] == 'H') {
-    }
-
-  request_cleanup:
-    if (client_socket >= 0) {
-      close(client_socket);
-    }
+  if (client_fd < 0) {
+    log_error("Couldn't accept client connnection: %s", strerror(errno));
+    goto error;
   }
-#endif
+
+  cc = malloc(sizeof(*cc));
+  if (!cc) {
+    log_error("Couldn't allocate memory for new client");
+    goto error;
+  }
+
+  *cc = (ClientConnection) {.fd = client_fd,
+                            .coropos = CORO_POS_INIT};
+
+  /* the client is read to accept connections! */
+  ret = fdevent_add_watch(sc->loop, cc->fd,
+                          (StreamEvents) {.read = true, .write = false},
+                          client_handler, cc, &cc->watch_key);
+  if (!ret) {
+    log_error("Couldn't add fd watch for new client!");
+    goto error;
+  }
+
+  return;
+
+ error:
+  if (client_fd >= 0) {
+    close_client(client_fd);
+  }
+
+  if (cc) {
+    free(cc);
+  }
 }
 
 /* From "fuse_versionscript" the version of this symbol is FUSE_2.6 */
@@ -238,6 +299,7 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
   int server_fd;
   FDEventLoop loop;
   FDEventWatchKey server_watch_key;
+  ServerContext sc;
 
   UNUSED(op);
   UNUSED(op_size);
@@ -272,15 +334,24 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
     return -1;
   }
 
-  fdevent_init(&loop);
+  {
+    bool ret;
+
+    ret = fdevent_init(&loop);
+    if (!ret) {
+      log_critical("Couldn't initialize fdevent loop!");
+      return -1;
+    }
+  }
+
+  sc.loop = &loop;
 
   {
     bool ret;
 
     ret = fdevent_add_watch(&loop, server_fd,
                             (StreamEvents) {.read = true, .write = false},
-                            accept_handler, NULL, &server_watch_key);
-
+                            accept_handler, &sc, &server_watch_key);
     if (!ret) {
       log_critical("Couldn't watch server socket");
       return -1;
