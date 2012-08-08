@@ -62,11 +62,11 @@ typedef struct {
   size_t init_buf_size;
   char *buf_end;
   coroutine_position_t coropos;
-} GetUntilState;
+} GetWhileState;
 
 typedef struct {
   union {
-    GetUntilState getuntil_state;
+    GetWhileState getwhile_state;
     GetCState getc_state;
   } sub;
   int c;
@@ -247,9 +247,9 @@ fbungetc(FDBuffer *f, int c) {
 }
 
 static bool
-c_getuntil(GetUntilState *state, FDBuffer *f,
+c_getwhile(GetWhileState *state, FDBuffer *f,
            char *buf, size_t buf_size,
-           const char *tok, size_t tokn,
+           bool (*fn)(char),
            size_t *out) {
   /* always do these asserts first */
   assert(buf);
@@ -265,7 +265,6 @@ c_getuntil(GetUntilState *state, FDBuffer *f,
 
   /* find terminator in existing buffer */
   do {
-    size_t i;
     int c;
 
     C_FBGETC(state->coropos, f, c);
@@ -273,23 +272,39 @@ c_getuntil(GetUntilState *state, FDBuffer *f,
 
     if (c == EOF) {
       log_error("Error while expecting a character: %s", strerror(errno));
-      goto done;
+      break;
     }
 
-    for (i = 0; i < tokn; ++i) {
-      if ((char) c == tok[i]) {
-        fbungetc(f, c);
-        goto done;
-      }
+    /* pain! we make an indirect function call here to accomodate
+       multiple uses
+       it definitely slows done this loop,
+       maybe we can optimized this in the future */
+    if (!(*fn)(c)) {
+      fbungetc(f, c);
+      break;
     }
 
     *(state->buf_end++) = (char) c;
   }
   while (state->buf_end < (state->init_buf + state->init_buf_size));
 
- done:
   *out = state->buf_end - state->init_buf;
   CREND();
+}
+
+static bool
+match_seperator(char c) {
+#define N(l) l == c ||
+  return (N('(') N(')') N('<') N('>') N('@') N(',') N(';') N(':')
+          N('\\') N('/') N('[') N(']') N('?') N('=') N('{') N('}')
+          N(' ') '\t' == c);
+#undef N
+}
+
+static bool
+match_token(char c) {
+  /* token          = 1*<any CHAR except CTLs or separators> */
+  return (32 < c && c < 127 && !match_seperator(c));
 }
 
 static bool
@@ -311,23 +326,41 @@ c_get_request(GetRequestState *state, FDBuffer *f,
   }                                                                     \
   while (0)
 
-#define PARSEVAR(var, delim) do {                                       \
-    state->tmp = delim;                                                 \
-    CRCALL(state, c_getuntil, &state->sub.getuntil_state, f,            \
-           var, sizeof(var) - 1, &state->tmp, 1, &state->parsed);       \
+#define PARSEVAR(var, fn) do {                                          \
+    CRCALL(state, c_getwhile, &state->sub.getwhile_state, f,            \
+           var, sizeof(var) - 1, fn, &state->parsed);                   \
     assert(state->parsed <= sizeof(var) - 1);                           \
-    /* we don't protect against there being a '\0' in the http variable
-       the worst that can happen is the var is cut short and fails */   \
+    /* we don't protect against there being a '\0' in the http */       \
+    /* variable the worst that can happen is the var is cut  */         \
+    /* short and fails */                                               \
     var[state->parsed] = '\0';                                          \
   } while (0)
 
-  PARSEVAR(rh->method, ' ');
+
+  PARSEVAR(rh->method, match_token);
   EXPECT(' ');
+  /* request-uri = "*" | absoluteURI | abs_path | authority */
+  /*
+  DO_PARSE {
+    DO_PARSE {
+      EXPECT('*');
+      wildcard = true;
+    }
+    OR_PARSE {
+      EXPECTS("http");
+      uri = true;
+    }
+
+    EXPECT(' ');
+  }
+
+
   PARSEVAR(rh->uri, ' ');
   EXPECT(' ');
   PARSEVAR(rh->version, '\r');
   EXPECT('\r');
   EXPECT('\n');
+  */
 
   *success = true;
   CREND();
