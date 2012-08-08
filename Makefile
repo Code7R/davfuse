@@ -24,18 +24,20 @@ davfuse: generate-davfuse.sh
 	@PRIVATE_LIBDIR=. sh generate-davfuse.sh > davfuse
 	@chmod a+x davfuse
 
-${SRC}: config.h config.mk
-
 fdevent.h: fdevent_${FDEVENT_SOURCE}.h
 	@cp $< fdevent.h
-
-libdavfuse.c: fdevent.h fuse.h
 
 .c.o:
 	@echo CC -fPIC $<
 	@${CC} ${CFLAGS} -c -fPIC $<
 
-${OBJ}: ${SRC}
+${OBJ}: config.h config.mk
+
+fdevent_epoll.o: fdevent_epoll.h logging.h
+
+fdevent_select.o: fdevent_select.h
+
+libdavfuse.o: fdevent.h fuse.h logging.h coroutine.h
 
 ${LIB}: ${OBJ}
 	@echo LD -shared --version-script fuse_versionscript -soname $@ $^

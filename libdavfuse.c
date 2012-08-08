@@ -28,8 +28,21 @@
 
 #define DEFAULT_LISTEN_BACKLOG 5
 #define MAX_LINE_SIZE 1024
+#define MAX_METHOD_SIZE 16
+#define MAX_URI_SIZE 1024
+#define MAX_VERSION_SIZE 8
+#define MAX_HEADER_NAME_SIZE 64
+#define MAX_HEADER_VALUE_SIZE 128
+#define MAX_NUM_HEADERS 16
 
 #define UNUSED(x) (void)(x)
+
+#define CRCALL(state, fn, state2, ...) do {          \
+    (state2)->coropos = CORO_POS_INIT;                 \
+    while (fn(state2, __VA_ARGS__)) {                       \
+      CRYIELD((state)->coropos);                     \
+    }                                                \
+  } while (0)
 
 typedef struct {
   bool singlethread : 1;
@@ -40,22 +53,56 @@ typedef struct {
 } DavOptions;
 
 typedef struct {
-  char buf[MAX_LINE_SIZE];
-  char *buf_start;
+  coroutine_position_t coropos;
+} GetCState;
+
+typedef struct {
+  GetCState getc_state;
+  char *init_buf;
+  size_t init_buf_size;
   char *buf_end;
   coroutine_position_t coropos;
-} GetLineState;
+} GetUntilState;
+
+typedef struct {
+  union {
+    GetUntilState getuntil_state;
+    GetCState getc_state;
+  } sub;
+  int c;
+  char tmp;
+  size_t parsed;
+  coroutine_position_t coropos;
+} GetRequestState;
 
 typedef struct {
   FDEventLoop *loop;
 } ServerContext;
 
 typedef struct {
+  char method[MAX_METHOD_SIZE];
+  char uri[MAX_URI_SIZE];
+  char version[MAX_VERSION_SIZE];
+  size_t num_headers;
+  struct {
+    char name[MAX_HEADER_NAME_SIZE];
+    char value[MAX_HEADER_VALUE_SIZE];
+  } headers[MAX_NUM_HEADERS];
+} HTTPRequestHeaders;
+
+typedef struct {
   int fd;
+  char buf[4096];
+  char *buf_start;
+  char *buf_end;
+} FDBuffer;
+
+typedef struct {
+  FDBuffer f;
   FDEventWatchKey watch_key;
   coroutine_position_t coropos;
-  GetLineState gls;
-  char *line;
+  GetRequestState grs;
+  HTTPRequestHeaders request;
 } ClientConnection;
 
 static int
@@ -143,95 +190,169 @@ close_client(int client_socket) {
   return close(client_socket);
 }
 
+static int
+set_non_blocking(int fd) {
+  int flags;
 
-static void
-init_getline(GetLineState *gls) {
-  gls->buf_start = gls->buf;
-  gls->buf_end = gls->buf_start;
-  gls->coropos = CORO_POS_INIT;
-}
-
-/* like strchr, except doesn't care about '\0' and uses `n` */
-static char *
-find_chr(const char *str, int c, size_t n) {
-  unsigned int i;
-
-  for (i = 0; i < n; i++) {
-    if (str[i] == c) {
-      return (char *) &(str[i]);
-    }
+  flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0) {
+    log_warning("Couldn't read file flags: %s, setting 0", strerror(errno));
+    flags = 0;
   }
 
-  return NULL;
+  return fcntl(fd, F_SETFL, (long) flags | O_NONBLOCK);
+}
+
+#define C_FBGETC(coropos, f, out) do {                         \
+    ssize_t ret;                                               \
+                                                               \
+    if (f->buf_start < f->buf_end) {                           \
+      out = (unsigned char) *f->buf_start;                     \
+      f->buf_start += 1;                                       \
+      break;                                                   \
+    }                                                          \
+                                                               \
+    assert(f->buf_start == f->buf_end);                        \
+    assert(sizeof(f->buf));                                    \
+                                                               \
+    ret = read(f->fd, f->buf, sizeof(f->buf));                 \
+    if (ret < 0 && errno == EAGAIN) {                          \
+      /* TODO: register for read events */                     \
+      CRYIELD(coropos);                                        \
+      continue;                                                \
+    }                                                          \
+    else if (ret <= 0) {                                       \
+      out = EOF;                                               \
+      break;                                                   \
+    }                                                          \
+                                                               \
+    f->buf_start = f->buf;                                     \
+    f->buf_end = f->buf + ret;                                 \
+  }                                                            \
+  while (true)
+
+static bool
+c_fbgetc(GetCState *state, FDBuffer *f, int *out) {
+  CRBEGIN(state->coropos);
+  C_FBGETC(state->coropos, f, *out);
+  CREND();
+}
+
+static void
+fbungetc(FDBuffer *f, int c) {
+  /* not implemented */
+  UNUSED(f);
+  UNUSED(c);
+  assert(false);
 }
 
 static bool
-c_getline(int fd, GetLineState *gls, char **out) {
-  CRBEGIN(gls->coropos);
+c_getuntil(GetUntilState *state, FDBuffer *f,
+           char *buf, size_t buf_size,
+           const char *tok, size_t tokn,
+           size_t *out) {
+  /* always do these asserts first */
+  assert(buf);
+  assert(buf_size);
+  assert(!state->init_buf || state->init_buf == buf);
+  assert(!state->init_buf_size || state->init_buf_size == buf_size);
 
-  /* realign buffer to beginning */
-  memmove(gls->buf, gls->buf_start, gls->buf_end - gls->buf_start);
-  gls->buf_end = gls->buf + (gls->buf_end - gls->buf_start);
-  gls->buf_start = gls->buf;
+  CRBEGIN(state->coropos);
 
-  while (true) {
-    char *newline_ptr;
-    ssize_t ret;
+  state->init_buf = buf;
+  state->init_buf_size = buf_size;
+  state->buf_end = buf;
 
-    /* if we've read too much data without seeing a newline
-       that's an error */
-    if (gls->buf_end >= (gls->buf + sizeof(gls->buf))) {
-      break;
+  /* find terminator in existing buffer */
+  do {
+    size_t i;
+    int c;
+
+    C_FBGETC(state->coropos, f, c);
+    /*    CRCALL(state, c_fbgetc, &state->getc_state, f, &c); */
+
+    if (c == EOF) {
+      log_error("Error while expecting a character: %s", strerror(errno));
+      goto done;
     }
 
-    ret = read(fd, gls->buf_end, (gls->buf + sizeof(gls->buf)) - gls->buf_end);
-    if (ret < 0) {
-      break;
+    for (i = 0; i < tokn; ++i) {
+      if ((char) c == tok[i]) {
+        fbungetc(f, c);
+        goto done;
+      }
     }
 
-    /* search the new buffer for a newline */
-    newline_ptr = find_chr(gls->buf_end, '\n', ret);
-    gls->buf_end += ret;
-
-    if (newline_ptr) {
-      *newline_ptr = '\0';
-      gls->buf_start = newline_ptr + 1;
-      *out = gls->buf_start;
-      CRHALT(gls->coropos);
-    }
+    *(state->buf_end++) = (char) c;
   }
+  while (state->buf_end < (state->init_buf + state->init_buf_size));
 
-  *out = NULL;
+ done:
+  *out = state->buf_end - state->init_buf;
   CREND();
+}
+
+static bool
+c_get_request(GetRequestState *state, FDBuffer *f,
+              bool *success, HTTPRequestHeaders *rh) {
+  CRBEGIN(state->coropos);
+
+  /* success is initialized to false */
+  *success = false;
+
+#define EXPECT(_c) do {                                                 \
+    state->tmp = _c;                                                    \
+    CRCALL(state, c_fbgetc, &state->sub.getc_state, f, &state->c);      \
+    if ((char) state->c != state->tmp) {                                \
+      log_error("Didn't get the character we were expecting: %c vs %c", \
+                state->c, state->tmp);                                  \
+      CRHALT(state->coropos);                                           \
+    }                                                                   \
+  }                                                                     \
+  while (0)
+
+#define PARSEVAR(var, delim) do {                                       \
+    state->tmp = delim;                                                 \
+    CRCALL(state, c_getuntil, &state->sub.getuntil_state, f,            \
+           var, sizeof(var) - 1, &state->tmp, 1, &state->parsed);       \
+    assert(state->parsed <= sizeof(var) - 1);                           \
+    /* we don't protect against there being a '\0' in the http variable
+       the worst that can happen is the var is cut short and fails */   \
+    var[state->parsed] = '\0';                                          \
+  } while (0)
+
+  PARSEVAR(rh->method, ' ');
+  EXPECT(' ');
+  PARSEVAR(rh->uri, ' ');
+  EXPECT(' ');
+  PARSEVAR(rh->version, '\r');
+  EXPECT('\r');
+  EXPECT('\n');
+
+  *success = true;
+  CREND();
+
+#undef GETLINE
+#undef PARSEVAR
 }
 
 static bool
 client_coroutine(ClientConnection *cc) {
-#define GETLINE() do {                                            \
-    init_getline(&cc->gls);                                       \
-    CRLOOP(c_getline(cc->fd, &cc->gls, &cc->line), cc->coropos);  \
-    if (!cc->line) {                                              \
-      log_error("Line expected but didn't get one!");             \
-    }                                                             \
-  } while (0)
+  bool success;
 
   CRBEGIN(cc->coropos);
 
   /* read out client http request */
-
-  /* first read the http version string */
-  GETLINE();
-  {
-    char *saveptr;
-    char *token;
-
-    token = strtok_r(cc->line, " \t", &saveptr);
-
-    UNUSED(token);
+  CRCALL(cc, c_get_request, &cc->grs, &cc->f, &success, &cc->request);
+  if (!success) {
+    /* TODO: propagate error */
+    CRHALT(cc->coropos);
   }
 
+  /* TODO: if we want to read out more, we have to pull the bits out of
+     `cc->grs.gls.buf` */
+
   CREND();
-#undef GETLINE
 }
 
 static void
@@ -260,17 +381,22 @@ accept_handler(int fd, StreamEvents events, void *ud) {
     goto error;
   }
 
+  if (set_non_blocking(client_fd) < 0) {
+    log_error("Couldn't make client fd non-blocking: %s", strerror(errno));
+    goto error;
+  }
+
   cc = malloc(sizeof(*cc));
   if (!cc) {
     log_error("Couldn't allocate memory for new client");
     goto error;
   }
 
-  *cc = (ClientConnection) {.fd = client_fd,
+  *cc = (ClientConnection) {.f = (FDBuffer) {.fd = client_fd},
                             .coropos = CORO_POS_INIT};
 
   /* the client is read to accept connections! */
-  ret = fdevent_add_watch(sc->loop, cc->fd,
+  ret = fdevent_add_watch(sc->loop, cc->f.fd,
                           (StreamEvents) {.read = true, .write = false},
                           client_handler, cc, &cc->watch_key);
   if (!ret) {

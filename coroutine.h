@@ -7,10 +7,10 @@
    avoids the switch bounds check */
 typedef void *coroutine_position_t;
 #define CORO_POS_INIT NULL
-#define CRBEGIN(pos) if (__builtin_expect(pos != NULL, 1)) goto *pos
+#define CRBEGIN(pos) if (pos) goto *pos
 /* we have the inline goto CORO_END to suppress compiler warnings */
-#define CREND() do { goto CORO_END; CORO_END: return false; } while (0)
-#define CRHALT(pos) do { pos = &&CORO_END; return false; } while (0)
+#define CREND() do {goto CORO_END; CORO_END: return true;} while (0)
+#define CRHALT(pos) do {pos = &&CORO_END; return false;} while (0)
 #define LINEHA2(x,y) x ## y
 #define LINEHA(x,y) LINEHA2(x,y)
 #define CRYIELDA(pos) do { pos = &&LINEHA(CORO_,__LINE__); return true; LINEHA(CORO_,__LINE__): if (0) {}} while (0)
@@ -27,12 +27,5 @@ typedef int coroutine_position_t;
 #endif
 
 #define CRYIELD CRYIELDA
-
-#define CRLOOP(arg, pos) do {                   \
-    while (arg) {                               \
-      CRYIELD(pos);                             \
-    }                                           \
-  } while (0)
-
 
 #endif
