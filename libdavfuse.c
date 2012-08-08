@@ -11,6 +11,7 @@
 
 /* C Standard includes */
 #include <assert.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +43,7 @@
     while (fn(state2, __VA_ARGS__)) {                       \
       CRYIELD((state)->coropos);                     \
     }                                                \
-  } while (0)
+  } while (false)
 
 typedef struct {
   bool singlethread : 1;
@@ -69,9 +70,11 @@ typedef struct {
     GetWhileState getwhile_state;
     GetCState getc_state;
   } sub;
+  int i;
   int c;
   char tmp;
   size_t parsed;
+  char tmpbuf[1024];
   coroutine_position_t coropos;
 } GetRequestState;
 
@@ -82,7 +85,8 @@ typedef struct {
 typedef struct {
   char method[MAX_METHOD_SIZE];
   char uri[MAX_URI_SIZE];
-  char version[MAX_VERSION_SIZE];
+  int major_version;
+  int minor_version;
   size_t num_headers;
   struct {
     char name[MAX_HEADER_NAME_SIZE];
@@ -92,9 +96,9 @@ typedef struct {
 
 typedef struct {
   int fd;
-  char buf[4096];
   char *buf_start;
   char *buf_end;
+  char buf[4096];
 } FDBuffer;
 
 typedef struct {
@@ -267,16 +271,15 @@ c_getwhile(GetWhileState *state, FDBuffer *f,
   do {
     int c;
 
+    /* we only call fbgetc in one place here, so we force an inline */
     C_FBGETC(state->coropos, f, c);
-    /*    CRCALL(state, c_fbgetc, &state->getc_state, f, &c); */
 
     if (c == EOF) {
       log_error("Error while expecting a character: %s", strerror(errno));
       break;
     }
 
-    /* pain! we make an indirect function call here to accomodate
-       multiple uses
+    /* pain! we make an indirect function call here to accomodate multiple uses
        it definitely slows done this loop,
        maybe we can optimized this in the future */
     if (!(*fn)(c)) {
@@ -293,8 +296,11 @@ c_getwhile(GetWhileState *state, FDBuffer *f,
 }
 
 static bool
+__attribute__((const))
 match_seperator(char c) {
 #define N(l) l == c ||
+  /* these are lots of independent checks but the CPU should plow through
+     this since it's not a loop and doesn't access memory */
   return (N('(') N(')') N('<') N('>') N('@') N(',') N(';') N(':')
           N('\\') N('/') N('[') N(']') N('?') N('=') N('{') N('}')
           N(' ') '\t' == c);
@@ -302,9 +308,22 @@ match_seperator(char c) {
 }
 
 static bool
+__attribute__((const))
 match_token(char c) {
   /* token          = 1*<any CHAR except CTLs or separators> */
   return (32 < c && c < 127 && !match_seperator(c));
+}
+
+static bool
+__attribute__((const))
+match_non_null_or_space(char c) {
+  return c && c != ' ';
+}
+
+static bool
+__attribute__((const))
+match_digit(char c) {
+  return '0' <= c && c <= '9';
 }
 
 static bool
@@ -316,15 +335,21 @@ c_get_request(GetRequestState *state, FDBuffer *f,
   *success = false;
 
 #define EXPECT(_c) do {                                                 \
-    state->tmp = _c;                                                    \
     CRCALL(state, c_fbgetc, &state->sub.getc_state, f, &state->c);      \
-    if ((char) state->c != state->tmp) {                                \
+    if ((char) state->c != (_c)) {                                      \
       log_error("Didn't get the character we were expecting: %c vs %c", \
-                state->c, state->tmp);                                  \
+                state->c, (_c));                                        \
       CRHALT(state->coropos);                                           \
     }                                                                   \
   }                                                                     \
-  while (0)
+  while (false)
+
+#define EXPECTS(_s) do {                                                \
+    for (state->i = 0; state->i < (int) sizeof(_s); ++state->i) {       \
+      EXPECT(_s[state->i]);                                             \
+    }                                                                   \
+  }                                                                     \
+  while (false)
 
 #define PARSEVAR(var, fn) do {                                          \
     CRCALL(state, c_getwhile, &state->sub.getwhile_state, f,            \
@@ -334,39 +359,42 @@ c_get_request(GetRequestState *state, FDBuffer *f,
     /* variable the worst that can happen is the var is cut  */         \
     /* short and fails */                                               \
     var[state->parsed] = '\0';                                          \
-  } while (0)
+  } while (false)
 
+#define PARSEINTVAR(var) do {                                   \
+    long _val;                                                  \
+    PARSEVAR(state->tmpbuf, match_digit);                       \
+    errno = 0;                                                  \
+    _val = strtol(state->tmpbuf, NULL, 10);                     \
+    if (errno || _val > INT_MAX || _val < INT_MIN) {            \
+      log_error("Didn't parse an integer: %s", state->tmpbuf);  \
+      CRHALT(state->coropos);                                   \
+    }                                                           \
+    var = _val;                                                 \
+  }                                                             \
+  while (false)
 
   PARSEVAR(rh->method, match_token);
   EXPECT(' ');
+
   /* request-uri = "*" | absoluteURI | abs_path | authority */
-  /*
-  DO_PARSE {
-    DO_PARSE {
-      EXPECT('*');
-      wildcard = true;
-    }
-    OR_PARSE {
-      EXPECTS("http");
-      uri = true;
-    }
-
-    EXPECT(' ');
-  }
-
-
-  PARSEVAR(rh->uri, ' ');
+  /* we don't parse super intelligently here because
+     http URIs aren't LL(1), authority and absoluteURI start with
+     the same prefix string */
+  PARSEVAR(rh->uri, match_non_null_or_space);
   EXPECT(' ');
-  PARSEVAR(rh->version, '\r');
-  EXPECT('\r');
-  EXPECT('\n');
-  */
+
+  EXPECTS("HTTP/");
+  PARSEINTVAR(rh->major_version);
+  EXPECT('.');
+  PARSEINTVAR(rh->minor_version);
+  EXPECTS("\r\n");
 
   *success = true;
   CREND();
 
-#undef GETLINE
 #undef PARSEVAR
+#undef EXPECT
 }
 
 static bool
