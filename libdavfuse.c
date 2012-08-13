@@ -37,12 +37,14 @@
 #define MAX_NUM_HEADERS 16
 
 #define UNUSED(x) (void)(x)
+#define NELEMS(arr) (sizeof(arr) / sizeof(arr[0]))
 
-#define CRCALL(state, fn, state2, ...) do {          \
-    (state2)->coropos = CORO_POS_INIT;                 \
+#define CRCALL(state, fn, state2, ...)                      \
+  do {                                                      \
+    (state2)->coropos = CORO_POS_INIT;                      \
     while (fn(state2, __VA_ARGS__)) {                       \
-      CRYIELD((state)->coropos);                     \
-    }                                                \
+      CRYIELD((state)->coropos);                            \
+    }                                                       \
   } while (false)
 
 typedef struct {
@@ -57,18 +59,27 @@ typedef struct {
   coroutine_position_t coropos;
 } GetCState;
 
+typedef GetCState PeekState;
+
 typedef struct {
-  GetCState getc_state;
+  coroutine_position_t coropos;
   char *init_buf;
   size_t init_buf_size;
   char *buf_end;
-  coroutine_position_t coropos;
+  GetCState getc_state;
 } GetWhileState;
+
+typedef struct {
+  coroutine_position_t coropos;
+  const void *buf_loc;
+  size_t count_left;
+} WriteAllState;
 
 typedef struct {
   union {
     GetWhileState getwhile_state;
     GetCState getc_state;
+    PeekState peek_state;
   } sub;
   int i;
   int c;
@@ -103,10 +114,16 @@ typedef struct {
 
 typedef struct {
   FDBuffer f;
+  FDEventLoop *loop;
   FDEventWatchKey watch_key;
   coroutine_position_t coropos;
-  GetRequestState grs;
+  union {
+    GetRequestState grs;
+    WriteAllState was;
+  } sub;
   HTTPRequestHeaders request;
+  bool want_read : 1;
+  bool want_write : 1;
 } ClientConnection;
 
 static int
@@ -145,6 +162,7 @@ create_server_socket(DavOptions *options) {
   int listen_backlog = DEFAULT_LISTEN_BACKLOG;
   int ret;
   int socket_fd = -1;
+  int reuse = 1;
   struct sockaddr_in listen_addr;
 
   UNUSED(options);
@@ -153,11 +171,16 @@ create_server_socket(DavOptions *options) {
 
   /* TODO: use `options` */
   listen_addr.sin_family = AF_INET;
-  listen_addr.sin_port = htons(80);
+  listen_addr.sin_port = htons(8080);
   listen_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
   socket_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (socket_fd < 0) {
+    goto fail;
+  }
+
+  ret = setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+  if (ret) {
     goto fail;
   }
 
@@ -207,12 +230,13 @@ set_non_blocking(int fd) {
   return fcntl(fd, F_SETFL, (long) flags | O_NONBLOCK);
 }
 
-#define C_FBGETC(coropos, f, out) do {                         \
+#define _C_FBPEEK(coropos, f, out, peek)                       \
+  do {                                                         \
     ssize_t ret;                                               \
                                                                \
     if (f->buf_start < f->buf_end) {                           \
       out = (unsigned char) *f->buf_start;                     \
-      f->buf_start += 1;                                       \
+      f->buf_start += peek ? 1 : 0;                            \
       break;                                                   \
     }                                                          \
                                                                \
@@ -235,10 +259,20 @@ set_non_blocking(int fd) {
   }                                                            \
   while (true)
 
+#define C_FBPEEK(coropos, f, out) _C_FBPEEK(coropos, f, out, 0)
+#define C_FBGETC(coropos, f, out) _C_FBPEEK(coropos, f, out, 1)
+
 static bool
 c_fbgetc(GetCState *state, FDBuffer *f, int *out) {
   CRBEGIN(state->coropos);
   C_FBGETC(state->coropos, f, *out);
+  CREND();
+}
+
+static bool
+c_fbpeek(PeekState *state, FDBuffer *f, int *out) {
+  CRBEGIN(state->coropos);
+  C_FBPEEK(state->coropos, f, *out);
   CREND();
 }
 
@@ -296,6 +330,38 @@ c_getwhile(GetWhileState *state, FDBuffer *f,
 }
 
 static bool
+c_write_all(WriteAllState *state, int fd,
+            const void *buf, size_t count, ssize_t *ret) {
+  CRBEGIN(state->coropos);
+
+  state->buf_loc = buf;
+  state->count_left = count;
+
+  while (state->count_left) {
+    ssize_t ret2;
+    ret2 = write(fd, state->buf_loc, state->count_left);
+    if (ret2 < 0) {
+      if (errno == EAGAIN) {
+        CRYIELD(state->coropos);
+        continue;
+      }
+      else {
+        assert(count >= state->count_left);
+        *ret = count - state->count_left;
+      }
+    }
+
+    assert(state->count_left >= ret2);
+    state->count_left -= ret2;
+    state->buf_loc += ret2;
+  }
+
+  *ret = 0;
+
+  CREND();
+}
+
+static bool
 __attribute__((const))
 match_seperator(char c) {
 #define N(l) l == c ||
@@ -322,6 +388,18 @@ match_non_null_or_space(char c) {
 
 static bool
 __attribute__((const))
+match_non_null_or_colon(char c) {
+  return c && c != ':';
+}
+
+static bool
+__attribute__((const))
+match_non_null_or_carriage_return(char c) {
+  return c && c != '\r';
+}
+
+static bool
+__attribute__((const))
 match_digit(char c) {
   return '0' <= c && c <= '9';
 }
@@ -334,24 +412,31 @@ c_get_request(GetRequestState *state, FDBuffer *f,
   /* success is initialized to false */
   *success = false;
 
-#define EXPECT(_c) do {                                                 \
+#define PEEK()                                                          \
+  CRCALL(state, c_fbpeek, &state->sub.peek_state, f, &state->c)
+
+#define EXPECT(_c)                                                      \
+  do {                                                                  \
     CRCALL(state, c_fbgetc, &state->sub.getc_state, f, &state->c);      \
     if ((char) state->c != (_c)) {                                      \
-      log_error("Didn't get the character we were expecting: %c vs %c", \
+      log_error("Didn't get the character we "                          \
+                "were expecting: '%c' vs '%c'",                         \
                 state->c, (_c));                                        \
       CRHALT(state->coropos);                                           \
     }                                                                   \
   }                                                                     \
   while (false)
 
-#define EXPECTS(_s) do {                                                \
-    for (state->i = 0; state->i < (int) sizeof(_s); ++state->i) {       \
+#define EXPECTS(_s)                                                     \
+  do {                                                                  \
+    for (state->i = 0; state->i < (int) sizeof(_s) - 1; ++state->i) {   \
       EXPECT(_s[state->i]);                                             \
     }                                                                   \
   }                                                                     \
   while (false)
 
-#define PARSEVAR(var, fn) do {                                          \
+#define PARSEVAR(var, fn)                                               \
+  do {                                                                  \
     CRCALL(state, c_getwhile, &state->sub.getwhile_state, f,            \
            var, sizeof(var) - 1, fn, &state->parsed);                   \
     assert(state->parsed <= sizeof(var) - 1);                           \
@@ -359,9 +444,11 @@ c_get_request(GetRequestState *state, FDBuffer *f,
     /* variable the worst that can happen is the var is cut  */         \
     /* short and fails */                                               \
     var[state->parsed] = '\0';                                          \
-  } while (false)
+  }                                                                     \
+  while (false)
 
-#define PARSEINTVAR(var) do {                                   \
+#define PARSEINTVAR(var)                                        \
+  do {                                                          \
     long _val;                                                  \
     PARSEVAR(state->tmpbuf, match_digit);                       \
     errno = 0;                                                  \
@@ -377,6 +464,8 @@ c_get_request(GetRequestState *state, FDBuffer *f,
   PARSEVAR(rh->method, match_token);
   EXPECT(' ');
 
+  log_debug("Got method '%s'", rh->method);
+
   /* request-uri = "*" | absoluteURI | abs_path | authority */
   /* we don't parse super intelligently here because
      http URIs aren't LL(1), authority and absoluteURI start with
@@ -384,30 +473,84 @@ c_get_request(GetRequestState *state, FDBuffer *f,
   PARSEVAR(rh->uri, match_non_null_or_space);
   EXPECT(' ');
 
+  log_debug("Got uri '%s'", rh->uri);
+
   EXPECTS("HTTP/");
   PARSEINTVAR(rh->major_version);
   EXPECT('.');
   PARSEINTVAR(rh->minor_version);
   EXPECTS("\r\n");
 
+  log_debug("Got version '%d.%d'", rh->major_version, rh->minor_version);
+
+  log_debug("FD %d, Parsed request line", f->fd);
+
+  for (state->i = 0; state->i < (int) NELEMS(rh->headers); ++state->i) {
+    PEEK();
+    if (state->c == '\r') {
+      break;
+    }
+
+    PARSEVAR(rh->headers[state->i].name, match_non_null_or_colon);
+    EXPECT(':');
+    PARSEVAR(rh->headers[state->i].value, match_non_null_or_carriage_return);
+    EXPECTS("\r\n");
+
+    log_debug("FD %d, Parsed header %s, %s",
+              f->fd,
+              rh->headers[state->i].name,
+              rh->headers[state->i].value);
+  }
+
+  EXPECTS("\r\n");
+
   *success = true;
   CREND();
 
+#undef PARSEINTVAR
 #undef PARSEVAR
+#undef EXPECTS
 #undef EXPECT
 }
 
 static bool
 client_coroutine(ClientConnection *cc) {
-  bool success;
-
   CRBEGIN(cc->coropos);
 
-  /* read out client http request */
-  CRCALL(cc, c_get_request, &cc->grs, &cc->f, &success, &cc->request);
-  if (!success) {
-    /* TODO: propagate error */
-    CRHALT(cc->coropos);
+#define EMIT(b)                                                         \
+  do {                                                                  \
+    ssize_t ret;                                                        \
+    CRCALL(cc, c_write_all, &cc->sub.was, cc->f.fd, b, sizeof(b) - 1,   \
+           &ret);                                                       \
+    if (ret) {                                                          \
+      CRHALT(cc->coropos);                                              \
+    }                                                                   \
+  }                                                                     \
+  while (0)
+
+  while (true) {
+    bool success;
+
+    log_debug("FD %d Reading header", cc->f.fd);
+
+    /* read out client http request */
+    cc->want_read = true;
+    CRCALL(cc, c_get_request, &cc->sub.grs, &cc->f, &success, &cc->request);
+    cc->want_read = false;
+    if (!success) {
+      /* TODO: propagate error */
+      CRHALT(cc->coropos);
+    }
+
+    log_debug("FD %d Parsed header, sending respond", cc->f.fd);
+
+    /* now write out our response */
+    /* hardcoded to failure for now */
+    cc->want_write = true;
+    EMIT("HTTP/1.1 404 Not Found\r\n");
+    EMIT("\r\n");
+    cc->want_write = false;
+    break;
   }
 
   /* TODO: if we want to read out more, we have to pull the bits out of
@@ -418,11 +561,31 @@ client_coroutine(ClientConnection *cc) {
 
 static void
 client_handler(int fd, StreamEvents events, void *ud) {
+  ClientConnection *cc = ud;
   UNUSED(fd);
   UNUSED(events);
 
-  /* TODO: check return code to see if done */
-  client_coroutine(ud);
+  if (!client_coroutine(ud)) {
+    fdevent_remove_watch(cc->loop, cc->watch_key);
+    close_client(fd);
+  }
+  else {
+    bool ret;
+    ret = fdevent_remove_watch(cc->loop, cc->watch_key);
+    if (!ret) {
+      log_error("Failed to remove watch!");
+      return;
+    }
+    ret = fdevent_add_watch(cc->loop, fd,
+                            (StreamEvents) {.read = cc->want_read,
+                                .write = cc->want_write},
+                            client_handler, ud,
+                            &cc->watch_key);
+    if (!ret) {
+      log_error("Failed to add watch!");
+      return;
+    }
+  }
 }
 
 static void
@@ -454,6 +617,7 @@ accept_handler(int fd, StreamEvents events, void *ud) {
   }
 
   *cc = (ClientConnection) {.f = (FDBuffer) {.fd = client_fd},
+                            .loop = sc->loop,
                             .coropos = CORO_POS_INIT};
 
   /* the client is read to accept connections! */
@@ -464,6 +628,8 @@ accept_handler(int fd, StreamEvents events, void *ud) {
     log_error("Couldn't add fd watch for new client!");
     goto error;
   }
+
+  log_debug("New client! %d", client_fd);
 
   return;
 
@@ -517,7 +683,7 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
 
   server_fd = create_server_socket(&dav_options);
   if (server_fd < 0) {
-    log_critical("Couldn't create server socket");
+    log_critical("Couldn't create server socket: %s", strerror(errno));
     return -1;
   }
 
@@ -526,7 +692,7 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
 
     ret = fdevent_init(&loop);
     if (!ret) {
-      log_critical("Couldn't initialize fdevent loop!");
+      log_critical("Couldn't initialize fdevent loop: %s", strerror(errno));
       return -1;
     }
   }
@@ -544,6 +710,8 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
       return -1;
     }
   }
+
+  log_info("Starting main loop");
 
   /* this currently runs forever,
      only returns if there is an error watching sockets */

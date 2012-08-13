@@ -24,7 +24,7 @@ fdevent_init(FDEventLoop *loop) {
   loop->fd_to_watcher_size = DEFAULT_WATCHER_TABLE_SIZE;
   loop->fd_to_watchers = calloc(DEFAULT_WATCHER_TABLE_SIZE,
                                 sizeof(loop->fd_to_watchers[0]));
-  if (loop->fd_to_watchers) {
+  if (!loop->fd_to_watchers) {
     return false;
   }
 

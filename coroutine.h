@@ -9,7 +9,7 @@ typedef void *coroutine_position_t;
 #define CORO_POS_INIT NULL
 #define CRBEGIN(pos) if (pos) goto *pos
 /* we have the inline goto CORO_END to suppress compiler warnings */
-#define CREND() do {goto CORO_END; CORO_END: return true;} while (0)
+#define CREND() do {goto CORO_END; CORO_END: return false;} while (0)
 #define CRHALT(pos) do {pos = &&CORO_END; return false;} while (0)
 #define LINEHA2(x,y) x ## y
 #define LINEHA(x,y) LINEHA2(x,y)
