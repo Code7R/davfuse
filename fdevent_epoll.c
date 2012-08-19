@@ -22,6 +22,7 @@ fdevent_init(FDEventLoop *loop) {
   }
 
   loop->fd_to_watcher_size = DEFAULT_WATCHER_TABLE_SIZE;
+  /* TODO: grow this hash table as it gets full / empty */
   loop->fd_to_watchers = calloc(DEFAULT_WATCHER_TABLE_SIZE,
                                 sizeof(loop->fd_to_watchers[0]));
   if (!loop->fd_to_watchers) {
@@ -138,6 +139,56 @@ fdevent_add_watch(FDEventLoop *loop,
   }
 
   return false;
+}
+
+static bool
+stream_events_are_equal(StreamEvents a, StreamEvents b) {
+  return a.read == b.read && a.write == b.write;
+}
+
+bool
+fdevent_modify_watch(FDEventLoop *loop,
+                     FDEventWatchKey key,
+                     StreamEvents new_events,
+                     StreamEventHandler handler,
+                     void *ud) {
+  assert(loop);
+  assert(loop->epollfd >= 0);
+  assert(loop->fd_to_watcher_size);
+  assert(loop->fd_to_watchers);
+  assert(key);
+
+  FDEventWatcher *watcher = key;
+
+  if (!stream_events_are_equal(watcher->events, new_events)) {
+    /* save a copy of the old one in case there is an error */
+    StreamEvents old_events = watcher->events;
+
+    watcher->events = new_events;
+
+    /* recompute the events we're waiting on */
+    FDEventWatcherList *watcher_list = watcher_list_for_fd(loop, watcher->fd);
+    struct epoll_event ev;
+    ev.events = compute_event_set_for_fd(watcher_list->watchers);
+    ev.data.fd = watcher->fd;
+
+    if (epoll_ctl(loop->epollfd, EPOLL_CTL_MOD, watcher->fd, &ev) < 0) {
+      /* restore old events since this failed */
+      watcher->events = old_events;
+      return false;
+    }
+  }
+
+  /* set the rest of the variables */
+  if (handler != watcher->handler) {
+    watcher->handler = handler;
+  }
+
+  if (watcher->ud != ud) {
+    watcher->ud = ud;
+  }
+
+  return true;
 }
 
 bool

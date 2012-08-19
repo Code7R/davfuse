@@ -48,6 +48,13 @@ fdevent_add_watch(FDEventLoop *loop,
                   FDEventWatchKey *key);
 
 bool
+fdevent_modify_watch(FDEventLoop *loop,
+                     FDEventWatchKey key,
+                     StreamEvents new_events,
+                     StreamEventHandler handler,
+                     void *ud);
+
+bool
 fdevent_remove_watch(FDEventLoop *wt,
                      FDEventWatchKey key);
 

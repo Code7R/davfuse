@@ -41,7 +41,7 @@
 
 #define CRCALL(state, fn, state2, ...)                      \
   do {                                                      \
-    (state2)->coropos = CORO_POS_INIT;                      \
+    memset(state2, 0, sizeof(*state2));                     \
     while (fn(state2, __VA_ARGS__)) {                       \
       CRYIELD((state)->coropos);                            \
     }                                                       \
@@ -63,10 +63,7 @@ typedef GetCState PeekState;
 
 typedef struct {
   coroutine_position_t coropos;
-  char *init_buf;
-  size_t init_buf_size;
   char *buf_end;
-  GetCState getc_state;
 } GetWhileState;
 
 typedef struct {
@@ -82,6 +79,7 @@ typedef struct {
     PeekState peek_state;
   } sub;
   int i;
+  int ei;
   int c;
   char tmp;
   size_t parsed;
@@ -230,6 +228,7 @@ set_non_blocking(int fd) {
   return fcntl(fd, F_SETFL, (long) flags | O_NONBLOCK);
 }
 
+
 #define _C_FBPEEK(coropos, f, out, peek)                       \
   do {                                                         \
     ssize_t ret;                                               \
@@ -278,10 +277,8 @@ c_fbpeek(PeekState *state, FDBuffer *f, int *out) {
 
 static void
 fbungetc(FDBuffer *f, int c) {
-  /* not implemented */
-  UNUSED(f);
-  UNUSED(c);
-  assert(false);
+  f->buf_start -= 1;
+  *f->buf_start = c;
 }
 
 static bool
@@ -292,13 +289,11 @@ c_getwhile(GetWhileState *state, FDBuffer *f,
   /* always do these asserts first */
   assert(buf);
   assert(buf_size);
-  assert(!state->init_buf || state->init_buf == buf);
-  assert(!state->init_buf_size || state->init_buf_size == buf_size);
+  assert(!state->buf_end ||
+         (state->buf_end >= buf && state->buf_end < buf + buf_size));
 
   CRBEGIN(state->coropos);
 
-  state->init_buf = buf;
-  state->init_buf_size = buf_size;
   state->buf_end = buf;
 
   /* find terminator in existing buffer */
@@ -321,11 +316,11 @@ c_getwhile(GetWhileState *state, FDBuffer *f,
       break;
     }
 
-    *(state->buf_end++) = (char) c;
+    *state->buf_end++ = c;
   }
-  while (state->buf_end < (state->init_buf + state->init_buf_size));
+  while (state->buf_end < buf + buf_size);
 
-  *out = state->buf_end - state->init_buf;
+  *out = state->buf_end - buf;
   CREND();
 }
 
@@ -351,7 +346,7 @@ c_write_all(WriteAllState *state, int fd,
       }
     }
 
-    assert(state->count_left >= ret2);
+    assert(state->count_left >= (size_t) ret2);
     state->count_left -= ret2;
     state->buf_loc += ret2;
   }
@@ -429,8 +424,8 @@ c_get_request(GetRequestState *state, FDBuffer *f,
 
 #define EXPECTS(_s)                                                     \
   do {                                                                  \
-    for (state->i = 0; state->i < (int) sizeof(_s) - 1; ++state->i) {   \
-      EXPECT(_s[state->i]);                                             \
+    for (state->ei = 0; state->ei < (int) sizeof(_s) - 1; ++state->ei) { \
+      EXPECT(_s[state->ei]);                                            \
     }                                                                   \
   }                                                                     \
   while (false)
@@ -487,6 +482,7 @@ c_get_request(GetRequestState *state, FDBuffer *f,
 
   for (state->i = 0; state->i < (int) NELEMS(rh->headers); ++state->i) {
     PEEK();
+
     if (state->c == '\r') {
       break;
     }
@@ -496,11 +492,12 @@ c_get_request(GetRequestState *state, FDBuffer *f,
     PARSEVAR(rh->headers[state->i].value, match_non_null_or_carriage_return);
     EXPECTS("\r\n");
 
-    log_debug("FD %d, Parsed header %s, %s",
+    log_debug("FD %d, Parsed header %s:%s",
               f->fd,
               rh->headers[state->i].name,
               rh->headers[state->i].value);
   }
+
 
   EXPECTS("\r\n");
 
@@ -526,7 +523,7 @@ client_coroutine(ClientConnection *cc) {
       CRHALT(cc->coropos);                                              \
     }                                                                   \
   }                                                                     \
-  while (0)
+  while (false)
 
   while (true) {
     bool success;
@@ -542,7 +539,7 @@ client_coroutine(ClientConnection *cc) {
       CRHALT(cc->coropos);
     }
 
-    log_debug("FD %d Parsed header, sending respond", cc->f.fd);
+    log_debug("FD %d Parsed header, sending response", cc->f.fd);
 
     /* now write out our response */
     /* hardcoded to failure for now */
@@ -562,27 +559,26 @@ client_coroutine(ClientConnection *cc) {
 static void
 client_handler(int fd, StreamEvents events, void *ud) {
   ClientConnection *cc = ud;
+
   UNUSED(fd);
   UNUSED(events);
 
-  if (!client_coroutine(ud)) {
+  if (!client_coroutine(cc)) {
     fdevent_remove_watch(cc->loop, cc->watch_key);
     close_client(fd);
   }
   else {
     bool ret;
-    ret = fdevent_remove_watch(cc->loop, cc->watch_key);
+    StreamEvents new_wanted_events;
+
+    new_wanted_events = (StreamEvents) {.read = cc->want_read,
+                                        .write = cc->want_write};
+
+    ret = fdevent_modify_watch(cc->loop, cc->watch_key,
+                               new_wanted_events, &client_handler,
+                               ud);
     if (!ret) {
-      log_error("Failed to remove watch!");
-      return;
-    }
-    ret = fdevent_add_watch(cc->loop, fd,
-                            (StreamEvents) {.read = cc->want_read,
-                                .write = cc->want_write},
-                            client_handler, ud,
-                            &cc->watch_key);
-    if (!ret) {
-      log_error("Failed to add watch!");
+      log_error("Failed to modify watch!");
       return;
     }
   }
