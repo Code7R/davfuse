@@ -231,6 +231,7 @@ accept_client(int server_socket) {
 
 static int
 close_client(int client_socket) {
+  log_debug("CLosing fd: %d", client_socket);
   return close(client_socket);
 }
 
@@ -620,7 +621,7 @@ client_handler(int fd, StreamEvents events, void *ud) {
       fdevent_remove_watch(cc->server->loop, cc->watch_key);
       cc->watch_key = 0;
     }
-    close_client(fd);
+    close_client(cc->f.fd);
   }
   else {
     bool ret;
@@ -731,9 +732,9 @@ in_pipe_handler(int fd, StreamEvents events, void *ud) {
     /* TODO: handle ret < 0 case more gracefully */
     assert(sizeof(cc) == ret);
 
-    log_debug("Got response from worker thread: 0x%p", cc);
+    log_debug("Got response from worker thread: %p", cc);
 
-    client_handler(-1, (StreamEvents) {.read = false}, cc);
+    client_handler(cc->f.fd, (StreamEvents) {.read = false}, cc);
   }
 }
 
@@ -884,7 +885,7 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
     /* TODO: handle this more gracefully */
     assert(sizeof(cc) == ret);
 
-    log_debug("Got request from 0x%p", cc);
+    log_debug("Got request from %p", cc);
 
     /* all fails */
     cc->response.code = 404;

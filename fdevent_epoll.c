@@ -127,6 +127,10 @@ fdevent_add_watch(FDEventLoop *loop,
   }
 
   *key = wl;
+
+  log_debug("adding watch for fd %d, key %p, events: read %d, write %d",
+            fd, *key, events.read, events.write);
+
   return true;
 
  fail:
@@ -159,6 +163,9 @@ fdevent_modify_watch(FDEventLoop *loop,
   assert(key);
 
   FDEventWatcher *watcher = key;
+
+  log_debug("modifying watch for fd %d, key %p, events: read %d, write %d",
+            watcher->fd, key, new_events.read, new_events.write);
 
   if (!stream_events_are_equal(watcher->events, new_events)) {
     /* save a copy of the old one in case there is an error */
@@ -206,9 +213,11 @@ fdevent_remove_watch(FDEventLoop *loop,
   assert(loop->fd_to_watchers);
   assert(key);
 
+  log_debug("removing watch for fd %d, key %p", ll->fd, key);
+
   fd = ll->fd;
   wll = watcher_list_for_fd(loop, fd);
-  last_watch_for_fd = wll->watchers == ll;
+  last_watch_for_fd = wll->watchers == ll && !ll->next;
 
   /* first attempt to modify epoll */
   {
@@ -223,7 +232,6 @@ fdevent_remove_watch(FDEventLoop *loop,
     else {
       FDEventWatcher *ll1;
 
-      ll1 = wll->watchers;
       ev.events = 0;
       do {
         if (ll1 != ll) {
@@ -249,22 +257,59 @@ fdevent_remove_watch(FDEventLoop *loop,
     }
   }
 
-  /* now remove the watch from our data structure */
+  /* now remove the watch from the watcher list */
   if (before_ll) {
+    assert(wll->watchers != ll);
     before_ll->next = ll->next;
   }
-  else {
-    assert(last_watch_for_fd);
+  else if (wll->watchers == ll) {
+    wll->watchers = ll->next;
   }
 
   free(ll);
 
-  if (last_watch_for_fd) {
-    loop->fd_to_watchers[fd % loop->fd_to_watcher_size] = NULL;
+  /* if this watcher list is dead, remove it from the hash table */
+  if (!wll->watchers) {
+    if (wll->prev) {
+      wll->prev->next = wll->next;
+    }
+    else {
+      /* if prev wasn't set, it was the first in the list */
+      loop->fd_to_watchers[fd % loop->fd_to_watcher_size] = wll->next;
+    }
+
+    if (wll->next) {
+      wll->next->prev = wll->prev;
+    }
+
     free(wll);
   }
 
   return true;
+}
+
+static void
+dump_loop(FDEventLoop *loop) {
+  for (int i = 0; i < loop->fd_to_watcher_size; ++i) {
+    FDEventWatcherList *ll = loop->fd_to_watchers[i];
+
+    while (ll) {
+      FDEventWatcher *watchers = ll->watchers;
+
+      while (watchers) {
+        log_debug("Watcher: key %p, FD: %d, events: read %d, write %d, handler: %p",
+                  watchers,
+                  watchers->fd, watchers->events.read, watchers->events.write,
+                  watchers->handler);
+
+        watchers = watchers->next;
+      }
+
+      ll = ll->next;
+    }
+  }
+
+  log_debug("Done dump");
 }
 
 bool
@@ -272,6 +317,8 @@ fdevent_main_loop(FDEventLoop *loop) {
   while (true) {
     int i, nfds;
     struct epoll_event events[EVENTS_PER_LOOP];
+
+    dump_loop(loop);
 
     while ((nfds = epoll_wait(loop->epollfd, events, NELEMS(events), -1)) < 0) {
       if (errno != EINTR) {
