@@ -5,6 +5,7 @@
 /* POSIX includes */
 #include <arpa/inet.h>
 #include <errno.h>
+#include <pthread.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -35,6 +36,8 @@
 #define MAX_HEADER_NAME_SIZE 64
 #define MAX_HEADER_VALUE_SIZE 128
 #define MAX_NUM_HEADERS 16
+#define OUT_BUF_SIZE 4096
+#define IN_BUF_SIZE OUT_BUF_SIZE
 
 #define UNUSED(x) (void)(x)
 #define NELEMS(arr) (sizeof(arr) / sizeof(arr[0]))
@@ -89,7 +92,16 @@ typedef struct {
 
 typedef struct {
   FDEventLoop *loop;
+  int out_pipe;
+  int in_pipe;
 } ServerContext;
+
+typedef struct {
+  int in_pipe;
+  int out_pipe;
+  struct fuse_operations *op;
+  void *user_data;
+} ThreadContext;
 
 typedef struct {
   char method[MAX_METHOD_SIZE];
@@ -107,12 +119,18 @@ typedef struct {
   int fd;
   char *buf_start;
   char *buf_end;
-  char buf[4096];
+  char buf[IN_BUF_SIZE];
 } FDBuffer;
 
 typedef struct {
+  int code;
+} HTTPResponse;
+
+typedef struct {
   FDBuffer f;
-  FDEventLoop *loop;
+  char outbuffer[OUT_BUF_SIZE];
+  int out_size;
+  ServerContext *server;
   FDEventWatchKey watch_key;
   coroutine_position_t coropos;
   union {
@@ -120,6 +138,7 @@ typedef struct {
     WriteAllState was;
   } sub;
   HTTPRequestHeaders request;
+  HTTPResponse response;
   bool want_read : 1;
   bool want_write : 1;
 } ClientConnection;
@@ -514,16 +533,18 @@ static bool
 client_coroutine(ClientConnection *cc) {
   CRBEGIN(cc->coropos);
 
-#define EMIT(b)                                                         \
+#define EMITN(b, n)                                                     \
   do {                                                                  \
     ssize_t ret;                                                        \
-    CRCALL(cc, c_write_all, &cc->sub.was, cc->f.fd, b, sizeof(b) - 1,   \
+    CRCALL(cc, c_write_all, &cc->sub.was, cc->f.fd, b, n,               \
            &ret);                                                       \
     if (ret) {                                                          \
       CRHALT(cc->coropos);                                              \
     }                                                                   \
   }                                                                     \
   while (false)
+
+#define EMIT(c) EMITN(c, sizeof(c) - 1)
 
   while (true) {
     bool success;
@@ -539,12 +560,43 @@ client_coroutine(ClientConnection *cc) {
       CRHALT(cc->coropos);
     }
 
-    log_debug("FD %d Parsed header, sending response", cc->f.fd);
+    log_debug("FD %d Parsed header, sending request to working thread",
+              cc->f.fd);
+
+    /* okay write out the request pointer to the fuse thread */
+    while (true) {
+      assert(sizeof(cc) <= PIPE_BUF);
+
+      ssize_t ret = write(cc->server->out_pipe, &cc, sizeof(cc));
+      if (ret < 0 && errno == EAGAIN) {
+        /* TODO: want_write for this fd */
+        assert(false);
+        continue;
+      }
+      else if (ret != sizeof(cc)) {
+        if (ret < 0) {
+          log_debug("FD %d Error writing to out-pipe: %s", cc->f.fd,
+                    strerror(errno));
+        }
+        else {
+          log_debug("FD %d Error super rare partial write!", cc->f.fd);
+        }
+        CRHALT(cc->coropos);
+      }
+
+      break;
+    }
+
+    while (!cc->response.code) {
+      CRYIELD(cc->coropos);
+    }
 
     /* now write out our response */
     /* hardcoded to failure for now */
     cc->want_write = true;
-    EMIT("HTTP/1.1 404 Not Found\r\n");
+    cc->out_size = snprintf(cc->outbuffer, sizeof(cc->outbuffer),
+                            "HTTP/1.1 %d Stuff\r\n", cc->response.code);
+    EMITN(cc->outbuffer, cc->out_size);
     EMIT("\r\n");
     cc->want_write = false;
     break;
@@ -564,7 +616,10 @@ client_handler(int fd, StreamEvents events, void *ud) {
   UNUSED(events);
 
   if (!client_coroutine(cc)) {
-    fdevent_remove_watch(cc->loop, cc->watch_key);
+    if (cc->watch_key) {
+      fdevent_remove_watch(cc->server->loop, cc->watch_key);
+      cc->watch_key = 0;
+    }
     close_client(fd);
   }
   else {
@@ -574,12 +629,29 @@ client_handler(int fd, StreamEvents events, void *ud) {
     new_wanted_events = (StreamEvents) {.read = cc->want_read,
                                         .write = cc->want_write};
 
-    ret = fdevent_modify_watch(cc->loop, cc->watch_key,
-                               new_wanted_events, &client_handler,
-                               ud);
-    if (!ret) {
-      log_error("Failed to modify watch!");
-      return;
+    if (new_wanted_events.read || new_wanted_events.write) {
+      if (!cc->watch_key) {
+        ret = fdevent_add_watch(cc->server->loop, cc->f.fd,
+                                new_wanted_events, &client_handler,
+                                ud, &cc->watch_key);
+      }
+      else {
+        ret = fdevent_modify_watch(cc->server->loop, cc->watch_key,
+                                   new_wanted_events, &client_handler,
+                                   ud);
+        if (!ret) {
+          log_error("Failed to modify watch!");
+          return;
+        }
+      }
+    }
+    else if (cc->watch_key) {
+      ret = fdevent_remove_watch(cc->server->loop, cc->watch_key);
+      if (!ret) {
+        log_error("Failed to remove watch during wait");
+        return;
+      }
+      cc->watch_key = 0;
     }
   }
 }
@@ -613,7 +685,7 @@ accept_handler(int fd, StreamEvents events, void *ud) {
   }
 
   *cc = (ClientConnection) {.f = (FDBuffer) {.fd = client_fd},
-                            .loop = sc->loop,
+                            .server = sc,
                             .coropos = CORO_POS_INIT};
 
   /* the client is read to accept connections! */
@@ -639,6 +711,54 @@ accept_handler(int fd, StreamEvents events, void *ud) {
   }
 }
 
+static void
+in_pipe_handler(int fd, StreamEvents events, void *ud) {
+  ClientConnection *cc;
+  ssize_t ret;
+
+  UNUSED(events);
+  UNUSED(ud);
+
+  assert(sizeof(cc) <= PIPE_BUF);
+
+  while (true) {
+    ret = read(fd, &cc, sizeof(cc));
+    if (ret < 0 && errno == EAGAIN) {
+      /* nothing */
+      break;
+    }
+
+    /* TODO: handle ret < 0 case more gracefully */
+    assert(sizeof(cc) == ret);
+
+    log_debug("Got response from worker thread: 0x%p", cc);
+
+    client_handler(-1, (StreamEvents) {.read = false}, cc);
+  }
+}
+
+
+static void *
+http_thread(void *ud) {
+  bool ret;
+  ServerContext *sc = ud;
+  FDEventWatchKey watch_key;
+
+  /* register pipe handler */
+  ret = fdevent_add_watch(sc->loop, sc->in_pipe,
+                          (StreamEvents) {.read = true},
+                          in_pipe_handler, NULL, &watch_key);
+
+  /* TODO: handle this more gracefully */
+  assert(ret);
+
+  /* this currently runs forever,
+     only returns if there is an error watching sockets */
+  fdevent_main_loop(sc->loop);
+
+  return NULL;
+}
+
 /* From "fuse_versionscript" the version of this symbol is FUSE_2.6 */
 int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
                    size_t op_size, void *user_data) {
@@ -649,6 +769,7 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
   FDEventLoop loop;
   FDEventWatchKey server_watch_key;
   ServerContext sc;
+  ThreadContext tc;
 
   UNUSED(op);
   UNUSED(op_size);
@@ -683,6 +804,40 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
     return -1;
   }
 
+  int pipefds[2];
+
+  if (pipe(pipefds) < 0) {
+    log_critical("Couldn't create to-thread pipe: %s", strerror(errno));
+    /* TODO: close server socket? */
+    return -1;
+  }
+
+  sc.out_pipe = pipefds[1];
+
+  if (set_non_blocking(sc.out_pipe) < 0) {
+    log_critical("Couldn't make out pipe non-blocking: %s", strerror(errno));
+    /* TODO: close server socket? */
+    return -1;
+  }
+
+  tc.in_pipe = pipefds[0];
+
+  if (pipe(pipefds) < 0) {
+    log_critical("Couldn't create from-thread pipe: %s", strerror(errno));
+    /* TODO: close server socket? */
+    return -1;
+  }
+
+  sc.in_pipe = pipefds[0];
+
+  if (set_non_blocking(sc.in_pipe) < 0) {
+    log_critical("Couldn't make in pipe non-blocking: %s", strerror(errno));
+    /* TODO: close server socket? */
+    return -1;
+  }
+
+  tc.out_pipe = pipefds[1];
+
   {
     bool ret;
 
@@ -709,9 +864,39 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
 
   log_info("Starting main loop");
 
-  /* this currently runs forever,
-     only returns if there is an error watching sockets */
-  fdevent_main_loop(&loop);
+  pthread_t new_thread;
+  pthread_create(&new_thread, NULL, http_thread, &sc);
+
+  log_info("Starting fuse worker");
+
+  while (true) {
+    ssize_t ret;
+    ClientConnection *cc;
+
+    assert(sizeof(cc) <= PIPE_BUF);
+
+    log_debug("Waiting for worker request");
+    ret = read(tc.in_pipe, &cc, sizeof(cc));
+    if (ret < 0) {
+      break;
+    }
+
+    /* TODO: handle this more gracefully */
+    assert(sizeof(cc) == ret);
+
+    log_debug("Got request from 0x%p", cc);
+
+    /* all fails */
+    cc->response.code = 404;
+
+    ret = write(tc.out_pipe, &cc, sizeof(cc));
+    /* TODO: handle this more gracefully */
+    assert(sizeof(cc) == ret);
+  }
+
+  /* wakeup server thread */
+
+  pthread_join(new_thread, NULL);
 
   return -1;
 }
