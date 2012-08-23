@@ -607,6 +607,9 @@ client_coroutine(ClientConnection *cc) {
      `cc->grs.gls.buf` */
 
   CREND();
+
+#undef EMIT
+#undef EMITN
 }
 
 static void
