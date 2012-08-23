@@ -622,6 +622,7 @@ client_handler(int fd, StreamEvents events, void *ud) {
       cc->watch_key = 0;
     }
     close_client(cc->f.fd);
+    free(cc);
   }
   else {
     bool ret;
