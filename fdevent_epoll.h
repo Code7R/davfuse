@@ -10,6 +10,12 @@ typedef struct {
   bool write : 1;
 } StreamEvents;
 
+/* Make this is a macro if too slow */
+static StreamEvents
+create_stream_events(bool read, bool write) {
+  return (StreamEvents) {.read = read, .write = write}
+}
+
 typedef void (*StreamEventHandler)(int, StreamEvents, void *);
 
 typedef struct _fd_event_watcher {

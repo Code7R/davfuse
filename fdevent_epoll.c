@@ -71,7 +71,7 @@ fdevent_add_watch(FDEventLoop *loop,
                   int fd,
                   StreamEvents events,
                   StreamEventHandler handler,
-                  void *ud,
+                  void *ud) {
                   FDEventWatchKey *key) {
   FDEventWatcher *wl = NULL;
   FDEventWatcherList *wll = NULL;
@@ -99,17 +99,17 @@ fdevent_add_watch(FDEventLoop *loop,
       fdstart->prev = wll;
     }
 
-    *wll = (FDEventWatcherList) {.watchers = NULL,
-                                 .prev = NULL,
-                                 .next = fdstart};
+    *wll = {.watchers = NULL,
+	    .prev = NULL,
+	    .next = fdstart};
     loop->fd_to_watchers[fd % loop->fd_to_watcher_size] = wll;
   }
 
-  *wl = (FDEventWatcher) {.fd = fd,
-                          .ud = ud,
-                          .events = events,
-                          .handler = handler,
-                          .next = wll->watchers};
+  *wl = {.fd = fd,
+	 .ud = ud,
+	 .events = events,
+	 .handler = handler,
+	 .next = wll->watchers};
   wll->watchers = wl;
 
   {
@@ -340,8 +340,8 @@ fdevent_main_loop(FDEventLoop *loop) {
         continue;
       }
 
-      stream_events = (StreamEvents) {.read = events[i].events & EPOLLIN,
-                                      .write = events[i].events & EPOLLOUT};
+      stream_events = {.read = events[i].events & EPOLLIN,
+		       .write = events[i].events & EPOLLOUT};
 
       ll = wll->watchers;
       while (ll) {
