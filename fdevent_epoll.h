@@ -2,8 +2,12 @@
 #define FDEVENT_EPOLL_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* event subsystem */
+
+#define WATCHER_LIST_MAGIC 0x86820485
+#define WATCHER_MAGIC 0x78122876
 
 typedef struct {
   bool read : 1;
@@ -13,20 +17,27 @@ typedef struct {
 /* Make this is a macro if too slow */
 static StreamEvents
 create_stream_events(bool read, bool write) {
-  return (StreamEvents) {.read = read, .write = write}
+  return (StreamEvents) {.read = read, .write = write};
 }
 
 typedef void (*StreamEventHandler)(int, StreamEvents, void *);
 
+/* forward declaration */
+struct _fdwaiter_link;
+
 typedef struct _fd_event_watcher {
-  int fd;
-  void *ud;
+  uint32_t magic;
   StreamEvents events;
   StreamEventHandler handler;
+  void *ud;
+  struct _fdwaiter_link *wll;
   struct _fd_event_watcher *next;
 } FDEventWatcher;
 
 typedef struct _fdwaiter_link {
+  uint32_t magic;
+  int fd;
+  uint32_t epoll_events;
   FDEventWatcher *watchers;
   struct _fdwaiter_link *prev;
   struct _fdwaiter_link *next;
@@ -54,14 +65,7 @@ fdevent_add_watch(FDEventLoop *loop,
                   FDEventWatchKey *key);
 
 bool
-fdevent_modify_watch(FDEventLoop *loop,
-                     FDEventWatchKey key,
-                     StreamEvents new_events,
-                     StreamEventHandler handler,
-                     void *ud);
-
-bool
-fdevent_remove_watch(FDEventLoop *wt,
+fdevent_remove_watch(FDEventLoop *loop,
                      FDEventWatchKey key);
 
 bool

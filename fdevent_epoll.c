@@ -5,32 +5,12 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+#include "c_util.h"
 #include "fdevent_epoll.h"
 #include "logging.h"
 
 #define DEFAULT_WATCHER_TABLE_SIZE 10
 #define EVENTS_PER_LOOP 10
-#define NELEMS(arr) (sizeof(arr) / sizeof(arr[0]))
-
-bool
-fdevent_init(FDEventLoop *loop) {
-  assert(loop);
-
-  loop->epollfd = epoll_create(DEFAULT_WATCHER_TABLE_SIZE);
-  if (loop->epollfd < 0) {
-    return false;
-  }
-
-  loop->fd_to_watcher_size = DEFAULT_WATCHER_TABLE_SIZE;
-  /* TODO: grow this hash table as it gets full / empty */
-  loop->fd_to_watchers = calloc(DEFAULT_WATCHER_TABLE_SIZE,
-                                sizeof(loop->fd_to_watchers[0]));
-  if (!loop->fd_to_watchers) {
-    return false;
-  }
-
-  return true;
-}
 
 static uint32_t
 stream_event_to_event_set(StreamEvents events) {
@@ -57,7 +37,7 @@ watcher_list_for_fd(FDEventLoop *loop, int fd) {
 
   wll = loop->fd_to_watchers[fd % loop->fd_to_watcher_size];
   while (wll) {
-    if (wll->watchers->fd == fd) {
+    if (wll->fd == fd) {
       break;
     }
     wll = wll->next;
@@ -66,12 +46,46 @@ watcher_list_for_fd(FDEventLoop *loop, int fd) {
   return wll;
 }
 
+static void
+free_watcher(FDEventWatcher *wl) {
+  /* clear out magic */
+  wl->magic = 0;
+  free(wl);
+}
+
+static void
+free_watcher_list(FDEventWatcherList *wll) {
+  /* clear out magic */
+  wll->magic = 0;
+  free(wll);
+}
+
+bool
+fdevent_init(FDEventLoop *loop) {
+  assert(loop);
+
+  loop->epollfd = epoll_create(DEFAULT_WATCHER_TABLE_SIZE);
+  if (loop->epollfd < 0) {
+    return false;
+  }
+
+  loop->fd_to_watcher_size = DEFAULT_WATCHER_TABLE_SIZE;
+  /* TODO: grow this hash table as it gets full / empty */
+  loop->fd_to_watchers = calloc(DEFAULT_WATCHER_TABLE_SIZE,
+                                sizeof(loop->fd_to_watchers[0]));
+  if (!loop->fd_to_watchers) {
+    return false;
+  }
+
+  return true;
+}
+
 bool
 fdevent_add_watch(FDEventLoop *loop,
                   int fd,
                   StreamEvents events,
                   StreamEventHandler handler,
-                  void *ud) {
+                  void *ud,
                   FDEventWatchKey *key) {
   FDEventWatcher *wl = NULL;
   FDEventWatcherList *wll = NULL;
@@ -81,7 +95,7 @@ fdevent_add_watch(FDEventLoop *loop,
 
   wl = malloc(sizeof(*wl));
   if (!wl) {
-    goto fail;
+    goto error;
   }
 
   wll = watcher_list_for_fd(loop, fd);
@@ -91,7 +105,7 @@ fdevent_add_watch(FDEventLoop *loop,
     /* there was no hash mapping for this fd, we have to create one */
     wll = malloc(sizeof(*wll));
     if (!wll) {
-      goto fail;
+      goto error;
     }
 
     fdstart = loop->fd_to_watchers[fd % loop->fd_to_watcher_size];
@@ -99,17 +113,24 @@ fdevent_add_watch(FDEventLoop *loop,
       fdstart->prev = wll;
     }
 
-    *wll = {.watchers = NULL,
-	    .prev = NULL,
-	    .next = fdstart};
+    *wll = (FDEventWatcherList) {
+      .magic = WATCHER_LIST_MAGIC,
+      .fd = fd,
+      .watchers = NULL,
+      .prev = NULL,
+      .next = fdstart,
+    };
     loop->fd_to_watchers[fd % loop->fd_to_watcher_size] = wll;
   }
 
-  *wl = {.fd = fd,
-	 .ud = ud,
-	 .events = events,
-	 .handler = handler,
-	 .next = wll->watchers};
+  *wl = (FDEventWatcher) {
+    .magic = WATCHER_MAGIC,
+    .events = events,
+    .handler = handler,
+    .ud = ud,
+    .wll = wll,
+    .next = wll->watchers,
+  };
   wll->watchers = wl;
 
   {
@@ -117,13 +138,15 @@ fdevent_add_watch(FDEventLoop *loop,
     int op;
 
     ev.events = compute_event_set_for_fd(wl) | EPOLLET;
-    ev.data.fd = fd;
+    ev.data.ptr = wll;
 
     op = wl->next ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
 
     if (epoll_ctl(loop->epollfd, op, fd, &ev) < 0) {
-      goto fail;
+      goto error;
     }
+
+    wll->epoll_events = ev.events;
   }
 
   *key = wl;
@@ -133,13 +156,13 @@ fdevent_add_watch(FDEventLoop *loop,
 
   return true;
 
- fail:
+ error:
   if (wl) {
-    free(wl);
+    free_watcher(wl);
   }
 
   if (wll) {
-    free(wll);
+    free_watcher_list(wll);
   }
 
   return false;
@@ -148,54 +171,6 @@ fdevent_add_watch(FDEventLoop *loop,
 static bool
 stream_events_are_equal(StreamEvents a, StreamEvents b) {
   return a.read == b.read && a.write == b.write;
-}
-
-bool
-fdevent_modify_watch(FDEventLoop *loop,
-                     FDEventWatchKey key,
-                     StreamEvents new_events,
-                     StreamEventHandler handler,
-                     void *ud) {
-  assert(loop);
-  assert(loop->epollfd >= 0);
-  assert(loop->fd_to_watcher_size);
-  assert(loop->fd_to_watchers);
-  assert(key);
-
-  FDEventWatcher *watcher = key;
-
-  log_debug("modifying watch for fd %d, key %p, events: read %d, write %d",
-            watcher->fd, key, new_events.read, new_events.write);
-
-  if (!stream_events_are_equal(watcher->events, new_events)) {
-    /* save a copy of the old one in case there is an error */
-    StreamEvents old_events = watcher->events;
-
-    watcher->events = new_events;
-
-    /* recompute the events we're waiting on */
-    FDEventWatcherList *watcher_list = watcher_list_for_fd(loop, watcher->fd);
-    struct epoll_event ev;
-    ev.events = compute_event_set_for_fd(watcher_list->watchers);
-    ev.data.fd = watcher->fd;
-
-    if (epoll_ctl(loop->epollfd, EPOLL_CTL_MOD, watcher->fd, &ev) < 0) {
-      /* restore old events since this failed */
-      watcher->events = old_events;
-      return false;
-    }
-  }
-
-  /* set the rest of the variables */
-  if (handler != watcher->handler) {
-    watcher->handler = handler;
-  }
-
-  if (watcher->ud != ud) {
-    watcher->ud = ud;
-  }
-
-  return true;
 }
 
 bool
@@ -213,10 +188,16 @@ fdevent_remove_watch(FDEventLoop *loop,
   assert(loop->fd_to_watchers);
   assert(key);
 
-  log_debug("removing watch for fd %d, key %p", ll->fd, key);
+  if (ll->magic != WATCHER_MAGIC) {
+    /* this was a bad key */
+    return false;
+  }
 
-  fd = ll->fd;
-  wll = watcher_list_for_fd(loop, fd);
+  wll = ll->wll;
+  assert(wll->magic == WATCHER_LIST_MAGIC);
+
+
+  log_debug("removing watch for fd %d, key %p", wll->fd, key);
   last_watch_for_fd = wll->watchers == ll && !ll->next;
 
   /* first attempt to modify epoll */
@@ -232,6 +213,7 @@ fdevent_remove_watch(FDEventLoop *loop,
     else {
       FDEventWatcher *ll1;
 
+      /* compute the new event set for this fd */
       ev.events = 0;
       do {
         if (ll1 != ll) {
@@ -244,20 +226,30 @@ fdevent_remove_watch(FDEventLoop *loop,
 
         ll1 = ll1->next;
       }
+      /* stop if we're waiting for possible events or
+	 there is no more to iterate over */
       while (ev.events != (EPOLLIN | EPOLLOUT) && ll1);
 
       op = EPOLL_CTL_MOD;
       ev.events |= EPOLLET;
-      ev.data.fd = fd;
+      ev.data.ptr = wll;
       ev_set = &ev;
     }
 
-    if (epoll_ctl(loop->epollfd, op, fd, ev_set) < 0) {
+    if ((op == EPOLL_CTL_DEL ||
+	 ev.events != wll->epoll_events) &&
+	epoll_ctl(loop->epollfd, op, wll->fd, ev_set) < 0) {
       return false;
+    }
+
+    if (op != EPOLL_CTL_DEL) {
+      wll->epoll_events = ev.event;
     }
   }
 
-  /* now remove the watch from the watcher list */
+  /* now remove the watch from the watcher list,
+     we do this after `epoll_ctl` because that is more likely to fail
+   */
   if (before_ll) {
     assert(wll->watchers != ll);
     before_ll->next = ll->next;
@@ -266,7 +258,7 @@ fdevent_remove_watch(FDEventLoop *loop,
     wll->watchers = ll->next;
   }
 
-  free(ll);
+  free_watcher(ll);
 
   /* if this watcher list is dead, remove it from the hash table */
   if (!wll->watchers) {
@@ -282,7 +274,7 @@ fdevent_remove_watch(FDEventLoop *loop,
       wll->next->prev = wll->prev;
     }
 
-    free(wll);
+    free_watcher_list(wll);
   }
 
   return true;
@@ -290,16 +282,24 @@ fdevent_remove_watch(FDEventLoop *loop,
 
 static void
 dump_loop(FDEventLoop *loop) {
+  log_debug("Beginning dump");
+
   for (int i = 0; i < loop->fd_to_watcher_size; ++i) {
     FDEventWatcherList *ll = loop->fd_to_watchers[i];
 
     while (ll) {
       FDEventWatcher *watchers = ll->watchers;
 
+      log_debug("Watch list: magic: %x, fd %d, epoll_events %x",
+		ll->magic,
+		ll->fd,
+		ll->epoll_events);
+
       while (watchers) {
-        log_debug("Watcher: key %p, FD: %d, events: read %d, write %d, handler: %p",
+        log_debug("Watcher: key %p, magic: %x, wll: %p, events: read %d, write %d, handler: %p",
                   watchers,
-                  watchers->fd, watchers->events.read, watchers->events.write,
+		  watchers->magic,
+                  watchers->wll, watchers->events.read, watchers->events.write,
                   watchers->handler);
 
         watchers = watchers->next;
@@ -315,7 +315,7 @@ dump_loop(FDEventLoop *loop) {
 bool
 fdevent_main_loop(FDEventLoop *loop) {
   while (true) {
-    int i, nfds;
+    int nfds;
     struct epoll_event events[EVENTS_PER_LOOP];
 
     dump_loop(loop);
@@ -326,35 +326,49 @@ fdevent_main_loop(FDEventLoop *loop) {
       }
     }
 
-    for (i = 0; i < nfds; ++i) {
-      FDEventWatcherList *wll;
-      FDEventWatcher *ll;
-      StreamEvents stream_events;
+    for (int i = 0; i < nfds; ++i) {
+      FDEventWatcherList *wll = (FDEventWatcherList *) events[i].data.ptr;
 
-      wll = watcher_list_for_fd(loop, events[i].data.fd);
-      if (!wll) {
+      if (!wll || wll->magic != WATCHER_LIST_MAGIC) {
         /* not sure whose at fault here, either
            epoll gave us a bad fd or our internal data structures
            are corrupted */
-        log_warning("epoll_wait() gave us a bad fd: %d", events[i].data.fd);
+        log_warning("epoll_wait() gave us a bad watcher list, magic: %p, %x",
+		    wll, wll->magic);
         continue;
       }
 
-      stream_events = {.read = events[i].events & EPOLLIN,
-		       .write = events[i].events & EPOLLOUT};
-
-      ll = wll->watchers;
-      while (ll) {
-        FDEventWatcher *lltmp;
-
-        lltmp = ll->next;
-
-        if ((stream_events.read && ll->events.read) ||
-            (stream_events.write && ll->events.write)) {
-          ll->handler(ll->fd, stream_events, ll->ud);
-        }
-
-        ll = lltmp;
+      {
+	FDEventWatcher *ll = wll->watchers;
+	StreamEvents stream_events = {
+	  .read = events[i].events & EPOLLIN,
+	  .write = events[i].events & EPOLLOUT
+	};
+	/* save this in case wll gets free'd */
+	int fd = wll->fd;
+	
+	while (ll) {
+	  /* the linked-list might get modified while calling the handler,
+	     but that's okay because:
+	     * if we remove a link, we won't iterate to it
+	     * when we add links, they go to the front
+	     */
+	  FDEventWatcher *lltmp = ll->next;
+	  
+	  if ((stream_events.read && ll->events.read) ||
+	      (stream_events.write && ll->events.write)) {
+	    /* these are one-shot,
+	       save this info
+	       remove the watch, and go
+	    */
+	    StreamEventHandler h = ll->handler;
+	    void *ud = ll->ud;
+	    fdevent_remove_watch(loop, ll);
+	    h(fd, stream_events, ud);
+	  }
+	  
+	  ll = lltmp;
+	}
       }
     }
   }
