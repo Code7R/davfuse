@@ -135,7 +135,7 @@ create_server_socket(DavOptions *options) {
 }
 
 static void
-in_pipe_handler(int fd, StreamEvents events, void *ud) {
+in_pipe_handler(FDEventLoop *loop, int fd, StreamEvents events, void *ud) {
   HandlerContext *hc;
   ssize_t ret;
 
@@ -158,13 +158,19 @@ in_pipe_handler(int fd, StreamEvents events, void *ud) {
 
     run_request_coroutine(hc);
   }
+
+  /* re-register watch */
+  ret = fdevent_add_watch(loop, fd,
+                          create_stream_events(true, false),
+                          in_pipe_handler, NULL, NULL);
+  /* handle error more gracefully */
+  assert(ret);
 }
 
 static void
-handle_request(void *ud,
-	       HTTPRequestHeaders *headers,
-	       int in_fd, int out_fd,
-	       callback cb) {
+handle_request(HTTPRequestHeaders *headers,
+	       HTTPRequestContext rctx,
+	       void *ud) {
   HandlerContext *hc = (HandlerContext *) ud;
   run_request_coroutine(hc);
 }
@@ -181,12 +187,11 @@ request_coroutine(HandlerContext *hc) {
 
 static void *
 http_thread(void *ud) {
-  Pipes *pipes = (Pipes *) ud;
-  bool ret;
+  FDEventLoop loop;
   HandlerContext hc;
   HTTPServer http;
-  FDEventLoop loop;
-  FDEventWatchKey watch_key;
+  Pipes *pipes = (Pipes *) ud;
+  bool ret;
   int server_fd;
 
   hc.to_main = pipes->named.out;
@@ -201,7 +206,7 @@ http_thread(void *ud) {
   /* register pipe handler */
   ret = fdevent_add_watch(&loop, pipes->named.in,
                           create_stream_events(true, false),
-                          in_pipe_handler, NULL, &watch_key);
+                          in_pipe_handler, NULL, NULL);
   if (!ret) {
     log_critical("Couldn't add watch for pipe");
     goto error;
@@ -250,7 +255,6 @@ fuse_main_real(int argc,
   DavOptions dav_options;
   FuseOptions fuse_options;
   int ret;
-  FDEventWatchKey server_watch_key;
   ThreadContext tc;
   int pipefds[2];
   Pipes http_thread_pipes;

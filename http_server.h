@@ -13,8 +13,6 @@
 #define MAX_NUM_HEADERS 16
 #define OUT_BUF_SIZE 4096
 
-typedef int (*http_handler)(int);
-
 typedef struct {
   FDEventLoop *loop;
   http_accept_handler cur_handler;
@@ -70,5 +68,47 @@ typedef struct {
   bool want_read : 1;
   bool want_write : 1;
 } ClientConnection;
+
+typedef void (*HTTPHandler)(HTTPRequestHeaders *,
+			    HTTPRequestContext,
+			    void *);
+
+/* TODO: define different callbacks */
+
+void
+http_server_start(HTTPServer *http,
+		  FDEventLoop *loop,
+		  int fd,
+		  HTTPHandler handler, 
+		  void *ud,
+		  Callback cb,
+		  void *cb_ud);
+
+void
+http_server_stop(HTTPServer *http,
+		 Callback cb, void *cb_ud);
+
+void
+http_request_read(HTTPRequestContext rctx,
+		  void *buf, size_t nbyte,
+		  Callback cb, void *cb_ud) {
+}
+
+void
+http_request_start_headers(HTTPRequestContext rctx,
+			   RequestHeader request_headers,
+			   Callback cb, void *cb_ud) {
+}
+
+void
+http_request_write(HTTPRequestContext rctx,
+		   const void *buf, size_t nbyte,
+		   Callback cb, void *cb_ud) {
+}
+
+void
+http_request_end(HTTPRequestContext rctx,
+		 Callback cb, void *cb_ud) {
+}
 
 #endif /* HTTP_SERVER_H */

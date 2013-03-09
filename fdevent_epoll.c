@@ -91,7 +91,8 @@ fdevent_add_watch(FDEventLoop *loop,
   FDEventWatcherList *wll = NULL;
 
   assert(loop);
-  assert(key);
+  assert(fd >= 0);
+  assert(handler);
 
   wl = malloc(sizeof(*wl));
   if (!wl) {
@@ -149,10 +150,12 @@ fdevent_add_watch(FDEventLoop *loop,
     wll->epoll_events = ev.events;
   }
 
-  *key = wl;
+  if (key) {
+    *key = wl;
+  }
 
   log_debug("adding watch for fd %d, key %p, events: read %d, write %d",
-            fd, *key, events.read, events.write);
+            fd, wl, events.read, events.write);
 
   return true;
 
@@ -364,7 +367,7 @@ fdevent_main_loop(FDEventLoop *loop) {
 	    StreamEventHandler h = ll->handler;
 	    void *ud = ll->ud;
 	    fdevent_remove_watch(loop, ll);
-	    h(fd, stream_events, ud);
+	    h(loop, fd, stream_events, ud);
 	  }
 	  
 	  ll = lltmp;

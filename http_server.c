@@ -10,12 +10,14 @@
 
 #define LISTEN_BACKLOG 5
 
-bool
+void
 http_server_start(HTTPServer *http,
 		  FDEventLoop *loop,
 		  int fd,
 		  http_handler handler, 
-		  void *ud) {
+		  void *ud,
+		  callback cb,
+		  void *cb_id) {
   /*
     we expect the fd to be capable of a couple things:
     1. you can call listen() on it
@@ -62,10 +64,34 @@ http_server_start(HTTPServer *http,
   return false;
 }
 
-bool
-http_server_stop(HTTPServer *http) {
+void
+http_server_stop(HTTPServer *http,
+		 callback cb, void *cb_ud) {
   /* TODO: implement */
   assert(false);
+}
+
+void
+http_request_read(RequestContext rctx,
+		  void *buf, size_t nbyte,
+		  callback cb, void *cb_ud) {
+}
+
+void
+http_request_start_headers(RequestContext rctx,
+			   RequestHeader request_headers,
+			   callback cb, void *ud) {
+}
+
+void
+http_request_write(RequestContext rctx,
+		   const void *buf, size_t nbyte,
+		   callback cb, void *cb_ud) {
+}
+
+void
+http_request_end(RequestContext rctx,
+		 callback cb, void *cb_ud) {
 }
 
 static void

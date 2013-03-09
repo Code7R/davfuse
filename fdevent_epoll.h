@@ -20,10 +20,11 @@ create_stream_events(bool read, bool write) {
   return (StreamEvents) {.read = read, .write = write};
 }
 
-typedef void (*StreamEventHandler)(int, StreamEvents, void *);
-
 /* forward declaration */
 struct _fdwaiter_link;
+struct _fd_event_loop;
+
+typedef void (*StreamEventHandler)(struct _fd_event_loop *, int, StreamEvents, void *);
 
 typedef struct _fd_event_watcher {
   uint32_t magic;
@@ -44,7 +45,7 @@ typedef struct _fdwaiter_link {
 } FDEventWatcherList;
 
 /* event watcher/dispatcher bookkeeping */
-typedef struct {
+typedef struct _fd_event_loop {
   int epollfd;
   int fd_to_watcher_size;
   /* this is a hash table */
