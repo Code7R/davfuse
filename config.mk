@@ -3,7 +3,8 @@ MINOR_VERSION = 1
 VERSION = ${MAJOR_VERSION}.${MINOR_VERSION}
 
 # Customize below to fit your system
-FDEVENT_SOURCE = epoll
+#FDEVENT_SOURCE = epoll
+FDEVENT_SOURCE = select
 
 # paths
 PREFIX = /usr/local

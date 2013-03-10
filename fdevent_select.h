@@ -3,20 +3,22 @@
 
 #include <stdbool.h>
 
+#include "c_util.h"
+
 /* event subsystem */
 
-typedef struct {
-  bool read : 1;
-  bool write : 1;
-} StreamEvents;
+/* forward decl */
+struct _fd_event_loop;
 
-typedef void (*StreamEventHandler)(int, StreamEvents, void *);
+#define FDEVENT_LOOP struct _fd_event_loop
+#include "_fdevent_common.h"
+#undef FDEVENT_LOOP
 
 typedef struct {
   int fd;
   void *ud;
   StreamEvents events;
-  StreamEventHandler handler;
+  event_handler_t handler;
 } FDEventWatcher;
 
 typedef struct _fdevent_link {
@@ -25,10 +27,9 @@ typedef struct _fdevent_link {
   struct _fdevent_link *next;
 } FDEventLink;
 
-typedef FDEventLink *FDEventWatchKey;
+typedef FDEventLink *fd_event_watch_key_t;
 
-/* event watcher/dispatcher bookkeeping */
-typedef struct {
+typedef struct _fd_event_loop {
   FDEventLink *ll;
 } FDEventLoop;
 
@@ -39,13 +40,13 @@ bool
 fdevent_add_watch(FDEventLoop *loop,
                   int fd,
                   StreamEvents events,
-                  StreamEventHandler handler,
+                  event_handler_t handler,
                   void *ud,
-                  FDEventWatchKey *key);
+                  fd_event_watch_key_t *key);
 
 bool
 fdevent_remove_watch(FDEventLoop *wt,
-                     FDEventWatchKey key);
+                     fd_event_watch_key_t key);
 
 bool
 fdevent_main_loop(FDEventLoop *loop);

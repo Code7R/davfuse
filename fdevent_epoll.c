@@ -171,11 +171,6 @@ fdevent_add_watch(FDEventLoop *loop,
   return false;
 }
 
-static bool
-stream_events_are_equal(StreamEvents a, StreamEvents b) {
-  return a.read == b.read && a.write == b.write;
-}
-
 bool
 fdevent_remove_watch(FDEventLoop *loop,
                      FDEventWatchKey key) {

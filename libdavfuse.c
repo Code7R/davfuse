@@ -3,7 +3,6 @@
 #define _FILE_OFFSET_BITS 64
 
 /* POSIX includes */
-#include <arpa/inet.h>
 #include <errno.h>
 #include <pthread.h>
 #include <netinet/in.h>
@@ -26,11 +25,10 @@
 /* local includes */
 #include "c_util.h"
 #include "coroutine.h"
+#include "fd_utils.h"
 #include "fdevent.h"
+#include "http_server.h"
 #include "logging.h"
-
-#define log_critical_errno(str) \
-  log_critical(str ": %s", strerror(errno))
 
 typedef union {
   int all[2];
@@ -57,7 +55,7 @@ typedef struct {
 
 typedef struct {
   int to_main;
-  FDEventWatchKey watch_key;
+  fd_event_watch_key_t watch_key;
 } HandlerContext;
 
 static int
@@ -91,61 +89,24 @@ parse_environment(DavOptions *options) {
   return 0;
 }
 
-static int
+int
 create_server_socket(DavOptions *options) {
-  int listen_backlog = DEFAULT_LISTEN_BACKLOG;
-  int ret;
-  int socket_fd = -1;
-  int reuse = 1;
-  struct sockaddr_in listen_addr;
-
   UNUSED(options);
 
-  memset(&listen_addr, 0, sizeof(listen_addr));
-
   /* TODO: use `options` */
-  listen_addr.sin_family = AF_INET;
-  listen_addr.sin_port = htons(8080);
-  listen_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-  socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (socket_fd < 0) {
-    goto error;
-  }
-
-  ret = setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-  if (ret) {
-    goto error;
-  }
-
-  ret = bind(socket_fd, (struct sockaddr *) &listen_addr,
-             sizeof(listen_addr));
-  if (ret) {
-    goto error;
-  }
-
-  return socket_fd;
-
- error:
-  if (socket_fd >= 0) {
-    close(socket_fd);
-  }
-
-  return -1;
+  return create_ipv4_bound_socket(8080);
 }
 
 static void
 in_pipe_handler(FDEventLoop *loop, int fd, StreamEvents events, void *ud) {
-  HandlerContext *hc;
-  ssize_t ret;
-
   UNUSED(events);
   UNUSED(ud);
 
-  assert(sizeof(hc) <= PIPE_BUF);
-
   while (true) {
-    ret = read(fd, &hc, sizeof(hc));
+    HandlerContext *hc;
+    assert(sizeof(hc) <= PIPE_BUF);
+
+    ssize_t ret = read(fd, &hc, sizeof(hc));
     if (ret < 0 && errno == EAGAIN) {
       /* nothing */
       break;
@@ -160,18 +121,17 @@ in_pipe_handler(FDEventLoop *loop, int fd, StreamEvents events, void *ud) {
   }
 
   /* re-register watch */
-  ret = fdevent_add_watch(loop, fd,
-                          create_stream_events(true, false),
-                          in_pipe_handler, NULL, NULL);
+  bool ret = fdevent_add_watch(loop, fd,
+			       create_stream_events(true, false),
+			       in_pipe_handler, NULL, NULL);
   /* handle error more gracefully */
   assert(ret);
 }
 
 static void
-handle_request(HTTPRequestHeaders *headers,
-	       HTTPRequestContext rctx,
-	       void *ud) {
+handle_request(http_request_handle_t rh, void *ud) {
   HandlerContext *hc = (HandlerContext *) ud;
+  UNUSED(rh);
   run_request_coroutine(hc);
 }
 
@@ -183,6 +143,40 @@ run_request_coroutine(HandlerContext *hc) {
 
 static void
 request_coroutine(HandlerContext *hc) {
+
+    log_debug("FD %d Parsed header, sending request to working thread",
+              cc->f.fd);
+
+
+    /* okay write out the request pointer to the fuse thread */
+    while (true) {
+      assert(sizeof(cc) <= PIPE_BUF);
+
+      ssize_t ret = write(cc->server->out_pipe, &cc, sizeof(cc));
+      if (ret < 0 && errno == EAGAIN) {
+        /* TODO: want_write for this fd */
+        assert(false);
+        continue;
+      }
+      else if (ret != sizeof(cc)) {
+        if (ret < 0) {
+          log_debug("FD %d Error writing to out-pipe: %s", cc->f.fd,
+                    strerror(errno));
+        }
+        else {
+          log_debug("FD %d Error super rare partial write!", cc->f.fd);
+        }
+        CRHALT(cc->coropos);
+      }
+
+      break;
+    }
+
+    while (!cc->response.code) {
+      CRYIELD(cc->coropos);
+    }
+
+    cc->server
 }
 
 static void *
@@ -203,19 +197,19 @@ http_thread(void *ud) {
     }
   }
 
+  /* create event loop */
+  ret = fdevent_init(&loop);
+  if (!ret) {
+    log_critical_errno("Couldn't initialize fdevent loop");
+    goto error;
+  }
+
   /* register pipe handler */
   ret = fdevent_add_watch(&loop, pipes->named.in,
                           create_stream_events(true, false),
                           in_pipe_handler, NULL, NULL);
   if (!ret) {
     log_critical("Couldn't add watch for pipe");
-    goto error;
-  }
-
-  /* create event loop */
-  ret = fdevent_init(&loop);
-  if (!ret) {
-    log_critical_errno("Couldn't initialize fdevent loop");
     goto error;
   }
 
@@ -342,3 +336,7 @@ fuse_main_real(int argc,
 
   return -1;
 }
+
+
+
+

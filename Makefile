@@ -3,7 +3,7 @@
 
 include config.mk
 
-SRC = libdavfuse.c fdevent_${FDEVENT_SOURCE}.c logging.c
+SRC = fdevent_${FDEVENT_SOURCE}.c http_server.c libdavfuse.c logging.c
 OBJ = ${SRC:.c=.o}
 LIB = libfuse.so.2
 
@@ -28,7 +28,7 @@ fdevent.h: fdevent_${FDEVENT_SOURCE}.h
 	@cp $< fdevent.h
 
 .c.o:
-	@echo CC -fPIC $<
+	@echo CC $<
 	@${CC} ${CFLAGS} -c -fPIC $<
 
 ${OBJ}: config.h config.mk
@@ -38,6 +38,16 @@ fdevent_epoll.o: fdevent_epoll.h logging.h
 fdevent_select.o: fdevent_select.h
 
 libdavfuse.o: fdevent.h fuse.h logging.h coroutine.h
+
+http_server.o: c_util.h coroutine.h coroutine_io.h fdevent.h fd_utils.h http_server.h logging.h
+
+test_http_server.o: events.h fdevent.h fd_utils.h http_server.h logging.h
+
+fd_utils.o: c_util.h fd_utils.h logging.h
+
+test_http_server: test_http_server.o http_server.o \
+	fdevent_${FDEVENT_SOURCE}.o logging.o fd_utils.o coroutine_io.o
+	@${CC} -o $@ $^
 
 ${LIB}: ${OBJ}
 	@echo LD -shared --version-script fuse_versionscript -soname $@ $^

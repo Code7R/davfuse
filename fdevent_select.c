@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+#include "events.h"
 #include "fdevent_select.h"
 
 bool
@@ -18,9 +19,9 @@ bool
 fdevent_add_watch(FDEventLoop *loop,
                   int fd,
                   StreamEvents events,
-                  StreamEventHandler handler,
+                  event_handler_t handler,
                   void *ud,
-                  FDEventWatchKey *key) {
+                  fd_event_watch_key_t *key) {
   FDEventLink *ew;
 
   assert(loop);
@@ -31,8 +32,11 @@ fdevent_add_watch(FDEventLoop *loop,
     return false;
   }
 
-  *ew = (FDEventLink){((FDEventWatcher) {fd, ud, events, handler}),
-                      NULL, NULL};
+  *ew = (FDEventLink) {
+    .ew = {fd, ud, events, handler},
+    .prev = NULL,
+    .next = NULL,
+  };
 
   if (loop->ll) {
     ew->next = loop->ll;
@@ -50,8 +54,8 @@ fdevent_add_watch(FDEventLoop *loop,
 
 bool
 fdevent_remove_watch(FDEventLoop *loop,
-                     FDEventWatchKey key) {
-  /* FDEventWatchKey types are actually pointers to FDEventLink types */
+                     fd_event_watch_key_t key) {
+  /* fd_event_watch_key_t types are actually pointers to FDEventLink types */
   FDEventLink *ll = key;
 
   assert(loop);
@@ -119,12 +123,21 @@ fdevent_main_loop(FDEventLoop *loop) {
          while calling `handler() `*/
       tmpll = ll->next;
 
-      events = (StreamEvents) {.read = FD_ISSET(ll->ew.fd, &readfds),
-                               .write = FD_ISSET(ll->ew.fd, &writefds)};
+      events = create_stream_events(FD_ISSET(ll->ew.fd, &readfds),
+				    FD_ISSET(ll->ew.fd, &writefds));
 
-      if ((events.read && ll->events.read) ||
-          (events.write && ll->events.write)) {
-        ll->ew.handler(ll->ew.fd, events, ll->ew.ud);
+      if ((events.read && ll->ew.events.read) ||
+          (events.write && ll->ew.events.write)) {
+	event_handler_t h = ll->ew.handler;
+	int fd = ll->ew.fd;
+	void *ud = ll->ew.ud;
+	FDEvent e = (FDEvent) {
+	  .loop = loop,
+	  .fd = fd,
+	  .events = events,
+	};
+	fdevent_remove_watch(loop, ll);
+        h(FD_EVENT, &e, ud);
       }
 
       ll = tmpll;

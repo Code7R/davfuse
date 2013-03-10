@@ -1,7 +1,10 @@
 #ifndef HTTP_SERVER_H
 #define HTTP_SERVER_H
 
+#include "coroutine.h"
 #include "coroutine_io.h"
+#include "events.h"
+#include "fdevent.h"
 
 #define IN_BUF_SIZE 4096
 #define MAX_LINE_SIZE 1024
@@ -13,28 +16,13 @@
 #define MAX_NUM_HEADERS 16
 #define OUT_BUF_SIZE 4096
 
-typedef struct {
-  FDEventLoop *loop;
-  http_accept_handler cur_handler;
-  int fd;
-  FDEventWatchKey watch_key;
-  void *ud;
-} HTTPServer;
+typedef void (*callback_t)(void *);
 
-typedef struct {
-  union {
-    GetWhileState getwhile_state;
-    GetCState getc_state;
-    PeekState peek_state;
-  } sub;
-  int i;
-  int ei;
-  int c;
-  char tmp;
-  size_t parsed;
-  char tmpbuf[1024];
-  coroutine_position_t coropos;
-} GetRequestState;
+/* forward decl */
+struct _http_server;
+typedef struct _http_server HTTPServer;
+struct _http_connection;
+typedef struct _http_connection HTTPConnection;
 
 typedef struct {
   char method[MAX_METHOD_SIZE];
@@ -48,67 +36,126 @@ typedef struct {
   } headers[MAX_NUM_HEADERS];
 } HTTPRequestHeaders;
 
-typedef struct {
-  int code;
-} HTTPResponse;
+typedef enum {
+  HTTP_REQUEST_STATE_NONE,
+  HTTP_REQUEST_STATE_READ_HEADERS,
+  HTTP_REQUEST_STATE_WROTE_HEADERS,
+  HTTP_REQUEST_STATE_DONE,
+} http_request_state_t;
+
+typedef enum {
+  HTTP_SUCCESS, 
+  HTTP_GENERIC_ERROR,
+} http_error_code_t;
 
 typedef struct {
+  HTTPConnection *conn;
+  http_request_state_t state;
+  HTTPRequestHeaders rh;
+} HTTPRequestContext;
+
+typedef struct {
+} HTTPResponseHeaders;
+
+typedef HTTPRequestContext *http_request_handle_t;
+
+struct _http_server {
+  FDEventLoop *loop;
+  int fd;
+  fd_event_watch_key_t watch_key;
+  event_handler_t handler;
+  void *ud;
+};
+
+typedef struct {
+  union {
+    GetWhileState getwhile_state;
+    GetCState getc_state;
+    PeekState peek_state;
+  } sub;
+  int i;
+  int ei;
+  int c;
+  size_t parsed;
+  char tmpbuf[1024];
+  coroutine_position_t coropos;
+  /* args */
+  FDEventLoop *loop;
+  FDBuffer *f;
+  bool *success;
+  HTTPRequestHeaders *request_headers;
+  int *error;
+  event_handler_t cb;
+  void *ud;
+} GetRequestState;
+
+struct _http_connection {
   FDBuffer f;
   char outbuffer[OUT_BUF_SIZE];
   int out_size;
   HTTPServer *server;
-  FDEventWatchKey watch_key;
   coroutine_position_t coropos;
   union {
     GetRequestState grs;
     WriteAllState was;
   } sub;
-  HTTPRequestHeaders request;
-  HTTPResponse response;
-  bool want_read : 1;
-  bool want_write : 1;
-} ClientConnection;
+  /* right now we only do one request at a time,
+     i.e. no pipe-lining */
+  HTTPRequestContext rctx;
+};
 
-typedef void (*HTTPHandler)(HTTPRequestHeaders *,
-			    HTTPRequestContext,
-			    void *);
+typedef struct {
+  http_request_handle_t request_handle;
+} HTTPNewRequestEvent;
 
-/* TODO: define different callbacks */
+typedef struct {
+  http_request_handle_t request_handle;
+  int err;
+} HTTPRequestReadHeadersDoneEvent;
 
-void
+typedef struct {
+  http_request_handle_t request_handle;
+  int err;
+  size_t nbyte;
+} HTTPRequestReadDoneEvent;
+
+bool
 http_server_start(HTTPServer *http,
 		  FDEventLoop *loop,
 		  int fd,
-		  HTTPHandler handler, 
-		  void *ud,
-		  Callback cb,
-		  void *cb_ud);
+		  event_handler_t handler, 
+		  void *ud);
+
+bool
+http_server_stop(HTTPServer *http);
 
 void
-http_server_stop(HTTPServer *http,
-		 Callback cb, void *cb_ud);
+http_request_read_headers(http_request_handle_t rh,
+			  HTTPRequestHeaders *request_headers,
+			  event_handler_t cb,
+			  void *);
 
 void
-http_request_read(HTTPRequestContext rctx,
+http_request_read(http_request_handle_t rh,
 		  void *buf, size_t nbyte,
-		  Callback cb, void *cb_ud) {
-}
+		  event_handler_t cb, void *cb_ud);
 
 void
-http_request_start_headers(HTTPRequestContext rctx,
-			   RequestHeader request_headers,
-			   Callback cb, void *cb_ud) {
-}
+http_request_write_headers(http_request_handle_t rh,
+			   HTTPResponseHeaders *response_headers,
+			   event_handler_t cb,
+			   void *cb_ud);
 
 void
-http_request_write(HTTPRequestContext rctx,
+http_request_write(http_request_handle_t rh,
 		   const void *buf, size_t nbyte,
-		   Callback cb, void *cb_ud) {
-}
+		   event_handler_t cb, void *cb_ud);
 
 void
-http_request_end(HTTPRequestContext rctx,
-		 Callback cb, void *cb_ud) {
-}
+http_request_end(http_request_handle_t rh,
+		 event_handler_t cb, void *cb_ud);
+
+char *
+http_get_header_value(HTTPRequestHeaders *rhs, char *header_name);
 
 #endif /* HTTP_SERVER_H */

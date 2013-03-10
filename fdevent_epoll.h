@@ -4,27 +4,20 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "events.h"
+
 /* event subsystem */
 
-#define WATCHER_LIST_MAGIC 0x86820485
-#define WATCHER_MAGIC 0x78122876
-
-typedef struct {
-  bool read : 1;
-  bool write : 1;
-} StreamEvents;
-
-/* Make this is a macro if too slow */
-static StreamEvents
-create_stream_events(bool read, bool write) {
-  return (StreamEvents) {.read = read, .write = write};
-}
-
-/* forward declaration */
+/* forward decl */
 struct _fdwaiter_link;
 struct _fd_event_loop;
 
-typedef void (*StreamEventHandler)(struct _fd_event_loop *, int, StreamEvents, void *);
+#define FDEVENT_LOOP struct _fd_event_loop
+#include "_fdevent_common.h"
+#undef FDEVENT_LOOP
+
+#define WATCHER_LIST_MAGIC 0x86820485
+#define WATCHER_MAGIC 0x78122876
 
 typedef struct _fd_event_watcher {
   uint32_t magic;
@@ -61,7 +54,7 @@ bool
 fdevent_add_watch(FDEventLoop *loop,
                   int fd,
                   StreamEvents events,
-                  StreamEventHandler handler,
+                  event_handler_t handler,
                   void *ud,
                   FDEventWatchKey *key);
 
