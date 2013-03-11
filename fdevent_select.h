@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include "c_util.h"
+#include "events.h"
 
 /* event subsystem */
 

@@ -21,5 +21,4 @@ typedef enum {
 
 typedef void (*event_handler_t)(event_type_t, void *, void *);
 
-
 #endif /* EVENTS_H */
