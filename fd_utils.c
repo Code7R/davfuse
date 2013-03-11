@@ -33,16 +33,19 @@ create_bound_socket(const struct sockaddr *addr, socklen_t addr_len) {
 
   socket_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (socket_fd < 0) {
+    log_error_errno("socket");
     goto error;
   }
 
   ret = setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
   if (ret) {
+    log_error_errno("setsockopt");
     goto error;
   }
 
   ret = bind(socket_fd, addr, addr_len);
   if (ret) {
+    log_error_errno("bind");
     goto error;
   }
 
@@ -59,7 +62,6 @@ create_bound_socket(const struct sockaddr *addr, socklen_t addr_len) {
 int create_ipv4_bound_socket(short port) {
   struct sockaddr_in listen_addr;
 
-  /* TODO: use `options` */
   memset(&listen_addr, 0, sizeof(listen_addr));
 
   listen_addr.sin_family = AF_INET;

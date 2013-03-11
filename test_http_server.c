@@ -87,7 +87,7 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   hc->resp.num_headers = 1;
   strncpy(hc->resp.headers[0].name, "Content-Length", sizeof(hc->resp.headers[0].name));
   snprintf(hc->resp.headers[0].value, sizeof(hc->resp.headers[0].value),
-           "%lu", sizeof(toret) - 1);
+           "%zu", sizeof(toret) - 1);
 
   CRYIELD(hc->pos,
           http_request_write_headers(hc->rh, &hc->resp,
@@ -130,7 +130,7 @@ handle_new_request(event_type_t ev_type, void *ev, void *ud) {
 }
 
 int main() {
-  init_logging(stdout, LOG_NOTHING);
+  init_logging(stdout, LOG_DEBUG);
   log_info("Logging initted.");
 
   /* create server socket */
