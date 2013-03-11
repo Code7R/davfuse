@@ -11,6 +11,20 @@
 #include "events.h"
 #include "logging.h"
 
+int
+fbgetc(FDBuffer *f) {
+  int ret;
+  FBGETC(f, &ret);
+  return ret;
+}
+
+int
+fbpeek(FDBuffer *f) {
+  int ret;
+  FBPEEK(f, &ret);
+  return ret;
+}
+
 void
 c_fbgetc(event_type_t ev_type, void *ev, void *ud) {
   GetCState *state = ud;

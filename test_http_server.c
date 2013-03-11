@@ -12,7 +12,7 @@
 struct handler_context {
   coroutine_position_t pos;
   HTTPRequestHeaders rhs;
-  HTTPResponseHeaders rsp;
+  HTTPResponseHeaders resp;
   http_error_code_t err;
   size_t bytes_read;
   char buf[BUF_SIZE];
@@ -55,24 +55,45 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
      or any of that, but for now we assume content-length */
 
   char *content_length_str = http_get_header_value(&hc->rhs, "content-length");
-  assert(content_length_str);
-  long converted_content_length = strtol(content_length_str, NULL, 10);
-  assert(converted_content_length >= 0 && !errno);
+  if (content_length_str) {
+    long converted_content_length = strtol(content_length_str, NULL, 10);
+    assert(converted_content_length >= 0 && !errno);
 
-  hc->content_length = converted_content_length;
-  hc->bytes_read = 0;
-  while (hc->bytes_read <= hc->content_length) {
-    CRYIELD(hc->pos,
-            http_request_read(hc->rh, hc->buf,
-                              MIN(hc->content_length - hc->bytes_read, sizeof(hc->buf)),
-                              handle_request, hc));
-    HTTPRequestReadDoneEvent *read_ev = ev;
-    assert(ev_type == HTTP_REQUEST_READ_DONE_EVENT);
-    assert(read_ev->request_handle == hc->rh);
-    assert(read_ev->err == HTTP_SUCCESS);
+    hc->content_length = converted_content_length;
+    hc->bytes_read = 0;
+    while (hc->bytes_read <= hc->content_length) {
+      CRYIELD(hc->pos,
+              http_request_read(hc->rh, hc->buf,
+                                MIN(hc->content_length - hc->bytes_read, sizeof(hc->buf)),
+                                handle_request, hc));
+      HTTPRequestReadDoneEvent *read_ev = ev;
+      assert(ev_type == HTTP_REQUEST_READ_DONE_EVENT);
+      assert(read_ev->request_handle == hc->rh);
+      assert(read_ev->err == HTTP_SUCCESS);
 
-    hc->bytes_read += read_ev->nbyte;
+      hc->bytes_read += read_ev->nbyte;
+    }
   }
+
+  const char *toret = "SORRY BRO";
+
+  /* now write out headers */
+  hc->resp.code = 404;
+  strncpy(hc->resp.message, "Not Found", sizeof(hc->resp.message));
+  hc->resp.num_headers = 1;
+  strncpy(hc->resp.headers[0].name, "Content-Length", sizeof(hc->resp.headers[0].name));
+  snprintf(hc->resp.headers[0].value, sizeof(hc->resp.headers[0].value),
+           "%lu", sizeof(toret) - 1);
+
+  CRYIELD(hc->pos,
+          http_request_write_headers(hc->rh, &hc->resp,
+                                     handle_request, hc));
+  assert(ev_type == HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT);
+  HTTPRequestWriteHeadersDoneEvent *write_headers_ev = ev;
+  assert(write_headers_ev->request_handle == hc->rh);
+  assert(write_headers_ev->err == HTTP_SUCCESS);
+
+  /* TODO: write out body */
 
   CREND();
 }

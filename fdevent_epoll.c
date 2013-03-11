@@ -12,13 +12,13 @@
 #define DEFAULT_WATCHER_TABLE_SIZE 10
 #define EVENTS_PER_LOOP 10
 
-static uint32_t
+static PURE_FUNCTION uint32_t
 stream_event_to_event_set(StreamEvents events) {
   return ((events.read ? EPOLLIN : 0) |
           (events.write ? EPOLLOUT : 0));
 }
 
-static uint32_t
+static PURE_FUNCTION NON_NULL_ARGS() uint32_t
 compute_event_set_for_fd(FDEventWatcher *ll) {
   uint32_t event_set = 0;
 
@@ -31,7 +31,7 @@ compute_event_set_for_fd(FDEventWatcher *ll) {
   return event_set;
 }
 
-static FDEventWatcherList *
+static CONST_FUNCTION NON_NULL_ARGS() FDEventWatcherList *
 watcher_list_for_fd(FDEventLoop *loop, int fd) {
   FDEventWatcherList *wll;
 

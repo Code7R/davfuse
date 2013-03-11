@@ -5,17 +5,18 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+#include "c_util.h"
 #include "events.h"
 #include "fdevent_select.h"
 
-bool
+NON_NULL_ARGS0() bool
 fdevent_init(FDEventLoop *loop) {
   assert(loop);
   loop->ll = NULL;
   return true;
 }
 
-bool
+NON_NULL_ARGS2(1, 4) bool
 fdevent_add_watch(FDEventLoop *loop,
                   int fd,
                   StreamEvents events,
@@ -25,7 +26,7 @@ fdevent_add_watch(FDEventLoop *loop,
   FDEventLink *ew;
 
   assert(loop);
-  assert(key);
+  assert(handler);
 
   ew = malloc(sizeof(*ew));
   if (!ew) {
@@ -47,12 +48,14 @@ fdevent_add_watch(FDEventLoop *loop,
     loop->ll = ew;
   }
 
-  *key = ew;
+  if (key) {
+    *key = ew;
+  }
 
   return true;
 }
 
-bool
+NON_NULL_ARGS0() bool
 fdevent_remove_watch(FDEventLoop *loop,
                      fd_event_watch_key_t key) {
   /* fd_event_watch_key_t types are actually pointers to FDEventLink types */

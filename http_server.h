@@ -14,6 +14,7 @@
 #define MAX_HEADER_NAME_SIZE 64
 #define MAX_HEADER_VALUE_SIZE 128
 #define MAX_NUM_HEADERS 16
+#define MAX_MESSAGE_SIZE 16
 #define OUT_BUF_SIZE 4096
 
 typedef void (*callback_t)(void *);
@@ -55,6 +56,13 @@ typedef struct {
 } HTTPRequestContext;
 
 typedef struct {
+  unsigned code;
+  char message[MAX_MESSAGE_SIZE];
+  size_t num_headers;
+  struct {
+    char name[MAX_HEADER_NAME_SIZE];
+    char value[MAX_HEADER_VALUE_SIZE];
+  } headers[MAX_NUM_HEADERS];
 } HTTPResponseHeaders;
 
 typedef HTTPRequestContext *http_request_handle_t;
@@ -80,11 +88,10 @@ typedef struct {
   char tmpbuf[1024];
   coroutine_position_t coropos;
   /* args */
+  http_request_handle_t rh;
   FDEventLoop *loop;
   FDBuffer *f;
-  bool *success;
   HTTPRequestHeaders *request_headers;
-  int *error;
   event_handler_t cb;
   void *ud;
 } GetRequestState;
@@ -118,6 +125,11 @@ typedef struct {
   int err;
   size_t nbyte;
 } HTTPRequestReadDoneEvent;
+
+typedef struct {
+  http_request_handle_t request_handle;
+  int err;
+} HTTPRequestWriteHeadersDoneEvent;
 
 bool
 http_server_start(HTTPServer *http,
@@ -156,6 +168,6 @@ http_request_end(http_request_handle_t rh,
 		 event_handler_t cb, void *cb_ud);
 
 char *
-http_get_header_value(HTTPRequestHeaders *rhs, char *header_name);
+http_get_header_value(HTTPRequestHeaders *rhs, const char *header_name);
 
 #endif /* HTTP_SERVER_H */

@@ -109,25 +109,44 @@ typedef struct {
   void *ud;
 } WriteAllState;
 
+HEADER_FUNCTION void
+init_c_write_all_state(WriteAllState *state,
+                       FDEventLoop *loop,
+                       int fd,
+                       const void *buf,
+                       size_t nbyte,
+                       event_handler_t cb,
+                       void *cb_ud) {
+  *state = (WriteAllState) {
+    .coropos = CORO_POS_INIT,
+    .loop = loop,
+    .fd = fd,
+    .buf = buf,
+    .count = nbyte,
+    .cb = cb,
+    .ud = cb_ud,
+  };
+}
+
 #define _C_FBPEEK(coropos, loop, f, out, _func, _func_ud, peek)		\
   do {                                                                  \
     ssize_t ret;                                                        \
     									\
-    if (f->buf_start < f->buf_end) {					\
-      *out = (unsigned char) *f->buf_start;				\
-      f->buf_start += peek ? 1 : 0;					\
+    if ((f)->buf_start < (f)->buf_end) {                                \
+      *(out) = (unsigned char) *(f)->buf_start;				\
+      (f)->buf_start += (peek) ? 0 : 1;					\
       break;                                                            \
     }                                                                   \
                                                                         \
-    assert(f->buf_start == f->buf_end);					\
-    assert(sizeof(f->buf));						\
+    assert((f)->buf_start == (f)->buf_end);                             \
+    assert(sizeof((f)->buf));						\
                                                                         \
-    ret = read(f->fd, f->buf,						\
-               sizeof(f->buf));						\
+    ret = read((f)->fd, (f)->buf,                                       \
+               sizeof((f)->buf));                                       \
     if (ret < 0 && errno == EAGAIN) {                                   \
       CRYIELD(coropos,							\
               fdevent_add_watch(loop,					\
-                                f->fd,					\
+                                (f)->fd,                                \
                                 create_stream_events(true, false),      \
                                 _func,                                  \
                                 _func_ud,                               \
@@ -135,26 +154,45 @@ typedef struct {
       continue;                                                         \
     }                                                                   \
     else if (ret <= 0) {                                                \
-      *out = EOF;							\
+      *(out) = EOF;							\
       break;                                                            \
     }                                                                   \
                                                                         \
-    f->buf_start = f->buf;						\
-    f->buf_end = f->buf + ret;						\
+    (f)->buf_start = (f)->buf;						\
+    (f)->buf_end = (f)->buf + ret;                                      \
   }                                                                     \
   while (true)
 
 #define C_FBPEEK(coropos, loop, f, out, _func, _func_ud)	\
-  _C_FBPEEK(coropos, loop, f, out, _func, _func_ud, 0)
-#define C_FBGETC(coropos, loop, f, out, _func, _func_ud)	\
   _C_FBPEEK(coropos, loop, f, out, _func, _func_ud, 1)
+#define C_FBGETC(coropos, loop, f, out, _func, _func_ud)	\
+  _C_FBPEEK(coropos, loop, f, out, _func, _func_ud, 0)
+
+#define _FBPEEK(f, out, peek)                                           \
+  do {                                                                  \
+    if ((f)->buf_start < (f)->buf_end) {                                \
+      *(out) = (unsigned char) *(f)->buf_start;				\
+      (f)->buf_start += (peek) ? 0 : 1;					\
+    }                                                                   \
+    else {                                                              \
+      *(out) = -1;                                                      \
+    }                                                                   \
+  }                                                                     \
+  while (false)
+
+#define FBPEEK(f, out) _FBPEEK(f, out, 1)
+#define FBGETC(f, out) _FBPEEK(f, out, 0)
 
 void
 c_fbpeek(event_type_t ev_type, void *ev, void *ud);
 void
-c_getwhile(event_type_t ev_type, void *ev, void *ud);
-void
 c_fbgetc(event_type_t ev_type, void *ev, void *ud);
+int
+fbgetc(FDBuffer *f);
+int
+fbpeek(FDBuffer *f);
+void
+c_getwhile(event_type_t ev_type, void *ev, void *ud);
 void
 c_write_all(event_type_t ev_type, void *ev, void *ud);
 

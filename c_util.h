@@ -8,6 +8,10 @@
 
 #define HEADER_FUNCTION static UNUSED_FUNCTION_ATTR
 #define CONST_FUNCTION __attribute__ ((const))
+#define PURE_FUNCTION __attribute__ ((pure))
+
+#define NON_NULL_ARGS2(a, b) __attribute__ ((nonnull (a, b)))
+#define NON_NULL_ARGS0() __attribute__ ((nonnull))
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))

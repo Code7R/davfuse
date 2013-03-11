@@ -39,6 +39,4 @@ typedef int coroutine_position_t;
 
 #define CRYIELD CRYIELDA
 
-typedef void (*coroutine_t)(void *);
-
 #endif
