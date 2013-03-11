@@ -128,6 +128,11 @@ init_c_write_all_state(WriteAllState *state,
   };
 }
 
+typedef struct {
+  int error_number;
+  size_t nbyte;
+} CWriteAllDoneEvent;
+
 #define _C_FBPEEK(coropos, loop, f, out, _func, _func_ud, peek)		\
   do {                                                                  \
     ssize_t ret;                                                        \

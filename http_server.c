@@ -101,6 +101,7 @@ http_server_stop(HTTPServer *http) {
   /* TODO: implement */
   assert(false);
   UNUSED(http);
+  return false;
 }
 
 void
@@ -164,6 +165,7 @@ static void
 _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) {
   struct _write_headers_state *whs = ud;
 
+  UNUSED(ev_type);
   UNUSED(ev);
 
   CRBEGIN(whs->coropos);
@@ -180,6 +182,8 @@ _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) 
     CRYIELD(whs->coropos,                                               \
             c_write_all(START_COROUTINE_EVENT, NULL, &whs->sub.was));   \
     assert(ev_type == C_WRITEALL_DONE_EVENT);                           \
+    /* TODO: handle errors more gracefully */                           \
+    assert(!((CWriteAllDoneEvent *) ev)->error_number);                 \
   }                                                                     \
   while (false)
 
@@ -208,8 +212,18 @@ _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) 
   EMIT("\r\n");
 
   /* TODO: call callback */
+  HTTPRequestWriteHeadersDoneEvent write_headers_ev = {
+    .request_handle = whs->request_context,
+    .err = HTTP_SUCCESS,
+  };
+  CRRETURN(whs->coropos,
+           (whs->cb(HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT, &write_headers_ev, whs->cb_ud),
+            free(whs)));
 
   CREND();
+
+#undef EMIT
+#undef EMITN
 }
 
 void
@@ -238,36 +252,63 @@ http_request_write_headers(http_request_handle_t rh,
   _http_request_write_headers_coroutine(START_COROUTINE_EVENT, NULL, whs);
 }
 
+struct _request_write_state {
+  union {
+    WriteAllState was;
+  } sub;
+  http_request_handle_t request_context;
+  event_handler_t cb;
+  void *cb_ud;
+};
 
-#if 0
+void
+_handle_write_done(event_type_t ev_type, void *ev, void *ud) {
+  struct _request_write_state *rws = ud;
 
+  UNUSED(ev_type);
+  assert(ev_type == C_WRITEALL_DONE_EVENT);
+  CWriteAllDoneEvent *write_all_done_event = ev;
 
-    EMITN(cc->outbuffer, cc->out_size);
-    EMIT("\r\n");
+  HTTPRequestWriteDoneEvent write_ev = {
+    .request_handle = rws->request_context,
+    .err = write_all_done_event->error_number ? HTTP_GENERIC_ERROR : HTTP_SUCCESS,
+  };
 
-#undef EMIT
-#undef EMITN
-
-#endif
+  rws->cb(HTTP_REQUEST_WRITE_DONE_EVENT, &write_ev, rws->cb_ud);
+  free(rws);
 }
 
 void
 http_request_write(http_request_handle_t rh,
                    const void *buf, size_t nbyte,
                    event_handler_t cb, void *cb_ud) {
-  UNUSED(rh);
-  UNUSED(cb);
-  UNUSED(cb_ud);
-  UNUSED(buf);
-  UNUSED(nbyte);
+  /* TODO: don't allocate on every write,
+     only allow one write in flight per request and
+     allocate the structure there */
+  struct _request_write_state *rws;
+  rws = malloc(sizeof(*rws));
+  /* TODO: handle gracefully */
+  assert(rws);
+
+  *rws = (struct _request_write_state) {
+    .request_context = rh,
+    .cb = cb,
+    .cb_ud = cb_ud,
+  };
+
+  init_c_write_all_state(&rws->sub.was,
+                         rws->request_context->conn->server->loop,
+                         rws->request_context->conn->f.fd,
+                         buf, nbyte,
+                         _handle_write_done,
+                         rws);
+  c_write_all(START_COROUTINE_EVENT, NULL, &rws->sub.was);
 }
 
 void
-http_request_end(http_request_handle_t rh,
-                 event_handler_t cb, void *cb_ud) {
+http_request_end(http_request_handle_t rh) {
   UNUSED(rh);
-  UNUSED(cb);
-  UNUSED(cb_ud);
+  client_coroutine(HTTP_END_REQUEST_EVENT, NULL, rh->conn);
 }
 
 static CONST_FUNCTION char
@@ -308,6 +349,7 @@ accept_handler(event_type_t ev_type, void *ev, void *ud) {
   int client_fd = -1;
   FDEvent *fdev = ev;
 
+  UNUSED(ev_type);
   UNUSED(ud);
 
   assert(ev_type == FD_EVENT);
@@ -342,6 +384,13 @@ accept_handler(event_type_t ev_type, void *ev, void *ud) {
   /* run client */
   client_coroutine(START_COROUTINE_EVENT, NULL, cc);
 
+  /* wait for next client */
+  bool ret = fdevent_add_watch(http->loop, http->fd,
+                               create_stream_events(true, false),
+                               accept_handler, http, NULL);
+  UNUSED(ret);
+  assert(ret);
+
   return;
 
  error:
@@ -358,6 +407,7 @@ static void
 client_coroutine(event_type_t ev_type, void *ev, void *ud) {
   HTTPConnection *cc = ud;
 
+  UNUSED(ev_type);
   UNUSED(ev);
   
   CRBEGIN(cc->coropos);
@@ -380,6 +430,7 @@ client_coroutine(event_type_t ev_type, void *ev, void *ud) {
             cc->server->handler(HTTP_NEW_REQUEST_EVENT,
                                 &new_request_ev,
                                 cc->server->ud));
+    assert(ev_type == HTTP_END_REQUEST_EVENT);
     /* we'll come back when `http_request_end` is called,
        or there is some error */
 
@@ -387,8 +438,9 @@ client_coroutine(event_type_t ev_type, void *ev, void *ud) {
     break;
   }
 
+  log_debug("Client done, closing descriptor %d", cc->f.fd);
   close(cc->f.fd);
-  CRRETURN(cc->coropos, 0);
+  CRRETURN(cc->coropos, free(cc));
 
   CREND();
 }
@@ -397,6 +449,8 @@ static void
 c_get_request(event_type_t ev_type, void *ev, void *ud) {
   /* do this before CRBEGIN jumps away */
   GetRequestState *state = ud;
+
+  UNUSED(ev_type);
   UNUSED(ev);
 
   CRBEGIN(state->coropos);
@@ -528,11 +582,11 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
 
   EXPECTS("\r\n");
 
-  int err = 0;
+  int err = HTTP_SUCCESS;
   if (false) {
   error:
     /* i see what you did there */
-    err = 1;
+    err = HTTP_GENERIC_ERROR;
   }
 
   /* NB: against convention and as a shortcut,

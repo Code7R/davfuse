@@ -113,23 +113,23 @@ struct _http_connection {
 
 typedef struct {
   http_request_handle_t request_handle;
-} HTTPNewRequestEvent;
+  int err;
+} _SimpleRequestActionDoneEvent;
 
 typedef struct {
   http_request_handle_t request_handle;
-  int err;
-} HTTPRequestReadHeadersDoneEvent;
+} HTTPNewRequestEvent;
+
+typedef _SimpleRequestActionDoneEvent HTTPRequestReadHeadersDoneEvent;
+typedef _SimpleRequestActionDoneEvent HTTPRHTTPRequestWriteHeadersDoneEvent;
+typedef _SimpleRequestActionDoneEvent HTTPRequestWriteHeadersDoneEvent;
+typedef _SimpleRequestActionDoneEvent HTTPRequestWriteDoneEvent;
 
 typedef struct {
   http_request_handle_t request_handle;
   int err;
   size_t nbyte;
 } HTTPRequestReadDoneEvent;
-
-typedef struct {
-  http_request_handle_t request_handle;
-  int err;
-} HTTPRequestWriteHeadersDoneEvent;
 
 bool
 http_server_start(HTTPServer *http,
@@ -164,8 +164,7 @@ http_request_write(http_request_handle_t rh,
 		   event_handler_t cb, void *cb_ud);
 
 void
-http_request_end(http_request_handle_t rh,
-		 event_handler_t cb, void *cb_ud);
+http_request_end(http_request_handle_t rh);
 
 char *
 http_get_header_value(HTTPRequestHeaders *rhs, const char *header_name);

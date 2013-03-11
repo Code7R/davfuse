@@ -29,7 +29,7 @@ extern log_level_t _logging_cur_level;
     fprintf(_logging_dest, __VA_ARGS__);        \
     fprintf(_logging_dest, "\n");               \
   }                                             \
-  while (0)
+  while (false)
 
 #define log_debug(...) log(LOG_DEBUG, __VA_ARGS__)
 #define log_info(...) log(LOG_INFO, __VA_ARGS__)

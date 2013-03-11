@@ -28,6 +28,7 @@ fbpeek(FDBuffer *f) {
 void
 c_fbgetc(event_type_t ev_type, void *ev, void *ud) {
   GetCState *state = ud;
+  UNUSED(ev_type);
   UNUSED(ev);
   CRBEGIN(state->coropos);
   assert(ev_type == START_COROUTINE_EVENT);
@@ -38,7 +39,9 @@ c_fbgetc(event_type_t ev_type, void *ev, void *ud) {
 
 void
 c_fbpeek(event_type_t ev_type, void *ev, void *ud) {
+  /* set before CRBEGIN */
   PeekState *state = ud;
+  UNUSED(ev_type);
   UNUSED(ev);
   CRBEGIN(state->coropos);
   assert(ev_type == START_COROUTINE_EVENT);
@@ -55,7 +58,9 @@ fbungetc(FDBuffer *f, int c) {
 
 void
 c_getwhile(event_type_t ev_type, void *ev, void *ud) {
+  /* set before CRBEGIN */
   GetWhileState *state = ud;
+  UNUSED(ev_type);
   UNUSED(ev);
   CRBEGIN(state->coropos);
   assert(ev_type == START_COROUTINE_EVENT);
@@ -83,6 +88,7 @@ c_getwhile(event_type_t ev_type, void *ev, void *ud) {
   }
   while (state->buf_end < state->buf + state->buf_size);
 
+  /* TODO: move this to event finish, also errors */
   *state->out = state->buf_end - state->buf;
 
   CRRETURN(state->coropos, state->cb(C_GETWHILE_DONE_EVENT, NULL, state->ud));
@@ -92,7 +98,11 @@ c_getwhile(event_type_t ev_type, void *ev, void *ud) {
 
 void
 c_write_all(event_type_t ev_type, void *ev, void *ud) {
+  /* set before CRBEGIN */
   WriteAllState *state = ud;
+  int myerrno;
+
+  UNUSED(ev_type);
   UNUSED(ev);
   CRBEGIN(state->coropos);
 
@@ -102,6 +112,7 @@ c_write_all(event_type_t ev_type, void *ev, void *ud) {
   state->count_left = state->count;
 
   while (state->count_left) {
+    myerrno = 0;
     ssize_t ret2 = write(state->fd, state->buf_loc, state->count_left);
     if (ret2 < 0) {
       if (errno == EAGAIN) {
@@ -115,8 +126,8 @@ c_write_all(event_type_t ev_type, void *ev, void *ud) {
         continue;
       }
       else {
-        assert(state->count >= state->count_left);
-        *state->ret = state->count - state->count_left;
+        myerrno = errno;
+        break;
       }
     }
 
@@ -125,9 +136,14 @@ c_write_all(event_type_t ev_type, void *ev, void *ud) {
     state->buf_loc += ret2;
   }
 
-  *state->ret = 0;
-
-  CRRETURN(state->coropos, state->cb(C_WRITEALL_DONE_EVENT, NULL, state->ud));
+  CWriteAllDoneEvent c_write_all_done_ev = {
+    .error_number = myerrno,
+    .nbyte = state->count - state->count_left,
+  };
+  CRRETURN(state->coropos,
+           state->cb(C_WRITEALL_DONE_EVENT,
+                     &c_write_all_done_ev,
+                     state->ud));
 
   CREND();
 }

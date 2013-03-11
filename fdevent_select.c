@@ -7,6 +7,7 @@
 
 #include "c_util.h"
 #include "events.h"
+#include "logging.h"
 #include "fdevent_select.h"
 
 NON_NULL_ARGS0() bool
@@ -85,21 +86,25 @@ fdevent_remove_watch(FDEventLoop *loop,
 
 bool
 fdevent_main_loop(FDEventLoop *loop) {
-  fd_set readfds, writefds;
-
-  FD_ZERO(&readfds);
-  FD_ZERO(&writefds);
 
   while (true) {
+    fd_set readfds, writefds;
+    int nfds = 0;
     FDEventLink *ll = loop->ll;
-    int nfds;
+
+    log_info("Looping...");
+
+    FD_ZERO(&readfds);
+    FD_ZERO(&writefds);
 
     while (ll) {
       if (ll->ew.events.read) {
+        log_debug("Adding fd %d to read set", ll->ew.fd);
 	FD_SET(ll->ew.fd, &readfds);
       }
 
       if (ll->ew.events.write) {
+        log_debug("Adding fd %d to write set", ll->ew.fd);
 	FD_SET(ll->ew.fd, &writefds);
       }
 
@@ -112,6 +117,7 @@ fdevent_main_loop(FDEventLoop *loop) {
 
     while (select(nfds + 1, &readfds, &writefds, NULL, NULL) < 0) {
       if (errno != EINTR) {
+        log_error_errno("Error while doing select()");
         return false;
       }
     }

@@ -24,6 +24,9 @@ static void
 handle_request(event_type_t ev_type, void *ev, void *ud) {
   struct handler_context *hc = ud;
 
+  /* because asserts might get compiled out */
+  UNUSED(ev_type);
+
   CRBEGIN(hc->pos);
   assert(ev_type == HTTP_NEW_REQUEST_EVENT);
   HTTPNewRequestEvent *new_request_ev = ev;
@@ -37,6 +40,7 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
                                     &hc->rhs, handle_request, hc));
   assert(ev_type == HTTP_REQUEST_READ_HEADERS_DONE_EVENT);
   HTTPRequestReadHeadersDoneEvent *read_headers_ev = ev;
+  UNUSED(read_headers_ev);
   assert(read_headers_ev->err == HTTP_SUCCESS);
   assert(read_headers_ev->request_handle == hc->rh);
 
@@ -75,7 +79,7 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
     }
   }
 
-  const char *toret = "SORRY BRO";
+  static const char toret[] = "SORRY BRO";
 
   /* now write out headers */
   hc->resp.code = 404;
@@ -90,16 +94,43 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
                                      handle_request, hc));
   assert(ev_type == HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT);
   HTTPRequestWriteHeadersDoneEvent *write_headers_ev = ev;
+  /* because asserts might get compiled out */
+  UNUSED(write_headers_ev);
   assert(write_headers_ev->request_handle == hc->rh);
   assert(write_headers_ev->err == HTTP_SUCCESS);
 
-  /* TODO: write out body */
+  CRYIELD(hc->pos,
+          http_request_write(hc->rh, toret, sizeof(toret) - 1,
+                             handle_request, hc));
+  assert(ev_type == HTTP_REQUEST_WRITE_DONE_EVENT);
+  HTTPRequestWriteDoneEvent *write_ev = ev;
+  UNUSED(write_ev);
+  assert(write_ev->request_handle == hc->rh);
+  assert(write_ev->err == HTTP_SUCCESS);
+
+  CRRETURN(hc->pos,
+           (http_request_end(hc->rh),
+            free(hc)));
 
   CREND();
 }
 
+static void
+handle_new_request(event_type_t ev_type, void *ev, void *ud) {
+  struct handler_context *hc;
+
+  UNUSED(ud);
+
+  hc = malloc(sizeof(*hc));
+  assert(hc);
+  *hc = (struct handler_context) {
+    .pos = CORO_POS_INIT,
+  };
+  handle_request(ev_type, ev, hc);
+}
+
 int main() {
-  init_logging(stdout, LOG_DEBUG);
+  init_logging(stdout, LOG_NOTHING);
   log_info("Logging initted.");
 
   /* create server socket */
@@ -113,9 +144,8 @@ int main() {
 
   /* start http server */
   HTTPServer http;
-  struct handler_context hc;
   ret = http_server_start(&http, &loop, server_fd,
-			  handle_request, &hc);
+			  handle_new_request, NULL);
   assert(ret);
 
   log_info("Starting main loop");

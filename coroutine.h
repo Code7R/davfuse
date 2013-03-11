@@ -31,8 +31,8 @@ typedef int coroutine_position_t;
 #define CORO_POS_INIT 0
 #define CRBEGIN(pos) switch (pos) { case 0:
 #define CREND() case -1:;} return
-#define CRHALT(pos) do { pos = -1; return;} while(false)
-#define CRYIELDA(pos, ret) do { pos = __LINE__; (void) ret; return; case __LINE__:;} while(false)
+#define CRHALT(pos) do { pos = -1; return;} while (false)
+#define CRYIELDA(pos, ret) do { pos = __LINE__; (void) ret; return; case __LINE__:;} while (false)
 #define CRRETURN(pos, ret) do {pos = -1; (void) ret; return;} while (false)
 
 #endif
