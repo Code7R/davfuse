@@ -1,5 +1,7 @@
 #include <assert.h>
+#include <signal.h>
 #include <stdlib.h>
+
 
 #include "events.h"
 #include "fdevent.h"
@@ -33,7 +35,7 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   hc->rh = new_request_ev->request_handle;
 
   log_info("New request!");
-  
+
   /* read out headers */
   CRYIELD(hc->pos,
           http_request_read_headers(hc->rh,
@@ -41,8 +43,10 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   assert(ev_type == HTTP_REQUEST_READ_HEADERS_DONE_EVENT);
   HTTPRequestReadHeadersDoneEvent *read_headers_ev = ev;
   UNUSED(read_headers_ev);
-  assert(read_headers_ev->err == HTTP_SUCCESS);
   assert(read_headers_ev->request_handle == hc->rh);
+  if (read_headers_ev->err != HTTP_SUCCESS) {
+    goto error;
+  }
 
   log_info("Received headers:");
   log_info("Method: %s", hc->rhs.method);
@@ -73,7 +77,9 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
       HTTPRequestReadDoneEvent *read_ev = ev;
       assert(ev_type == HTTP_REQUEST_READ_DONE_EVENT);
       assert(read_ev->request_handle == hc->rh);
-      assert(read_ev->err == HTTP_SUCCESS);
+      if (read_ev->err != HTTP_SUCCESS) {
+        goto error;
+      }
 
       hc->bytes_read += read_ev->nbyte;
     }
@@ -97,7 +103,9 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   /* because asserts might get compiled out */
   UNUSED(write_headers_ev);
   assert(write_headers_ev->request_handle == hc->rh);
-  assert(write_headers_ev->err == HTTP_SUCCESS);
+  if (write_headers_ev->err != HTTP_SUCCESS) {
+    goto error;
+  }
 
   CRYIELD(hc->pos,
           http_request_write(hc->rh, toret, sizeof(toret) - 1,
@@ -106,8 +114,11 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   HTTPRequestWriteDoneEvent *write_ev = ev;
   UNUSED(write_ev);
   assert(write_ev->request_handle == hc->rh);
-  assert(write_ev->err == HTTP_SUCCESS);
+  if (write_ev->err != HTTP_SUCCESS) {
+    goto error;
+  }
 
+ error:
   CRRETURN(hc->pos,
            (http_request_end(hc->rh),
             free(hc)));
@@ -132,6 +143,9 @@ handle_new_request(event_type_t ev_type, void *ev, void *ud) {
 int main() {
   init_logging(stdout, LOG_DEBUG);
   log_info("Logging initted.");
+
+  /* ignore SIGPIPE */
+  signal(SIGPIPE, SIG_IGN);
 
   /* create server socket */
   int server_fd = create_ipv4_bound_socket(8080);

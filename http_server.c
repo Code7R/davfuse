@@ -177,6 +177,7 @@ http_request_read(http_request_handle_t rh,
 
 static void
 _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) {
+  int myerrno = 0;
   WriteHeadersState *whs = ud;
 
   UNUSED(ev_type);
@@ -198,8 +199,12 @@ _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) 
     CRYIELD(whs->coropos,                                               \
             c_write_all(START_COROUTINE_EVENT, NULL, &whs->sub.was));   \
     assert(ev_type == C_WRITEALL_DONE_EVENT);                           \
-    /* TODO: handle errors more gracefully */                           \
-    assert(!((CWriteAllDoneEvent *) ev)->error_number);                 \
+    if (((CWriteAllDoneEvent *) ev)->error_number) {                    \
+      myerrno = ((CWriteAllDoneEvent *) ev)->error_number;              \
+      goto done;                                                        \
+    }                                                                   \
+    /* reinit myerro after CRYIELD */                                   \
+    myerrno = 0;                                                        \
   }                                                                     \
   while (false)
 
@@ -227,15 +232,15 @@ _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) 
   /* finish headers */
   EMIT("\r\n");
 
+ done:
   whs->request_context->write_state = HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS;
-
-  /* TODO: call callback */
-  HTTPRequestWriteHeadersDoneEvent write_headers_ev = {
+o  HTTPRequestWriteHeadersDoneEvent write_headers_ev = {
     .request_handle = whs->request_context,
-    .err = HTTP_SUCCESS,
+    .err = myerrno ? HTTP_GENERIC_ERROR : HTTP_SUCCESS,
   };
   CRRETURN(whs->coropos,
-           whs->cb(HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT, &write_headers_ev, whs->cb_ud));
+           whs->cb(HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT,
+                   &write_headers_ev, whs->cb_ud));
 
   CREND();
 
