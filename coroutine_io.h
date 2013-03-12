@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "c_util.h"
 #include "coroutine.h"
@@ -23,7 +24,17 @@ typedef struct {
   char *buf_start;
   char *buf_end;
   char buf[BUF_SIZE];
+  bool in_use;
 } FDBuffer;
+
+HEADER_FUNCTION size_t
+read_from_fd_buffer(FDBuffer *f, void *buf, size_t nbyte) {
+  assert(!f->in_use);
+  size_t to_copy = MIN((size_t) (f->buf_end - f->buf_start), nbyte);
+  memmove(buf, f->buf_start, to_copy);
+  f->buf_start += to_copy;
+  return to_copy;
+}
 
 typedef struct {
   coroutine_position_t coropos;
@@ -76,6 +87,39 @@ typedef struct {
   char *buf_end;
   int peeked_char;
 } GetWhileState;
+
+typedef struct {
+  coroutine_position_t coropos;
+  size_t amt_read;
+  /* args */
+  FDEventLoop *loop;
+  FDBuffer *f;
+  size_t nbyte;
+  void *buf;
+  event_handler_t cb;
+  void *ud;
+} CReadState;
+
+HEADER_FUNCTION void
+init_c_read_state(CReadState *state,
+                  FDEventLoop *loop, FDBuffer *f,
+                  void *buf, size_t nbyte,
+                  event_handler_t cb, void *ud) {
+  *state = (CReadState) {
+    .coropos = CORO_POS_INIT,
+    .loop = loop,
+    .f = f,
+    .buf = buf,
+    .nbyte = nbyte,
+    .cb = cb,
+    .ud = ud,
+  };
+}
+
+typedef struct {
+  int error_number;
+  size_t nbyte;
+} CReadDoneEvent;
 
 HEADER_FUNCTION void
 init_c_getwhile_state(GetWhileState *state,
@@ -133,38 +177,50 @@ typedef struct {
   size_t nbyte;
 } CWriteAllDoneEvent;
 
+#define _FILL_BUF(coropos, loop, f, ret, _func, _func_ud)               \
+  do {                                                                  \
+    assert((f)->buf_start == (f)->buf_end);                             \
+    assert(sizeof((f)->buf));						\
+    assert(!(f)->in_use);                                               \
+                                                                        \
+    (f)->buf_start = (f)->buf;                                          \
+    (f)->buf_end = (f)->buf;                                            \
+    (f)->in_use = true;                                                 \
+    do {                                                                \
+      *(ret) = read((f)->fd, (f)->buf, sizeof((f)->buf));               \
+      if (*(ret) < 0 && errno == EAGAIN) {                              \
+        CRYIELD(coropos,                                                \
+                fdevent_add_watch(loop, (f)->fd,                        \
+                                  create_stream_events(true, false),    \
+                                  _func, _func_ud, NULL));              \
+        continue;                                                       \
+      }                                                                 \
+      if (*(ret) > 0) {                                                 \
+        (f)->buf_end = (f)->buf_start + *(ret);                         \
+      }                                                                 \
+    }                                                                   \
+    while (false);                                                      \
+    (f)->in_use = false;                                                \
+  }                                                                     \
+  while (false)
+
 #define _C_FBPEEK(coropos, loop, f, out, _func, _func_ud, peek)		\
   do {                                                                  \
     ssize_t ret;                                                        \
-    									\
+                                                                        \
+    assert((peek) || !(f)->in_use);                                     \
+                                                                        \
     if ((f)->buf_start < (f)->buf_end) {                                \
       *(out) = (unsigned char) *(f)->buf_start;				\
       (f)->buf_start += (peek) ? 0 : 1;					\
       break;                                                            \
     }                                                                   \
                                                                         \
-    assert((f)->buf_start == (f)->buf_end);                             \
-    assert(sizeof((f)->buf));						\
-                                                                        \
-    ret = read((f)->fd, (f)->buf,                                       \
-               sizeof((f)->buf));                                       \
-    if (ret < 0 && errno == EAGAIN) {                                   \
-      CRYIELD(coropos,							\
-              fdevent_add_watch(loop,					\
-                                (f)->fd,                                \
-                                create_stream_events(true, false),      \
-                                _func,                                  \
-                                _func_ud,                               \
-                                NULL));                                 \
-      continue;                                                         \
-    }                                                                   \
-    else if (ret <= 0) {                                                \
+    _FILL_BUF(coropos, loop, f, &ret, _func, _func_ud);                 \
+    if (ret <= 0) {                                                     \
       *(out) = EOF;							\
       break;                                                            \
     }                                                                   \
-                                                                        \
-    (f)->buf_start = (f)->buf;						\
-    (f)->buf_end = (f)->buf + ret;                                      \
   }                                                                     \
   while (true)
 
@@ -175,6 +231,7 @@ typedef struct {
 
 #define _FBPEEK(f, out, peek)                                           \
   do {                                                                  \
+    assert((peek) || !(f)->in_use);                                     \
     if ((f)->buf_start < (f)->buf_end) {                                \
       *(out) = (unsigned char) *(f)->buf_start;				\
       (f)->buf_start += (peek) ? 0 : 1;					\
@@ -200,6 +257,8 @@ void
 c_getwhile(event_type_t ev_type, void *ev, void *ud);
 void
 c_write_all(event_type_t ev_type, void *ev, void *ud);
+void
+c_read(event_type_t ev_type, void *ev, void *ud);
 
 HEADER_FUNCTION CONST_FUNCTION bool
 match_seperator(char c) {

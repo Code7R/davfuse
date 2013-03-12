@@ -1,6 +1,7 @@
 #ifndef HTTP_SERVER_H
 #define HTTP_SERVER_H
 
+#include "c_util.h"
 #include "coroutine.h"
 #include "coroutine_io.h"
 #include "events.h"
@@ -38,22 +39,9 @@ typedef struct {
 } HTTPRequestHeaders;
 
 typedef enum {
-  HTTP_REQUEST_STATE_NONE,
-  HTTP_REQUEST_STATE_READ_HEADERS,
-  HTTP_REQUEST_STATE_WROTE_HEADERS,
-  HTTP_REQUEST_STATE_DONE,
-} http_request_state_t;
-
-typedef enum {
   HTTP_SUCCESS, 
   HTTP_GENERIC_ERROR,
 } http_error_code_t;
-
-typedef struct {
-  HTTPConnection *conn;
-  http_request_state_t state;
-  HTTPRequestHeaders rh;
-} HTTPRequestContext;
 
 typedef struct {
   unsigned code;
@@ -65,6 +53,8 @@ typedef struct {
   } headers[MAX_NUM_HEADERS];
 } HTTPResponseHeaders;
 
+struct _http_request_context;
+typedef struct _http_request_context HTTPRequestContext;
 typedef HTTPRequestContext *http_request_handle_t;
 
 struct _http_server {
@@ -95,6 +85,67 @@ typedef struct {
   event_handler_t cb;
   void *ud;
 } GetRequestState;
+
+typedef struct {
+  coroutine_position_t coropos;
+  union {
+    WriteAllState was;
+  } sub;
+  int header_idx;
+  char tmpbuf[1024];
+  size_t out_size;
+
+  /* args */
+  HTTPResponseHeaders *response_headers;
+  HTTPRequestContext *request_context;
+  event_handler_t cb;
+  void *cb_ud;
+} WriteHeadersState;
+
+
+typedef struct {
+  union {
+    WriteAllState was;
+  } sub;
+  http_request_handle_t request_context;
+  event_handler_t cb;
+  void *cb_ud;
+} WriteResponseState;
+
+typedef struct {
+  union {
+    CReadState crs;
+  } sub;
+  http_request_handle_t request_context;
+  event_handler_t cb;
+  void *cb_ud;
+} ReadRequestState;
+
+typedef enum {
+  HTTP_REQUEST_READ_STATE_NONE,
+  HTTP_REQUEST_READ_STATE_READING_HEADERS,
+  HTTP_REQUEST_READ_STATE_READ_HEADERS,
+  HTTP_REQUEST_READ_STATE_READING,
+} http_request_read_state_t;
+
+typedef enum {
+  HTTP_REQUEST_WRITE_STATE_NONE,
+  HTTP_REQUEST_WRITE_STATE_WRITING_HEADERS,
+  HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS,
+  HTTP_REQUEST_WRITE_STATE_WRITING,
+} http_request_write_state_t;
+
+struct _http_request_context {
+  HTTPConnection *conn;
+  HTTPRequestHeaders rh;
+  http_request_write_state_t write_state;
+  http_request_read_state_t read_state;
+  union {
+    WriteHeadersState whs;
+    WriteResponseState rws;
+    ReadRequestState rrs;
+  } sub;
+};
 
 struct _http_connection {
   FDBuffer f;
@@ -131,42 +182,42 @@ typedef struct {
   size_t nbyte;
 } HTTPRequestReadDoneEvent;
 
-bool
+NON_NULL_ARGS3(1, 2, 4) bool
 http_server_start(HTTPServer *http,
 		  FDEventLoop *loop,
 		  int fd,
 		  event_handler_t handler, 
 		  void *ud);
 
-bool
+NON_NULL_ARGS0() bool
 http_server_stop(HTTPServer *http);
 
-void
+NON_NULL_ARGS3(1, 2, 3) void
 http_request_read_headers(http_request_handle_t rh,
 			  HTTPRequestHeaders *request_headers,
 			  event_handler_t cb,
 			  void *);
 
-void
+NON_NULL_ARGS3(1, 2, 4) void
 http_request_read(http_request_handle_t rh,
 		  void *buf, size_t nbyte,
 		  event_handler_t cb, void *cb_ud);
 
-void
+NON_NULL_ARGS3(1, 2, 3) void
 http_request_write_headers(http_request_handle_t rh,
 			   HTTPResponseHeaders *response_headers,
 			   event_handler_t cb,
 			   void *cb_ud);
 
-void
+NON_NULL_ARGS3(1, 2, 4) void
 http_request_write(http_request_handle_t rh,
 		   const void *buf, size_t nbyte,
 		   event_handler_t cb, void *cb_ud);
 
-void
+NON_NULL_ARGS0() void
 http_request_end(http_request_handle_t rh);
 
-char *
+NON_NULL_ARGS0() char *
 http_get_header_value(HTTPRequestHeaders *rhs, const char *header_name);
 
 #endif /* HTTP_SERVER_H */

@@ -49,7 +49,7 @@ bool
 http_server_start(HTTPServer *http,
                   FDEventLoop *loop,
                   int fd,
-                  event_handler_t handler, 
+                  event_handler_t handler,
                   void *ud) {
   /*
     we expect the fd to be capable of a couple things:
@@ -72,7 +72,7 @@ http_server_start(HTTPServer *http,
   if (!set_non_blocking(fd)) {
     goto error;
   }
-  
+
   bool ret;
   ret = fdevent_add_watch(loop, fd,
                           create_stream_events(true, false),
@@ -109,19 +109,25 @@ http_request_read_headers(http_request_handle_t rh,
                           HTTPRequestHeaders *request_headers,
                           event_handler_t cb, void *cb_ud) {
   HTTPRequestContext *rctx = rh;
-  
+
   UNUSED(rh);
   UNUSED(cb);
   UNUSED(cb_ud);
   UNUSED(request_headers);
 
-  if (rctx->state != HTTP_REQUEST_STATE_NONE) {
-    return cb(HTTP_REQUEST_READ_HEADERS_DONE_EVENT, NULL, cb_ud);
+  if (rctx->read_state != HTTP_REQUEST_READ_STATE_NONE) {
+    HTTPRequestReadHeadersDoneEvent read_headers_ev = {
+      .request_handle = rh,
+      /* TODO set correct error */
+      .err = HTTP_GENERIC_ERROR,
+    };
+    return cb(HTTP_REQUEST_READ_HEADERS_DONE_EVENT, &read_headers_ev, cb_ud);
   }
 
   log_debug("FD %d Reading header", rctx->conn->f.fd);
 
   /* read out client http request */
+  rctx->read_state = HTTP_REQUEST_READ_STATE_READING_HEADERS;
 
   init_c_get_request_state(&rctx->conn->sub.grs,
                            rh,
@@ -133,43 +139,53 @@ http_request_read_headers(http_request_handle_t rh,
   c_get_request(START_COROUTINE_EVENT, NULL, &rctx->conn->sub.grs);
 }
 
+static void
+_handle_request_read(event_type_t ev_type, void *ev, void *ud) {
+  ReadRequestState *rrs = ud;
+  assert(ev_type == C_READ_DONE_EVENT);
+
+  CReadDoneEvent *c_read_done_ev = ev;
+
+  HTTPRequestReadDoneEvent read_done_ev = {
+    .request_handle = rrs->request_context,
+    .err = c_read_done_ev->error_number ? HTTP_GENERIC_ERROR : HTTP_SUCCESS,
+    .nbyte = c_read_done_ev->nbyte,
+  };
+  rrs->cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, rrs->cb_ud);
+}
+
 void
 http_request_read(http_request_handle_t rh,
                   void *buf, size_t nbyte,
                   event_handler_t cb, void *cb_ud) {
-  UNUSED(rh);
-  UNUSED(cb);
-  UNUSED(cb_ud);
-  UNUSED(buf);
-  UNUSED(nbyte);
+  HTTPRequestContext *rctx = rh;
 
+  rctx->sub.rrs = (ReadRequestState) {
+    .request_context = rh,
+    .cb = cb,
+    .cb_ud = cb_ud,
+  };
+
+  init_c_read_state(&rctx->sub.rrs.sub.crs,
+                    rctx->conn->server->loop, &rctx->conn->f,
+                    buf, nbyte,
+                    _handle_request_read,
+                    &rctx->sub.rrs);
+
+  c_read(START_COROUTINE_EVENT, NULL, &rctx->sub.rrs.sub.crs);
 }
-
-struct _write_headers_state {
-  coroutine_position_t coropos;
-  union {
-    WriteAllState was;
-  } sub;
-  int header_idx;
-  char tmpbuf[1024];
-  size_t out_size;
-
-  /* args */
-  HTTPResponseHeaders *response_headers;
-  HTTPRequestContext *request_context;
-  event_handler_t cb;
-  void *cb_ud;
-};
 
 static void
 _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) {
-  struct _write_headers_state *whs = ud;
+  WriteHeadersState *whs = ud;
 
   UNUSED(ev_type);
   UNUSED(ev);
 
   CRBEGIN(whs->coropos);
   assert(ev_type == START_COROUTINE_EVENT);
+
+  whs->request_context->write_state = HTTP_REQUEST_WRITE_STATE_WRITING_HEADERS;
 
 #define EMITN(b, n)                                                     \
   do {                                                                  \
@@ -211,14 +227,15 @@ _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) 
   /* finish headers */
   EMIT("\r\n");
 
+  whs->request_context->write_state = HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS;
+
   /* TODO: call callback */
   HTTPRequestWriteHeadersDoneEvent write_headers_ev = {
     .request_handle = whs->request_context,
     .err = HTTP_SUCCESS,
   };
   CRRETURN(whs->coropos,
-           (whs->cb(HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT, &write_headers_ev, whs->cb_ud),
-            free(whs)));
+           whs->cb(HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT, &write_headers_ev, whs->cb_ud));
 
   CREND();
 
@@ -231,17 +248,18 @@ http_request_write_headers(http_request_handle_t rh,
                            HTTPResponseHeaders *response_headers,
                            event_handler_t cb,
                            void *cb_ud) {
-  UNUSED(rh);
-  UNUSED(cb);
-  UNUSED(cb_ud);
-  UNUSED(response_headers);
+  HTTPRequestContext *rctx = rh;
 
-  struct _write_headers_state *whs;
-  whs = malloc(sizeof(*whs));
-  /* TODO: handle gracefully */
-  assert(whs);
+  if (rctx->write_state != HTTP_REQUEST_WRITE_STATE_NONE) {
+    HTTPRequestWriteHeadersDoneEvent write_headers_ev = {
+      .request_handle = rh,
+      /* TODO set correct error */
+      .err = HTTP_GENERIC_ERROR,
+    };
+    return cb(HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT, &write_headers_ev, cb_ud);
+  }
 
-  *whs = (struct _write_headers_state) {
+  rctx->sub.whs = (WriteHeadersState) {
     .coropos = CORO_POS_INIT,
     .response_headers = response_headers,
     .request_context = rh,
@@ -249,65 +267,66 @@ http_request_write_headers(http_request_handle_t rh,
     .cb_ud = cb_ud,
   };
 
-  _http_request_write_headers_coroutine(START_COROUTINE_EVENT, NULL, whs);
+  _http_request_write_headers_coroutine(START_COROUTINE_EVENT, NULL, &rctx->sub.whs);
 }
-
-struct _request_write_state {
-  union {
-    WriteAllState was;
-  } sub;
-  http_request_handle_t request_context;
-  event_handler_t cb;
-  void *cb_ud;
-};
 
 void
 _handle_write_done(event_type_t ev_type, void *ev, void *ud) {
-  struct _request_write_state *rws = ud;
+  WriteResponseState *rws = ud;
 
   UNUSED(ev_type);
   assert(ev_type == C_WRITEALL_DONE_EVENT);
   CWriteAllDoneEvent *write_all_done_event = ev;
 
+  rws->request_context->write_state = HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS;
   HTTPRequestWriteDoneEvent write_ev = {
     .request_handle = rws->request_context,
     .err = write_all_done_event->error_number ? HTTP_GENERIC_ERROR : HTTP_SUCCESS,
   };
-
   rws->cb(HTTP_REQUEST_WRITE_DONE_EVENT, &write_ev, rws->cb_ud);
-  free(rws);
 }
 
 void
 http_request_write(http_request_handle_t rh,
                    const void *buf, size_t nbyte,
                    event_handler_t cb, void *cb_ud) {
-  /* TODO: don't allocate on every write,
-     only allow one write in flight per request and
-     allocate the structure there */
-  struct _request_write_state *rws;
-  rws = malloc(sizeof(*rws));
-  /* TODO: handle gracefully */
-  assert(rws);
+  HTTPRequestContext *rctx = rh;
 
-  *rws = (struct _request_write_state) {
+  if (rctx->write_state != HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS) {
+    HTTPRequestWriteDoneEvent write_ev = {
+      .request_handle = rh,
+      /* TODO set correct error */
+      .err = HTTP_GENERIC_ERROR,
+    };
+    return cb(HTTP_REQUEST_WRITE_DONE_EVENT, &write_ev, cb_ud);
+  }
+
+  rctx->sub.rws = (WriteResponseState) {
     .request_context = rh,
     .cb = cb,
     .cb_ud = cb_ud,
   };
 
-  init_c_write_all_state(&rws->sub.was,
-                         rws->request_context->conn->server->loop,
-                         rws->request_context->conn->f.fd,
+  rctx->write_state = HTTP_REQUEST_WRITE_STATE_WRITING;
+
+  init_c_write_all_state(&rctx->sub.rws.sub.was,
+                         rctx->conn->server->loop,
+                         rctx->conn->f.fd,
                          buf, nbyte,
                          _handle_write_done,
-                         rws);
-  c_write_all(START_COROUTINE_EVENT, NULL, &rws->sub.was);
+                         &rctx->sub.rws);
+  c_write_all(START_COROUTINE_EVENT, NULL, &rctx->sub.rws.sub.was);
 }
 
 void
 http_request_end(http_request_handle_t rh) {
-  UNUSED(rh);
+  HTTPRequestContext *rctx = rh;
+
+  assert(!(rctx->write_state == HTTP_REQUEST_WRITE_STATE_WRITING ||
+           rctx->write_state == HTTP_REQUEST_WRITE_STATE_WRITING_HEADERS ||
+           rctx->read_state == HTTP_REQUEST_READ_STATE_READING ||
+           rctx->read_state == HTTP_REQUEST_READ_STATE_READING_HEADERS));
+
   client_coroutine(HTTP_END_REQUEST_EVENT, NULL, rh->conn);
 }
 
@@ -377,7 +396,8 @@ accept_handler(event_type_t ev_type, void *ev, void *ud) {
     goto error;
   }
 
-  *cc = (HTTPConnection) {.f = {.fd = client_fd},
+  *cc = (HTTPConnection) {.f = {.fd = client_fd,
+                                .in_use = false},
                           .server = http,
                           .coropos = CORO_POS_INIT};
 
@@ -409,7 +429,7 @@ client_coroutine(event_type_t ev_type, void *ev, void *ud) {
 
   UNUSED(ev_type);
   UNUSED(ev);
-  
+
   CRBEGIN(cc->coropos);
 
   assert(ev_type == START_COROUTINE_EVENT);
@@ -418,7 +438,8 @@ client_coroutine(event_type_t ev_type, void *ev, void *ud) {
     /* initialize the request context */
     cc->rctx = (HTTPRequestContext) {
       .conn = cc,
-      .state = HTTP_REQUEST_STATE_NONE,
+      .read_state = HTTP_REQUEST_READ_STATE_NONE,
+      .write_state = HTTP_REQUEST_WRITE_STATE_NONE,
     };
 
     /* create request event, we can do this on the stack
@@ -426,7 +447,7 @@ client_coroutine(event_type_t ev_type, void *ev, void *ud) {
     HTTPNewRequestEvent new_request_ev = {
       .request_handle = &cc->rctx,
     };
-    CRYIELD(cc->coropos, 
+    CRYIELD(cc->coropos,
             cc->server->handler(HTTP_NEW_REQUEST_EVENT,
                                 &new_request_ev,
                                 cc->server->ud));
@@ -589,6 +610,7 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
     err = HTTP_GENERIC_ERROR;
   }
 
+  state->rh->read_state = HTTP_REQUEST_READ_STATE_READ_HEADERS;
   /* NB: against convention and as a shortcut,
      we use HTTP_REQUEST_READ_HEADERS_DONE_EVENT,
      not C_GET_REQUEST_DONE_EVENT */
@@ -598,7 +620,7 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
   };
   CRRETURN(state->coropos,
            state->cb(HTTP_REQUEST_READ_HEADERS_DONE_EVENT,
-                     &read_headers_events, 
+                     &read_headers_events,
                      state->ud));
 
   CREND();

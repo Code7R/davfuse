@@ -92,7 +92,48 @@ c_getwhile(event_type_t ev_type, void *ev, void *ud) {
   *state->out = state->buf_end - state->buf;
 
   CRRETURN(state->coropos, state->cb(C_GETWHILE_DONE_EVENT, NULL, state->ud));
-  
+
+  CREND();
+}
+
+void
+c_read(event_type_t ev_type, void *ev, void *ud) {
+  CReadState *state = ud;
+  int myerrno;
+  CRBEGIN(state->coropos);
+
+  assert(ev_type == START_COROUTINE_EVENT);
+  UNUSED(ev_type);
+  UNUSED(ev);
+
+  state->amt_read = 0;
+  myerrno = 0;
+  while (state->nbyte != state->amt_read) {
+    /* fill fdbuffer if we need to */
+    if (state->f->buf_end == state->f->buf_start) {
+      ssize_t ret;
+      _FILL_BUF(state->coropos, state->loop, state->f, &ret, c_read, state);
+      if (ret <= 0) {
+        myerrno = (ret < 0) ? errno : 0;
+        break;
+      }
+      myerrno = 0;
+    }
+
+    /* copy in buffer from fdbuff */
+    assert(state->f->buf_end >= state->f->buf_start);
+    assert(state->nbyte > state->amt_read);
+    size_t to_copy = read_from_fd_buffer(state->f, state->buf + state->amt_read,
+                                         state->nbyte - state->amt_read);
+    state->amt_read += to_copy;
+  }
+
+  CReadDoneEvent read_done_ev = {
+    .error_number = myerrno,
+    .nbyte = state->amt_read,
+  };
+  CRRETURN(state->coropos, state->cb(C_READ_DONE_EVENT, &read_done_ev, state->ud));
+
   CREND();
 }
 

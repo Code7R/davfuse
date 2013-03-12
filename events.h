@@ -17,6 +17,7 @@ typedef enum {
   C_GETWHILE_DONE_EVENT,
   FD_EVENT,
   C_WRITEALL_DONE_EVENT,
+  C_READ_DONE_EVENT,
 } event_type_t;
 
 typedef void (*event_handler_t)(event_type_t, void *, void *);
