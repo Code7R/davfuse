@@ -7,12 +7,13 @@ FDEVENT_MODULE = fdevent_${FDEVENT_SOURCE}
 MAKEFILES = config.mk Makefile
 HTTP_SERVER_SRC = ${FDEVENT_MODULE}.c http_server.c logging.c fd_utils.c coroutine_io.c
 HTTP_SERVER_OBJ = ${HTTP_SERVER_SRC:.c=.o}
-ALL_SRC = test_http_server.c libdavfuse.c ${HTTP_SERVER_SRC}
+ALL_SRC = test_http_file_server.c test_http_server.c libdavfuse.c ${HTTP_SERVER_SRC}
 ALL_OBJ = ${ALL_SRC:.c=.o}
+TEST_HTTP_FILE_SERVER_OBJ = test_http_file_server.o ${HTTP_SERVER_OBJ}
 TEST_HTTP_SERVER_OBJ = test_http_server.o ${HTTP_SERVER_OBJ}
 LIBFUSE_OBJ = libdavfuse.o ${HTTP_SERVER_OBJ}
 
-all: options davfuse libfuse.so.2 test_http_server
+all: options davfuse libfuse.so.2 test_http_server test_http_file_server
 
 options:
 	@echo "davfuse build options:"
@@ -51,6 +52,10 @@ davfuse: generate-davfuse.sh ${MAKEFILES}
 ${ALL_OBJ}: ${MAKEFILES}
 
 test_http_server: ${TEST_HTTP_SERVER_OBJ}
+	@echo LD -o $@ $^
+	@${CC} -o $@ $^
+
+test_http_file_server: ${TEST_HTTP_FILE_SERVER_OBJ}
 	@echo LD -o $@ $^
 	@${CC} -o $@ $^
 

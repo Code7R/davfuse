@@ -141,9 +141,10 @@ http_request_read_headers(http_request_handle_t rh,
 
 static void
 _handle_request_read(event_type_t ev_type, void *ev, void *ud) {
-  ReadRequestState *rrs = ud;
+  UNUSED(ev_type);
   assert(ev_type == C_READ_DONE_EVENT);
 
+  ReadRequestState *rrs = ud;
   CReadDoneEvent *c_read_done_ev = ev;
 
   HTTPRequestReadDoneEvent read_done_ev = {
@@ -327,6 +328,7 @@ void
 http_request_end(http_request_handle_t rh) {
   HTTPRequestContext *rctx = rh;
 
+  UNUSED(rctx);
   assert(!(rctx->write_state == HTTP_REQUEST_WRITE_STATE_WRITING ||
            rctx->write_state == HTTP_REQUEST_WRITE_STATE_WRITING_HEADERS ||
            rctx->read_state == HTTP_REQUEST_READ_STATE_READING ||
@@ -466,6 +468,7 @@ client_coroutine(event_type_t ev_type, void *ev, void *ud) {
     /* we'll come back when `http_request_end` is called,
        or there is some error */
     
+    /* TODO: or is closed early */
     if (cc->rctx.last_error_number) {
       /* break if there was an error */
       break;

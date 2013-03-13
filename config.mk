@@ -17,8 +17,8 @@ LIBS = -L/usr/lib -lc
 
 # flags
 CPPFLAGS = -DVERSION=\"${VERSION}\"
-#CFLAGS += -std=c99 -Wall -Wextra -Werror -DNDEBUG -O3 ${INCS} ${CPPFLAGS}
-CFLAGS += -std=c99 -Wall -Wextra -Werror -g ${INCS} ${CPPFLAGS}
+CFLAGS += -std=c99 -Wall -Wextra -Werror -DNDEBUG -O3 ${INCS} ${CPPFLAGS}
+#CFLAGS += -std=c99 -Wall -Wextra -Werror -g ${INCS} ${CPPFLAGS}
 LDFLAGS += -s ${LIBS}
 
 # compiler and linker

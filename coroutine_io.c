@@ -164,6 +164,7 @@ c_write_all(event_type_t ev_type, void *ev, void *ud) {
 				  c_write_all,
 				  state,
 				  NULL));
+        assert(ev_type == FD_EVENT);
         continue;
       }
       else {
