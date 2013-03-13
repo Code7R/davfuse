@@ -151,6 +151,7 @@ _handle_request_read(event_type_t ev_type, void *ev, void *ud) {
     .err = c_read_done_ev->error_number ? HTTP_GENERIC_ERROR : HTTP_SUCCESS,
     .nbyte = c_read_done_ev->nbyte,
   };
+  rrs->request_context->last_error_number = c_read_done_ev->error_number;
   rrs->cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, rrs->cb_ud);
 }
 
@@ -226,18 +227,16 @@ _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) 
     EMIT("\r\n");
   }
 
-  /* connection close for now */
-  EMIT("Connection: close\r\n");
-
   /* finish headers */
   EMIT("\r\n");
 
  done:
   whs->request_context->write_state = HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS;
-o  HTTPRequestWriteHeadersDoneEvent write_headers_ev = {
+  HTTPRequestWriteHeadersDoneEvent write_headers_ev = {
     .request_handle = whs->request_context,
     .err = myerrno ? HTTP_GENERIC_ERROR : HTTP_SUCCESS,
   };
+  whs->request_context->last_error_number = myerrno;
   CRRETURN(whs->coropos,
            whs->cb(HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT,
                    &write_headers_ev, whs->cb_ud));
@@ -288,6 +287,7 @@ _handle_write_done(event_type_t ev_type, void *ev, void *ud) {
     .request_handle = rws->request_context,
     .err = write_all_done_event->error_number ? HTTP_GENERIC_ERROR : HTTP_SUCCESS,
   };
+  rws->request_context->last_error_number = write_all_done_event->error_number;
   rws->cb(HTTP_REQUEST_WRITE_DONE_EVENT, &write_ev, rws->cb_ud);
 }
 
@@ -445,7 +445,13 @@ client_coroutine(event_type_t ev_type, void *ev, void *ud) {
       .conn = cc,
       .read_state = HTTP_REQUEST_READ_STATE_NONE,
       .write_state = HTTP_REQUEST_WRITE_STATE_NONE,
+      .last_error_number = 0,
     };
+
+    /* TODO: Prevent against "slowloris" style attacks
+       with clients who send their headers very very slowly:
+       give some timeout to total request processing
+     */
 
     /* create request event, we can do this on the stack
        because the handler shouldn't use this after */
@@ -459,9 +465,11 @@ client_coroutine(event_type_t ev_type, void *ev, void *ud) {
     assert(ev_type == HTTP_END_REQUEST_EVENT);
     /* we'll come back when `http_request_end` is called,
        or there is some error */
-
-    /* only connection close for now */
-    break;
+    
+    if (cc->rctx.last_error_number) {
+      /* break if there was an error */
+      break;
+    }
   }
 
   log_debug("Client done, closing descriptor %d", cc->f.fd);
@@ -510,9 +518,14 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
       assert(ev_type == C_FBGETC_DONE_EVENT);                   \
     }                                                           \
     if ((char) state->c != (_c)) {                              \
-      log_error("Didn't get the character we "                  \
-                "were expecting: '%c' vs '%c'",                 \
-                state->c, (_c));                                \
+      if (state->c == EOF) {                                    \
+        log_error("Got EOF, while expecting '%c'", (_c));       \
+      }                                                         \
+      else {                                                    \
+        log_error("Didn't get the character we "                \
+                  "were expecting: '%c' vs '%c'",               \
+                  state->c, (_c));                              \
+      }                                                         \
       goto error;                                               \
     }                                                           \
   }                                                             \
@@ -623,6 +636,9 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
     .err = err,
     .request_handle = state->rh,
   };
+  /* TODO: use real error numbers or just pass http errors through
+     last_error_number */
+  state->rh->last_error_number = err == HTTP_SUCCESS ? 0 : 1;
   CRRETURN(state->coropos,
            state->cb(HTTP_REQUEST_READ_HEADERS_DONE_EVENT,
                      &read_headers_events,

@@ -102,7 +102,6 @@ typedef struct {
   void *cb_ud;
 } WriteHeadersState;
 
-
 typedef struct {
   union {
     WriteAllState was;
@@ -140,6 +139,7 @@ struct _http_request_context {
   HTTPRequestHeaders rh;
   http_request_write_state_t write_state;
   http_request_read_state_t read_state;
+  int last_error_number;
   union {
     WriteHeadersState whs;
     WriteResponseState rws;
