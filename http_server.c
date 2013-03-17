@@ -16,8 +16,11 @@
 #include "fd_utils.h"
 #include "http_server.h"
 #include "logging.h"
+#include "util.h"
 
-#define LISTEN_BACKLOG 5
+enum {
+  LISTEN_BACKLOG=5,
+};
 
 /* static forward decls */
 static void
@@ -73,12 +76,11 @@ http_server_start(HTTPServer *http,
     goto error;
   }
 
-  bool ret;
-  ret = fdevent_add_watch(loop, fd,
-                          create_stream_events(true, false),
-                          &accept_handler,
-                          http,
-                          &http->watch_key);
+  bool ret = fdevent_add_watch(loop, fd,
+			       create_stream_events(true, false),
+			       &accept_handler,
+			       http,
+			       &http->watch_key);
   if (!ret) {
     goto error;
   }
@@ -211,6 +213,7 @@ _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) 
   while (false)
 
 #define EMIT(c) EMITN(c, sizeof(c) - 1)
+#define EMITS(c) EMITN(c, strnlen(c, sizeof(c)))
 
   /* output response code */
   whs->out_size = snprintf(whs->tmpbuf, sizeof(whs->tmpbuf),
@@ -222,9 +225,9 @@ _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) 
   /* output each header */
   for (whs->header_idx = 0; (size_t) whs->header_idx < whs->response_headers->num_headers;
        ++whs->header_idx) {
-    EMIT(whs->response_headers->headers[whs->header_idx].name);
+    EMITS(whs->response_headers->headers[whs->header_idx].name);
     EMIT(":");
-    EMIT(whs->response_headers->headers[whs->header_idx].value);
+    EMITS(whs->response_headers->headers[whs->header_idx].value);
     EMIT("\r\n");
   }
 
@@ -250,7 +253,7 @@ _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) 
 
 void
 http_request_write_headers(http_request_handle_t rh,
-                           HTTPResponseHeaders *response_headers,
+                           const HTTPResponseHeaders *response_headers,
                            event_handler_t cb,
                            void *cb_ud) {
   HTTPRequestContext *rctx = rh;
@@ -553,6 +556,10 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
                        &state->sub.getwhile_state));                    \
     assert(ev_type == C_GETWHILE_DONE_EVENT);                           \
     assert(state->parsed <= sizeof(var) - 1);                           \
+    if (!state->parsed) {						\
+      log_error("Parsed empty var!");					\
+      goto error;							\
+    }									\
     /* we don't protect against there being a '\0' in the http */       \
     /* variable the worst that can happen is the var is cut  */         \
     /* short and fails */                                               \
@@ -653,4 +660,17 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
 #undef PARSEVAR
 #undef EXPECTS
 #undef EXPECT
+}
+
+NON_NULL_ARGS2(1, 3) void
+http_request_simple_response(http_request_handle_t rh,
+			     http_status_code_t code, const char *body,
+			     event_handler_t cb, void *cb_ud) {
+  /* not yet implemented */
+  UNUSED(rh);
+  UNUSED(code);
+  UNUSED(body);
+  UNUSED(cb);
+  UNUSED(cb_ud);
+  assert(false);
 }

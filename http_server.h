@@ -7,18 +7,18 @@
 #include "events.h"
 #include "fdevent.h"
 
-#define IN_BUF_SIZE 4096
-#define MAX_LINE_SIZE 1024
-#define MAX_METHOD_SIZE 16
-#define MAX_URI_SIZE 1024
-#define MAX_VERSION_SIZE 8
-#define MAX_HEADER_NAME_SIZE 64
-#define MAX_HEADER_VALUE_SIZE 128
-#define MAX_NUM_HEADERS 16
-#define MAX_MESSAGE_SIZE 16
-#define OUT_BUF_SIZE 4096
-
-typedef void (*callback_t)(void *);
+enum {
+  IN_BUF_SIZE=4096,
+  MAX_LINE_SIZE=1024,
+  MAX_METHOD_SIZE=16,
+  MAX_URI_SIZE=1024,
+  MAX_VERSION_SIZE=8,
+  MAX_HEADER_NAME_SIZE=64,
+  MAX_HEADER_VALUE_SIZE=128,
+  MAX_NUM_HEADERS=16,
+  MAX_MESSAGE_SIZE=16,
+  OUT_BUF_SIZE=4096,
+};
 
 /* forward decl */
 struct _http_server;
@@ -43,8 +43,14 @@ typedef enum {
   HTTP_GENERIC_ERROR,
 } http_error_code_t;
 
+typedef enum {
+  HTTP_STATUS_CODE_OK=200,
+  HTTP_STATUS_CODE_NOT_FOUND=404,
+  HTTP_STATUS_CODE_METHOD_NOT_ALLOWED=405,
+} http_status_code_t;
+
 typedef struct {
-  unsigned code;
+  http_status_code_t code;
   char message[MAX_MESSAGE_SIZE];
   size_t num_headers;
   struct {
@@ -96,7 +102,7 @@ typedef struct {
   size_t out_size;
 
   /* args */
-  HTTPResponseHeaders *response_headers;
+  const HTTPResponseHeaders *response_headers;
   HTTPRequestContext *request_context;
   event_handler_t cb;
   void *cb_ud;
@@ -196,7 +202,7 @@ NON_NULL_ARGS3(1, 2, 3) void
 http_request_read_headers(http_request_handle_t rh,
 			  HTTPRequestHeaders *request_headers,
 			  event_handler_t cb,
-			  void *);
+			  void *cb_ud);
 
 NON_NULL_ARGS3(1, 2, 4) void
 http_request_read(http_request_handle_t rh,
@@ -205,7 +211,7 @@ http_request_read(http_request_handle_t rh,
 
 NON_NULL_ARGS3(1, 2, 3) void
 http_request_write_headers(http_request_handle_t rh,
-			   HTTPResponseHeaders *response_headers,
+			   const HTTPResponseHeaders *response_headers,
 			   event_handler_t cb,
 			   void *cb_ud);
 
@@ -219,5 +225,10 @@ http_request_end(http_request_handle_t rh);
 
 NON_NULL_ARGS0() char *
 http_get_header_value(HTTPRequestHeaders *rhs, const char *header_name);
+
+NON_NULL_ARGS2(1, 3)  void
+http_request_simple_response(http_request_handle_t rh,
+			     http_status_code_t code, const char *body,
+			     event_handler_t cb, void *cb_ud);
 
 #endif /* HTTP_SERVER_H */

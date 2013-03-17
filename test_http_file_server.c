@@ -1,6 +1,7 @@
 /*
-  A simple file server out of the current directory
+  A webdav compatible http file server out of the current directory
  */
+#define _ISOC99_SOURCE
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -8,7 +9,7 @@
 #include <assert.h>
 #include <signal.h>
 #include <stdlib.h>
-
+#include <strings.h>
 
 #include "events.h"
 #include "fdevent.h"
@@ -16,7 +17,9 @@
 #include "http_server.h"
 #include "logging.h"
 
-#define BUF_SIZE 4096
+enum {
+  BUF_SIZE=4096,
+};
 
 struct handler_context {
   coroutine_position_t pos;
@@ -64,41 +67,21 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   UNUSED(read_headers_ev);
   assert(read_headers_ev->request_handle == hc->rh);
   if (read_headers_ev->err != HTTP_SUCCESS) {
-    goto error;
+    goto done;
   }
-
-  /* now read out body */
-  /* TODO: we shouldn't have to worry about content-length or chunked
-     or even reading this out for the sake of it,
-     but we do it now so the request/connection is sane
-     TODO: the server should take care of stuff like this (half-read connections)
-     but for now we assume content-length */
-  char *content_length_str = http_get_header_value(&hc->rhs, "content-length");
-  if (content_length_str) {
-    long converted_content_length = strtol(content_length_str, NULL, 10);
-    assert(converted_content_length >= 0 && !errno);
-
-    hc->content_length = converted_content_length;
-    hc->bytes_read = 0;
-    while (hc->bytes_read <= hc->content_length) {
-      CRYIELD(hc->pos,
-              http_request_read(hc->rh, hc->buf,
-                                MIN(hc->content_length - hc->bytes_read, sizeof(hc->buf)),
-                                handle_request, hc));
-      HTTPRequestReadDoneEvent *read_ev = ev;
-      assert(ev_type == HTTP_REQUEST_READ_DONE_EVENT);
-      assert(read_ev->request_handle == hc->rh);
-      if (read_ev->err != HTTP_SUCCESS) {
-        goto error;
-      }
-
-      hc->bytes_read += read_ev->nbyte;
-    }
-  }
-
-  log_debug("done reading body");
 
   static const char toret[] = "SORRY BRO";
+
+  // hc->rhs.method == "GET"
+  if (strcasecmp(hc->rhs.method, "GET")) {
+    CRYIELD(hc->pos,
+	    http_request_simple_response(hc->rh,
+					 HTTP_STATUS_CODE_METHOD_NOT_ALLOWED,
+					 toret,
+					 handle_request, hc));
+    goto done;
+  }
+
 
   size_t content_length;
   off_t pos;
@@ -106,13 +89,13 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   hc->fd = open(&hc->rhs.uri[1], O_RDONLY | O_NONBLOCK);
   if (hc->fd >= 0 &&
       (pos = lseek(hc->fd, 0, SEEK_END)) >= 0) {
-    hc->resp.code = 200;
+    hc->resp.code = HTTP_STATUS_CODE_OK;
     content_length = pos;
     msg = "Found";
   }
   else {
     /* we couldn't open find just respond */
-    hc->resp.code = 404;
+    hc->resp.code = HTTP_STATUS_CODE_NOT_FOUND;
     msg = "Not Found";
     content_length = sizeof(toret) - 1;
   }
@@ -133,7 +116,7 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   UNUSED(write_headers_ev);
   assert(write_headers_ev->request_handle == hc->rh);
   if (write_headers_ev->err != HTTP_SUCCESS) {
-    goto error;
+    goto done;
   }
 
   log_debug("Sent headers!");
@@ -162,7 +145,7 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
       else if (amt_read < 0) {
         log_error_errno("Error while read()ing file");
         /* error while reading the file */
-        goto error;
+        goto done;
       }
       else if (!amt_read) {
         /* EOF */
@@ -181,7 +164,7 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
       UNUSED(write_ev);
       assert(write_ev->request_handle == hc->rh);
       if (write_ev->err != HTTP_SUCCESS) {
-        goto error;
+        goto done;
       }
     }
   }
@@ -194,11 +177,13 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
     UNUSED(write_ev);
     assert(write_ev->request_handle == hc->rh);
     if (write_ev->err != HTTP_SUCCESS) {
-      goto error;
+      goto done;
     }
   }
 
- error:
+ done:
+  log_info("request done!");
+
   if (hc->fd >= 0) {
     close(hc->fd);
   }
@@ -210,8 +195,9 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   CREND();
 }
 
-int main() {
-  log_level_t log_level = LOG_NOTHING;
+int main(int argc, char *argv[]) {
+  port_t port;
+  log_level_t log_level = LOG_DEBUG;
 
   init_logging(stdout, log_level);
   log_info("Logging initted.");
@@ -219,8 +205,21 @@ int main() {
   /* ignore SIGPIPE */
   signal(SIGPIPE, SIG_IGN);
 
+  if (argc > 1) {
+    long to_port = strtol(argv[1], NULL, 10);
+    if ((to_port == 0 && errno) ||
+	to_port < 0 ||
+	to_port > MAX_PORT) {
+      log_critical("Bad port: %s", argv[1]);
+    }
+    port = (port_t) to_port;
+  }
+  else {
+    port = 8080;
+  }
+
   /* create server socket */
-  int server_fd = create_ipv4_bound_socket(8080);
+  int server_fd = create_ipv4_bound_socket(port);
   assert(server_fd >= 0);
 
   /* create event loop */

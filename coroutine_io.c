@@ -69,8 +69,8 @@ c_getwhile(event_type_t ev_type, void *ev, void *ud) {
   /* find terminator in existing buffer */
   do {
     /* we only call fbgetc in one place here, so we force an inline */
-    C_FBGETC(state->coropos, state->loop, state->f, &state->peeked_char, c_getwhile, state);
-
+    C_FBGETC(state->coropos, state->loop, state->f, &state->peeked_char,
+	     c_getwhile, state);
     if (state->peeked_char == EOF) {
       log_error_errno("Error while expecting a character");
       break;
