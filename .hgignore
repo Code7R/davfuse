@@ -1,0 +1,9 @@
+syntax: glob
+
+.deps
+*~
+# for now
+*.o
+test_http_file_server
+davfuse
+test_http_server

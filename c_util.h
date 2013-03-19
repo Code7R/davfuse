@@ -4,15 +4,33 @@
 #define UNUSED(x) ((void)(x))
 #define NELEMS(arr) (sizeof(arr) / sizeof(arr[0]))
 
+#define HEADER_FUNCTION static UNUSED_FUNCTION_ATTR
+
+#ifdef __GNUC__
+
 #define UNUSED_FUNCTION_ATTR __attribute__ ((unused))
 
-#define HEADER_FUNCTION static UNUSED_FUNCTION_ATTR
 #define CONST_FUNCTION __attribute__ ((const))
 #define PURE_FUNCTION __attribute__ ((pure))
 
 #define NON_NULL_ARGS0() __attribute__ ((nonnull))
+#define NON_NULL_ARGS1(a) __attribute__ ((nonnull (a)))
 #define NON_NULL_ARGS2(a, b) __attribute__ ((nonnull (a, b)))
 #define NON_NULL_ARGS3(a, b, c) __attribute__ ((nonnull (a, b, c)))
+
+#else /* __GNUC__ */
+
+#define UNUSED_FUNCTION_ATTR
+
+#define CONST_FUNCTION
+#define PURE_FUNCTION
+
+#define NON_NULL_ARGS0()
+#define NON_NULL_ARGS1(a)
+#define NON_NULL_ARGS2(a, b)
+#define NON_NULL_ARGS3(a, b, c)
+
+#endif /* __GNUC__ */
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))

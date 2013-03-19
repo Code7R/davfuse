@@ -1,6 +1,7 @@
 /*
-  A simple file server out of the current directory
+  A webdav compatible http file server out of the current directory
  */
+#define _ISOC99_SOURCE
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -8,7 +9,7 @@
 #include <assert.h>
 #include <signal.h>
 #include <stdlib.h>
-
+#include <strings.h>
 
 #include "events.h"
 #include "fdevent.h"
@@ -16,7 +17,9 @@
 #include "http_server.h"
 #include "logging.h"
 
-#define BUF_SIZE 4096
+enum {
+  BUF_SIZE=4096,
+};
 
 struct handler_context {
   coroutine_position_t pos;
@@ -40,13 +43,14 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
 
   if (ev_type == HTTP_NEW_REQUEST_EVENT) {
     hc = malloc(sizeof(*hc));
-    assert(hc);
     *hc = (struct handler_context) {
       .pos = CORO_POS_INIT,
       .loop = ud,
       .fd = -1,
     };
   }
+
+  assert(hc);
 
   CRBEGIN(hc->pos);
   assert(ev_type == HTTP_NEW_REQUEST_EVENT);
@@ -72,8 +76,10 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   /* != "GET", not supported */
   if (strcasecmp(hc->rhs.method, "GET")) {
     CRYIELD(hc->pos,
-            http_request_simple_response(hc->rh, HTTP_METHOD_NOT_ALLOWED, toret,
-                                         handle_request, hc));
+	    http_request_simple_response(hc->rh,
+					 HTTP_STATUS_CODE_METHOD_NOT_ALLOWED,
+					 toret,
+					 handle_request, hc));
     goto done;
   }
 
@@ -83,13 +89,13 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   hc->fd = open(&hc->rhs.uri[1], O_RDONLY | O_NONBLOCK);
   if (hc->fd >= 0 &&
       (pos = lseek(hc->fd, 0, SEEK_END)) >= 0) {
-    hc->resp.code = 200;
+    hc->resp.code = HTTP_STATUS_CODE_OK;
     content_length = pos;
     msg = "Found";
   }
   else {
     /* we couldn't open find just respond */
-    hc->resp.code = 404;
+    hc->resp.code = HTTP_STATUS_CODE_NOT_FOUND;
     msg = "Not Found";
     content_length = sizeof(toret) - 1;
   }
@@ -176,6 +182,8 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   }
 
  done:
+  log_info("request done!");
+
   if (hc->fd >= 0) {
     close(hc->fd);
   }
@@ -187,7 +195,10 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   CREND();
 }
 
-int main() {
+
+int main(int argc, char *argv[]) {
+  port_t port;
+
   /* TODO: make configurable */
   log_level_t log_level = LOG_DEBUG;
 
@@ -197,8 +208,21 @@ int main() {
   /* ignore SIGPIPE */
   signal(SIGPIPE, SIG_IGN);
 
+  if (argc > 1) {
+    long to_port = strtol(argv[1], NULL, 10);
+    if ((to_port == 0 && errno) ||
+	to_port < 0 ||
+	to_port > MAX_PORT) {
+      log_critical("Bad port: %s", argv[1]);
+    }
+    port = (port_t) to_port;
+  }
+  else {
+    port = 8080;
+  }
+
   /* create server socket */
-  int server_fd = create_ipv4_bound_socket(8080);
+  int server_fd = create_ipv4_bound_socket(port);
   assert(server_fd >= 0);
 
   /* create event loop */

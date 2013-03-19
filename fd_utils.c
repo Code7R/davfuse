@@ -59,7 +59,7 @@ create_bound_socket(const struct sockaddr *addr, socklen_t addr_len) {
   return -1;
 }
 
-int create_ipv4_bound_socket(short port) {
+int create_ipv4_bound_socket(port_t port) {
   struct sockaddr_in listen_addr;
 
   memset(&listen_addr, 0, sizeof(listen_addr));

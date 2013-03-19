@@ -16,8 +16,13 @@
 #include "fd_utils.h"
 #include "http_server.h"
 #include "logging.h"
+#include "util.h"
 
-#define LISTEN_BACKLOG 5
+enum {
+  LISTEN_BACKLOG=5,
+};
+
+static const char *CONTENT_LENGTH_HEADER = "Content-Length";
 
 /* static forward decls */
 static void
@@ -72,12 +77,11 @@ http_server_start(HTTPServer *http,
     goto error;
   }
 
-  bool ret;
-  ret = fdevent_add_watch(loop, fd,
-                          create_stream_events(true, false),
-                          &accept_handler,
-                          http,
-                          &http->watch_key);
+  bool ret = fdevent_add_watch(loop, fd,
+			       create_stream_events(true, false),
+			       &accept_handler,
+			       http,
+			       &http->watch_key);
   if (!ret) {
     goto error;
   }
@@ -214,6 +218,7 @@ _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) 
   while (false)
 
 #define EMIT(c) EMITN(c, sizeof(c) - 1)
+#define EMITS(c) EMITN(c, strnlen(c, sizeof(c)))
 
   /* output response code */
   whs->out_size = snprintf(whs->tmpbuf, sizeof(whs->tmpbuf),
@@ -225,9 +230,9 @@ _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) 
   /* output each header */
   for (whs->header_idx = 0; (size_t) whs->header_idx < whs->response_headers->num_headers;
        ++whs->header_idx) {
-    EMIT(whs->response_headers->headers[whs->header_idx].name);
+    EMITS(whs->response_headers->headers[whs->header_idx].name);
     EMIT(":");
-    EMIT(whs->response_headers->headers[whs->header_idx].value);
+    EMITS(whs->response_headers->headers[whs->header_idx].value);
     EMIT("\r\n");
   }
 
@@ -267,12 +272,12 @@ ascii_strcaseequal(const char *a, const char *b) {
   return a[i] == '\0' && b[i] == '\0';
 }
 
-static char *
-_get_header_value(struct _header_pair *headers, size_t num_headers, const char *header_name) {
+static const char *
+_get_header_value(const struct _header_pair *headers, size_t num_headers, const char *header_name) {
   /* headers can only be ascii */
-  for (unsigned i = 0; i < num_headers; ++i) {
+  for (size_t i = 0; i < num_headers; ++i) {
     if (ascii_strcaseequal(header_name, headers[i].name)) {
-      return headers[i].value;
+      return (char *) headers[i].value;
     }
   }
 
@@ -281,7 +286,7 @@ _get_header_value(struct _header_pair *headers, size_t num_headers, const char *
 
 void
 http_request_write_headers(http_request_handle_t rh,
-                           HTTPResponseHeaders *response_headers,
+                           const HTTPResponseHeaders *response_headers,
                            event_handler_t cb,
                            void *cb_ud) {
   HTTPRequestContext *rctx = rh;
@@ -295,9 +300,9 @@ http_request_write_headers(http_request_handle_t rh,
      how much it's going to write, right now it's strictly necessary
      but we may relax this in the future (esp if we negotiate chunked encoding) */
   {
-    char *content_length_str = _get_header_value(response_headers->headers,
-                                                 response_headers->num_headers,
-                                                 "Content-Length");
+    const char *content_length_str = _get_header_value(response_headers->headers,
+                                                       response_headers->num_headers,
+                                                       CONTENT_LENGTH_HEADER);
     if (!content_length_str) {
       goto error;
     }
@@ -410,8 +415,8 @@ http_request_end(http_request_handle_t rh) {
   client_coroutine(HTTP_END_REQUEST_EVENT, NULL, rh->conn);
 }
 
-char *
-http_get_header_value(HTTPRequestHeaders *rhs, const char *header_name) {
+const char *
+http_get_header_value(const HTTPRequestHeaders *rhs, const char *header_name) {
   return _get_header_value(rhs->headers, rhs->num_headers, header_name);
 }
 
@@ -485,10 +490,10 @@ _write_out_internal_server_error(http_request_handle_t rh,
 
   const char msg[] = "Internal Server Error";
 
-  rsp->code = HTTP_INTERNAL_SERVER_ERROR;
+  rsp->code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
   strncpy(rsp->message, msg, sizeof(rsp->message));
   rsp->num_headers = 1;
-  strncpy(rsp->headers[0].name, "Content-Length", sizeof(rsp->headers[0].name));
+  strncpy(rsp->headers[0].name, CONTENT_LENGTH_HEADER, sizeof(rsp->headers[0].name));
   snprintf(rsp->headers[0].value, sizeof(rsp->headers[0].value), "%d", 0);
 
   http_request_write_headers(rh, rsp, handler, ud);
@@ -672,6 +677,10 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
                        &state->sub.getwhile_state));                    \
     assert(ev_type == C_GETWHILE_DONE_EVENT);                           \
     assert(state->parsed <= sizeof(var) - 1);                           \
+    if (!state->parsed) {						\
+      log_error("Parsed empty var!");					\
+      goto error;							\
+    }									\
     /* we don't protect against there being a '\0' in the http */       \
     /* variable the worst that can happen is the var is cut  */         \
     /* short and fails */                                               \
@@ -757,7 +766,7 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
         !strcasecmp(state->request_headers->method, "PUT")) {
       /* get the content-length header */
       /* TODO: support 'chunked' encoding */
-      char *content_length_str = http_get_header_value(state->request_headers, "content-length");
+      const char *content_length_str = http_get_header_value(state->request_headers, CONTENT_LENGTH_HEADER);
       if (content_length_str) {
         long converted_content_length = strtol(content_length_str, NULL, 10);
         if (converted_content_length >= 0 && !errno) {
@@ -800,9 +809,11 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
 #undef EXPECT
 }
 
-void
-http_request_simple_response(http_request_handle_t rh, int code, const void *body,
-                             event_handler_t cb, void *cb_ud) {
+NON_NULL_ARGS3(1, 3, 4) void
+http_request_simple_response(http_request_handle_t rh,
+			     http_status_code_t code, const char *body,
+			     event_handler_t cb, void *cb_ud) {
+  /* not yet implemented */
   UNUSED(rh);
   UNUSED(code);
   UNUSED(body);

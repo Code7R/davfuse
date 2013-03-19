@@ -8,22 +8,17 @@
 #include "fdevent.h"
 
 enum {
-  HTTP_METHOD_NOT_ALLOWED=405,
-  HTTP_INTERNAL_SERVER_ERROR=500,
+  IN_BUF_SIZE=4096,
+  MAX_LINE_SIZE=1024,
+  MAX_METHOD_SIZE=16,
+  MAX_URI_SIZE=1024,
+  MAX_VERSION_SIZE=8,
+  MAX_HEADER_NAME_SIZE=64,
+  MAX_HEADER_VALUE_SIZE=128,
+  MAX_NUM_HEADERS=16,
+  MAX_MESSAGE_SIZE=64,
+  OUT_BUF_SIZE=4096,
 };
-
-#define IN_BUF_SIZE 4096
-#define MAX_LINE_SIZE 1024
-#define MAX_METHOD_SIZE 16
-#define MAX_URI_SIZE 1024
-#define MAX_VERSION_SIZE 8
-#define MAX_HEADER_NAME_SIZE 64
-#define MAX_HEADER_VALUE_SIZE 128
-#define MAX_NUM_HEADERS 16
-#define MAX_MESSAGE_SIZE 64
-#define OUT_BUF_SIZE 4096
-
-typedef void (*callback_t)(void *);
 
 /* forward decl */
 struct _http_server;
@@ -50,8 +45,15 @@ typedef enum {
   HTTP_GENERIC_ERROR,
 } http_error_code_t;
 
+typedef enum {
+  HTTP_STATUS_CODE_OK=200,
+  HTTP_STATUS_CODE_NOT_FOUND=404,
+  HTTP_STATUS_CODE_METHOD_NOT_ALLOWED=405,
+  HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR=500,
+} http_status_code_t;
+
 typedef struct {
-  unsigned code;
+  http_status_code_t code;
   char message[MAX_MESSAGE_SIZE];
   size_t num_headers;
   struct _header_pair headers[MAX_NUM_HEADERS];
@@ -100,7 +102,7 @@ typedef struct {
   size_t out_size;
 
   /* args */
-  HTTPResponseHeaders *response_headers;
+  const HTTPResponseHeaders *response_headers;
   HTTPRequestContext *request_context;
   event_handler_t cb;
   void *cb_ud;
@@ -200,7 +202,7 @@ NON_NULL_ARGS3(1, 2, 4) bool
 http_server_start(HTTPServer *http,
 		  FDEventLoop *loop,
 		  int fd,
-		  event_handler_t handler, 
+		  event_handler_t handler,
 		  void *ud);
 
 NON_NULL_ARGS0() bool
@@ -210,7 +212,7 @@ NON_NULL_ARGS3(1, 2, 3) void
 http_request_read_headers(http_request_handle_t rh,
 			  HTTPRequestHeaders *request_headers,
 			  event_handler_t cb,
-			  void *);
+			  void *cb_ud);
 
 NON_NULL_ARGS3(1, 2, 4) void
 http_request_read(http_request_handle_t rh,
@@ -219,7 +221,7 @@ http_request_read(http_request_handle_t rh,
 
 NON_NULL_ARGS3(1, 2, 3) void
 http_request_write_headers(http_request_handle_t rh,
-			   HTTPResponseHeaders *response_headers,
+			   const HTTPResponseHeaders *response_headers,
 			   event_handler_t cb,
 			   void *cb_ud);
 
@@ -231,11 +233,12 @@ http_request_write(http_request_handle_t rh,
 NON_NULL_ARGS0() void
 http_request_end(http_request_handle_t rh);
 
-NON_NULL_ARGS0() char *
-http_get_header_value(HTTPRequestHeaders *rhs, const char *header_name);
+NON_NULL_ARGS0() const char *
+http_get_header_value(const HTTPRequestHeaders *rhs, const char *header_name);
 
-NON_NULL_ARGS3(1, 3, 4) void
-http_request_simple_response(http_request_handle_t rh, int code, const void *body,
-                             event_handler_t cb, void *cb_ud);
+NON_NULL_ARGS3(1, 3, 4)  void
+http_request_simple_response(http_request_handle_t rh,
+			     http_status_code_t code, const char *body,
+			     event_handler_t cb, void *cb_ud);
 
 #endif /* HTTP_SERVER_H */

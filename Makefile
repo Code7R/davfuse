@@ -5,7 +5,7 @@ include config.mk
 
 FDEVENT_MODULE = fdevent_${FDEVENT_SOURCE}
 MAKEFILES = config.mk Makefile
-HTTP_SERVER_SRC = ${FDEVENT_MODULE}.c http_server.c logging.c fd_utils.c coroutine_io.c
+HTTP_SERVER_SRC = ${FDEVENT_MODULE}.c http_server.c logging.c fd_utils.c coroutine_io.c util.c
 HTTP_SERVER_OBJ = ${HTTP_SERVER_SRC:.c=.o}
 ALL_SRC = test_http_file_server.c test_http_server.c libdavfuse.c ${HTTP_SERVER_SRC}
 ALL_OBJ = ${ALL_SRC:.c=.o}

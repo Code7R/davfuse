@@ -17,13 +17,15 @@
 #include "events.h"
 #include "fdevent.h"
 
-#define BUF_SIZE 4096
+enum {
+  _FD_BUFFER_BUF_SIZE=4096,
+};
 
 typedef struct {
   int fd;
   char *buf_start;
   char *buf_end;
-  char buf[BUF_SIZE];
+  char buf[_FD_BUFFER_BUF_SIZE];
   bool in_use;
 } FDBuffer;
 
@@ -186,7 +188,7 @@ typedef struct {
     (f)->buf_start = (f)->buf;                                          \
     (f)->buf_end = (f)->buf;                                            \
     (f)->in_use = true;                                                 \
-    do {                                                                \
+    while (true) {							\
       *(ret) = read((f)->fd, (f)->buf, sizeof((f)->buf));               \
       if (*(ret) < 0 && errno == EAGAIN) {                              \
         CRYIELD(coropos,                                                \
@@ -198,8 +200,8 @@ typedef struct {
       if (*(ret) > 0) {                                                 \
         (f)->buf_end = (f)->buf_start + *(ret);                         \
       }                                                                 \
+      break;								\
     }                                                                   \
-    while (false);                                                      \
     (f)->in_use = false;                                                \
   }                                                                     \
   while (false)
