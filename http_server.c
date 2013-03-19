@@ -41,7 +41,6 @@ init_c_get_request_state(GetRequestState *state,
     .ud = ud,
   };
 }
-
 static void
 c_get_request(event_type_t, void *, void *);
 
@@ -152,6 +151,7 @@ _handle_request_read(event_type_t ev_type, void *ev, void *ud) {
     .err = c_read_done_ev->error_number ? HTTP_GENERIC_ERROR : HTTP_SUCCESS,
     .nbyte = c_read_done_ev->nbyte,
   };
+  rrs->request_context->bytes_read += c_read_done_ev->nbyte;
   rrs->request_context->last_error_number = c_read_done_ev->error_number;
   rrs->cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, rrs->cb_ud);
 }
@@ -167,6 +167,9 @@ http_request_read(http_request_handle_t rh,
     .cb = cb,
     .cb_ud = cb_ud,
   };
+
+  assert(rctx->content_length >= rctx->bytes_read);
+  nbyte = MIN(nbyte, rctx->out_content_length - rctx->bytes_read);
 
   init_c_read_state(&rctx->sub.rrs.sub.crs,
                     rctx->conn->server->loop, &rctx->conn->f,
@@ -248,6 +251,34 @@ _http_request_write_headers_coroutine(event_type_t ev_type, void *ev, void *ud) 
 #undef EMITN
 }
 
+static CONST_FUNCTION char
+ascii_to_lower(char a) {
+  return a + ((65 <= a && a <= 90) ? 33 : 0);
+}
+
+static CONST_FUNCTION bool
+ascii_strcaseequal(const char *a, const char *b) {
+  int i;
+  for (i = 0;
+       (ascii_to_lower(a[i]) == ascii_to_lower(b[i]) &&
+        (a[i] != '\0' || b[i] != '\0'));
+       ++i) {
+  }
+  return a[i] == '\0' && b[i] == '\0';
+}
+
+static char *
+_get_header_value(struct _header_pair *headers, size_t num_headers, const char *header_name) {
+  /* headers can only be ascii */
+  for (unsigned i = 0; i < num_headers; ++i) {
+    if (ascii_strcaseequal(header_name, headers[i].name)) {
+      return headers[i].value;
+    }
+  }
+
+  return NULL;
+}
+
 void
 http_request_write_headers(http_request_handle_t rh,
                            HTTPResponseHeaders *response_headers,
@@ -256,7 +287,34 @@ http_request_write_headers(http_request_handle_t rh,
   HTTPRequestContext *rctx = rh;
 
   if (rctx->write_state != HTTP_REQUEST_WRITE_STATE_NONE) {
-    HTTPRequestWriteHeadersDoneEvent write_headers_ev = {
+    goto error;
+  }
+
+  /* check if the response has a "Content-Length" header
+     this is used as a hint by the handlers to tell the server
+     how much it's going to write, right now it's strictly necessary
+     but we may relax this in the future (esp if we negotiate chunked encoding) */
+  {
+    char *content_length_str = _get_header_value(response_headers->headers,
+                                                 response_headers->num_headers,
+                                                 "Content-Length");
+    if (!content_length_str) {
+      goto error;
+    }
+
+    long content_length = strtol(content_length_str, NULL, 10);
+    if ((content_length == 0 && errno) ||
+        content_length < 0) {
+      goto error;
+    }
+
+    rctx->out_content_length = content_length;
+  }
+
+  if (false) {
+    HTTPRequestWriteHeadersDoneEvent write_headers_ev;
+  error:
+    write_headers_ev = (HTTPRequestWriteHeadersDoneEvent) {
       .request_handle = rh,
       /* TODO set correct error */
       .err = HTTP_GENERIC_ERROR,
@@ -288,6 +346,7 @@ _handle_write_done(event_type_t ev_type, void *ev, void *ud) {
     .request_handle = rws->request_context,
     .err = write_all_done_event->error_number ? HTTP_GENERIC_ERROR : HTTP_SUCCESS,
   };
+  rws->request_context->bytes_written += write_all_done_event->nbyte;
   rws->request_context->last_error_number = write_all_done_event->error_number;
   rws->cb(HTTP_REQUEST_WRITE_DONE_EVENT, &write_ev, rws->cb_ud);
 }
@@ -299,7 +358,21 @@ http_request_write(http_request_handle_t rh,
   HTTPRequestContext *rctx = rh;
 
   if (rctx->write_state != HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS) {
-    HTTPRequestWriteDoneEvent write_ev = {
+    goto error;
+  }
+
+  assert(rctx->out_content_length >= rctx->bytes_written);
+  if (nbyte > rctx->out_content_length - rctx->bytes_written) {
+    /* TODO: right now have no facility to do short writes,
+       could return write amount when done
+    */
+    goto error;
+  }
+
+  if (false) {
+    HTTPRequestWriteDoneEvent write_ev;
+  error:
+    write_ev = (HTTPRequestWriteDoneEvent) {
       .request_handle = rh,
       /* TODO set correct error */
       .err = HTTP_GENERIC_ERROR,
@@ -337,35 +410,9 @@ http_request_end(http_request_handle_t rh) {
   client_coroutine(HTTP_END_REQUEST_EVENT, NULL, rh->conn);
 }
 
-static CONST_FUNCTION char
-ascii_to_lower(char a) {
-  return a + ((65 <= a && a <= 90) ? 33 : 0);
-}
-
-static CONST_FUNCTION bool
-ascii_strcaseequal(const char *a, const char *b) {
-  int i;
-  for (i = 0;
-       (ascii_to_lower(a[i]) == ascii_to_lower(b[i]) &&
-        (a[i] != '\0' || b[i] != '\0'));
-       ++i) {
-  }
-  return a[i] == '\0' && b[i] == '\0';
-}
-
 char *
 http_get_header_value(HTTPRequestHeaders *rhs, const char *header_name) {
-  UNUSED(rhs);
-  UNUSED(header_name);
-
-  /* headers can only be ascii */
-  for (unsigned i = 0; i < rhs->num_headers; ++i) {
-    if (ascii_strcaseequal(header_name, rhs->headers[i].name)) {
-      return rhs->headers[i].value;
-    }
-  }
-
-  return NULL;
+  return _get_header_value(rhs->headers, rhs->num_headers, header_name);
 }
 
 static void
@@ -431,6 +478,23 @@ accept_handler(event_type_t ev_type, void *ev, void *ud) {
 }
 
 static void
+_write_out_internal_server_error(http_request_handle_t rh,
+                                 event_handler_t handler, void *ud) {
+  HTTPRequestContext *rctx = rh;
+  HTTPResponseHeaders *rsp = &rctx->conn->spare.rsp;
+
+  const char msg[] = "Internal Server Error";
+
+  rsp->code = HTTP_INTERNAL_SERVER_ERROR;
+  strncpy(rsp->message, msg, sizeof(rsp->message));
+  rsp->num_headers = 1;
+  strncpy(rsp->headers[0].name, "Content-Length", sizeof(rsp->headers[0].name));
+  snprintf(rsp->headers[0].value, sizeof(rsp->headers[0].value), "%d", 0);
+
+  http_request_write_headers(rh, rsp, handler, ud);
+}
+
+static void
 client_coroutine(event_type_t ev_type, void *ev, void *ud) {
   HTTPConnection *cc = ud;
 
@@ -447,6 +511,8 @@ client_coroutine(event_type_t ev_type, void *ev, void *ud) {
       .conn = cc,
       .read_state = HTTP_REQUEST_READ_STATE_NONE,
       .write_state = HTTP_REQUEST_WRITE_STATE_NONE,
+      .bytes_read = 0,
+      .bytes_written = 0,
       .last_error_number = 0,
     };
 
@@ -467,11 +533,64 @@ client_coroutine(event_type_t ev_type, void *ev, void *ud) {
     assert(ev_type == HTTP_END_REQUEST_EVENT);
     /* we'll come back when `http_request_end` is called,
        or there is some error */
-    
-    /* TODO: or is closed early */
+
+    /* read headers if they were ignored */
+    if (!cc->rctx.last_error_number &&
+        cc->rctx.read_state == HTTP_REQUEST_READ_STATE_NONE) {
+      static HTTPRequestHeaders dirty_headers;
+      CRYIELD(cc->coropos,
+              http_request_read_headers(&cc->rctx, &dirty_headers,
+                                        client_coroutine, cc));
+      assert(ev_type == HTTP_REQUEST_READ_HEADERS_DONE_EVENT);
+    }
+
+    /* read out all data if it was ignored */
+    if (!cc->rctx.last_error_number &&
+        cc->rctx.read_state == HTTP_REQUEST_READ_STATE_READ_HEADERS) {
+      while (!cc->rctx.last_error_number &&
+             cc->rctx.bytes_read < cc->rctx.content_length) {
+        CRYIELD(cc->coropos,
+                http_request_read(&cc->rctx, cc->spare.buffer,
+                                  MIN(cc->rctx.content_length - cc->rctx.bytes_read,
+                                      sizeof(cc->spare.buffer)),
+                                  client_coroutine, cc));
+        assert(ev_type == HTTP_REQUEST_READ_DONE_EVENT);
+        /* cc->rctx.bytes_read is incremented in `http_request_read()` */
+      }
+    }
+
+    /* clean up write side of request */
+    if (!cc->rctx.last_error_number &&
+        cc->rctx.write_state == HTTP_REQUEST_WRITE_STATE_NONE) {
+      CRYIELD(cc->coropos,
+              _write_out_internal_server_error(&cc->rctx,
+                                               client_coroutine, cc));
+      assert(ev_type == HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT);
+    }
+
+    /* write out rest of garbage if request ended prematurely */
+    if (!cc->rctx.last_error_number &&
+        cc->rctx.write_state == HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS) {
+      while (!cc->rctx.last_error_number &&
+             cc->rctx.bytes_written < cc->rctx.out_content_length) {
+        /* initted to zero because static */
+        static char bytes[4096];
+        /* just writing bytes */
+        CRYIELD(cc->coropos,
+                http_request_write(&cc->rctx, bytes, sizeof(bytes),
+                                   client_coroutine, cc));
+        assert(ev_type == HTTP_REQUEST_WRITE_DONE_EVENT);
+        /* bytes_written is incremented in http_request_write */
+      }
+    }
+
     if (cc->rctx.last_error_number) {
       /* break if there was an error */
       break;
+    }
+    else {
+      cc->rctx.read_state = HTTP_REQUEST_READ_STATE_DONE;
+      cc->rctx.write_state = HTTP_REQUEST_WRITE_STATE_DONE;
     }
   }
 
@@ -631,6 +750,32 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
     err = HTTP_GENERIC_ERROR;
   }
 
+  if (err == HTTP_SUCCESS) {
+    /* okay at this point we have the headers, make sure it's something
+       we support */
+    if (!strcasecmp(state->request_headers->method, "POST") ||
+        !strcasecmp(state->request_headers->method, "PUT")) {
+      /* get the content-length header */
+      /* TODO: support 'chunked' encoding */
+      char *content_length_str = http_get_header_value(state->request_headers, "content-length");
+      if (content_length_str) {
+        long converted_content_length = strtol(content_length_str, NULL, 10);
+        if (converted_content_length >= 0 && !errno) {
+          state->rh->content_length = converted_content_length;
+        }
+        else {
+          err = HTTP_GENERIC_ERROR;
+        }
+      }
+      else {
+        err = HTTP_GENERIC_ERROR;
+      }
+    }
+    else {
+      state->rh->content_length = 0;
+    }
+  }
+
   state->rh->read_state = HTTP_REQUEST_READ_STATE_READ_HEADERS;
   /* NB: against convention and as a shortcut,
      we use HTTP_REQUEST_READ_HEADERS_DONE_EVENT,
@@ -653,4 +798,15 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
 #undef PARSEVAR
 #undef EXPECTS
 #undef EXPECT
+}
+
+void
+http_request_simple_response(http_request_handle_t rh, int code, const void *body,
+                             event_handler_t cb, void *cb_ud) {
+  UNUSED(rh);
+  UNUSED(code);
+  UNUSED(body);
+  UNUSED(cb);
+  UNUSED(cb_ud);
+  assert(false);
 }

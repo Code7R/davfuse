@@ -64,41 +64,18 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   UNUSED(read_headers_ev);
   assert(read_headers_ev->request_handle == hc->rh);
   if (read_headers_ev->err != HTTP_SUCCESS) {
-    goto error;
+    goto done;
   }
-
-  /* now read out body */
-  /* TODO: we shouldn't have to worry about content-length or chunked
-     or even reading this out for the sake of it,
-     but we do it now so the request/connection is sane
-     TODO: the server should take care of stuff like this (half-read connections)
-     but for now we assume content-length */
-  char *content_length_str = http_get_header_value(&hc->rhs, "content-length");
-  if (content_length_str) {
-    long converted_content_length = strtol(content_length_str, NULL, 10);
-    assert(converted_content_length >= 0 && !errno);
-
-    hc->content_length = converted_content_length;
-    hc->bytes_read = 0;
-    while (hc->bytes_read <= hc->content_length) {
-      CRYIELD(hc->pos,
-              http_request_read(hc->rh, hc->buf,
-                                MIN(hc->content_length - hc->bytes_read, sizeof(hc->buf)),
-                                handle_request, hc));
-      HTTPRequestReadDoneEvent *read_ev = ev;
-      assert(ev_type == HTTP_REQUEST_READ_DONE_EVENT);
-      assert(read_ev->request_handle == hc->rh);
-      if (read_ev->err != HTTP_SUCCESS) {
-        goto error;
-      }
-
-      hc->bytes_read += read_ev->nbyte;
-    }
-  }
-
-  log_debug("done reading body");
 
   static const char toret[] = "SORRY BRO";
+
+  /* != "GET", not supported */
+  if (strcasecmp(hc->rhs.method, "GET")) {
+    CRYIELD(hc->pos,
+            http_request_simple_response(hc->rh, HTTP_METHOD_NOT_ALLOWED, toret,
+                                         handle_request, hc));
+    goto done;
+  }
 
   size_t content_length;
   off_t pos;
@@ -116,7 +93,7 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
     msg = "Not Found";
     content_length = sizeof(toret) - 1;
   }
-  
+
   strncpy(hc->resp.message, msg, sizeof(hc->resp.message));
   hc->resp.num_headers = 1;
   strncpy(hc->resp.headers[0].name, "Content-Length", sizeof(hc->resp.headers[0].name));
@@ -133,7 +110,7 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   UNUSED(write_headers_ev);
   assert(write_headers_ev->request_handle == hc->rh);
   if (write_headers_ev->err != HTTP_SUCCESS) {
-    goto error;
+    goto done;
   }
 
   log_debug("Sent headers!");
@@ -162,7 +139,7 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
       else if (amt_read < 0) {
         log_error_errno("Error while read()ing file");
         /* error while reading the file */
-        goto error;
+        goto done;
       }
       else if (!amt_read) {
         /* EOF */
@@ -181,7 +158,7 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
       UNUSED(write_ev);
       assert(write_ev->request_handle == hc->rh);
       if (write_ev->err != HTTP_SUCCESS) {
-        goto error;
+        goto done;
       }
     }
   }
@@ -194,15 +171,15 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
     UNUSED(write_ev);
     assert(write_ev->request_handle == hc->rh);
     if (write_ev->err != HTTP_SUCCESS) {
-      goto error;
+      goto done;
     }
   }
 
- error:
+ done:
   if (hc->fd >= 0) {
     close(hc->fd);
   }
-  
+
   CRRETURN(hc->pos,
            (http_request_end(hc->rh),
             free(hc)));
@@ -211,7 +188,8 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
 }
 
 int main() {
-  log_level_t log_level = LOG_NOTHING;
+  /* TODO: make configurable */
+  log_level_t log_level = LOG_DEBUG;
 
   init_logging(stdout, log_level);
   log_info("Logging initted.");
