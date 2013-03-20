@@ -26,16 +26,21 @@ struct handler_context {
   FDEventLoop *loop;
   HTTPRequestHeaders rhs;
   HTTPResponseHeaders resp;
-  http_error_code_t err;
-  size_t bytes_read;
-  char buf[BUF_SIZE];
-  size_t content_length;
   http_request_handle_t rh;
-  int fd;
+  union {
+    struct {
+      coroutine_position_t pos;
+      char buf[BUF_SIZE];
+      int fd;
+    } get;
+  } sub;
 };
 
-static void
-handle_request(event_type_t ev_type, void *ev, void *ud) {
+static EVENT_HANDLER_DECLARE(handle_get_request);
+static EVENT_HANDLER_DECLARE(handle_options_request);
+
+static
+EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
   struct handler_context *hc = ud;
 
   /* because asserts might get compiled out */
@@ -46,7 +51,6 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
     *hc = (struct handler_context) {
       .pos = CORO_POS_INIT,
       .loop = ud,
-      .fd = -1,
     };
   }
 
@@ -71,45 +75,75 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
     goto done;
   }
 
-  static const char toret[] = "SORRY BRO";
-
-  /* != "GET", not supported */
-  if (strcasecmp(hc->rhs.method, "GET")) {
-    CRYIELD(hc->pos,
-	    http_request_simple_response(hc->rh,
-					 HTTP_STATUS_CODE_METHOD_NOT_ALLOWED,
-					 toret,
-					 handle_request, hc));
-    goto done;
+  /* "GET", not supported */
+  event_handler_t handler;
+  if (!strcasecmp(hc->rhs.method, "GET")) {
+    handler = handle_get_request;
   }
+  else if (!strcasecmp(hc->rhs.method, "OPTIONS")) {
+    handler = handle_options_request;
+  }
+  else {
+    handler = NULL;
+  }
+
+  bool ret = http_response_init(&hc->resp);
+  assert(ret);
+
+  if (handler) {
+    CRYIELD(hc->pos, handler(START_COROUTINE_EVENT, NULL, hc));
+  }
+  else {
+    CRYIELD(hc->pos,
+            http_request_simple_response(hc->rh,
+                                         HTTP_STATUS_CODE_METHOD_NOT_ALLOWED, "Not allowed",
+                                         handle_request, hc));
+  }
+
+ done:
+  log_info("request done!");
+
+  CRRETURN(hc->pos,
+           (http_request_end(hc->rh),
+            free(hc)));
+
+  CREND();
+}
+
+static
+EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
+  struct handler_context *hc = ud;
+
+  CRBEGIN(hc->sub.get.pos);
 
   size_t content_length;
   off_t pos;
-  const char *msg;
-  hc->fd = open(&hc->rhs.uri[1], O_RDONLY | O_NONBLOCK);
-  if (hc->fd >= 0 &&
-      (pos = lseek(hc->fd, 0, SEEK_END)) >= 0) {
-    hc->resp.code = HTTP_STATUS_CODE_OK;
+  http_status_code_t code;
+
+  static const char toret[] = "SORRY BRO";
+
+  hc->sub.get.fd = open(&hc->rhs.uri[1], O_RDONLY | O_NONBLOCK);
+  if (hc->sub.get.fd >= 0 &&
+      (pos = lseek(hc->sub.get.fd, 0, SEEK_END)) >= 0) {
+    code = HTTP_STATUS_CODE_OK;
     content_length = pos;
-    msg = "Found";
   }
   else {
     /* we couldn't open find just respond */
-    hc->resp.code = HTTP_STATUS_CODE_NOT_FOUND;
-    msg = "Not Found";
+    code = HTTP_STATUS_CODE_NOT_FOUND;
     content_length = sizeof(toret) - 1;
   }
 
-  strncpy(hc->resp.message, msg, sizeof(hc->resp.message));
-  hc->resp.num_headers = 1;
-  strncpy(hc->resp.headers[0].name, "Content-Length", sizeof(hc->resp.headers[0].name));
-  /* now write out headers */
-  snprintf(hc->resp.headers[0].value, sizeof(hc->resp.headers[0].value),
-           "%zu", content_length);
+  bool ret;
+  ret = http_response_set_code(&hc->resp, code);
+  assert(ret);
+  ret = http_response_add_header(&hc->resp,
+                                 HTTP_HEADER_CONTENT_LENGTH, "%zu", content_length);
+  assert(ret);
 
-  CRYIELD(hc->pos,
+  CRYIELD(hc->sub.get.pos,
           http_request_write_headers(hc->rh, &hc->resp,
-                                     handle_request, hc));
+                                     handle_get_request, hc));
   assert(ev_type == HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT);
   HTTPRequestWriteHeadersDoneEvent *write_headers_ev = ev;
   /* because asserts might get compiled out */
@@ -121,24 +155,24 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
 
   log_debug("Sent headers!");
 
-  if (hc->resp.code == 200) {
+  if (hc->resp.code == HTTP_STATUS_CODE_OK) {
     log_debug("Sending file %s, length: %s", &hc->rhs.uri[1], hc->resp.headers[0].value);
 
     /* seek back to beginning of file */
-    int ret = lseek(hc->fd, 0, SEEK_SET);
+    int ret = lseek(hc->sub.get.fd, 0, SEEK_SET);
     UNUSED(ret);
     assert(!ret);
     /* TODO: must be send up to the content-length we sent */
     while (true) {
-      ssize_t amt_read = read(hc->fd, hc->buf, sizeof(hc->buf));
+      ssize_t amt_read = read(hc->sub.get.fd, hc->sub.get.buf, sizeof(hc->sub.get.buf));
       if (amt_read < 0 && errno == EAGAIN) {
-        bool ret = fdevent_add_watch(hc->loop, hc->fd,
+        bool ret = fdevent_add_watch(hc->loop, hc->sub.get.fd,
                                      create_stream_events(true, false),
-                                     handle_request, hc,
+                                     handle_get_request, hc,
                                      NULL);
         UNUSED(ret);
         assert(ret);
-        CRYIELD(hc->pos, 0);
+        CRYIELD(hc->sub.get.pos, 0);
         assert(ev_type == FD_EVENT);
         continue;
       }
@@ -149,16 +183,16 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
       }
       else if (!amt_read) {
         /* EOF */
-        log_debug("EOF done reading file; %zu", sizeof(hc->buf));
+        log_debug("EOF done reading file; %zu", sizeof(hc->sub.get.buf));
         break;
       }
 
       log_debug("Sending %zd bytes", amt_read);
 
       /* now write to socket */
-      CRYIELD(hc->pos,
-              http_request_write(hc->rh, hc->buf, amt_read,
-                                 handle_request, hc));
+      CRYIELD(hc->sub.get.pos,
+              http_request_write(hc->rh, hc->sub.get.buf, amt_read,
+                                 handle_get_request, hc));
       assert(ev_type == HTTP_REQUEST_WRITE_DONE_EVENT);
       HTTPRequestWriteDoneEvent *write_ev = ev;
       UNUSED(write_ev);
@@ -169,9 +203,9 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
     }
   }
   else {
-    CRYIELD(hc->pos,
+    CRYIELD(hc->sub.get.pos,
             http_request_write(hc->rh, toret, sizeof(toret) - 1,
-                               handle_request, hc));
+                               handle_get_request, hc));
     assert(ev_type == HTTP_REQUEST_WRITE_DONE_EVENT);
     HTTPRequestWriteDoneEvent *write_ev = ev;
     UNUSED(write_ev);
@@ -182,19 +216,36 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   }
 
  done:
-  log_info("request done!");
-
-  if (hc->fd >= 0) {
-    close(hc->fd);
+  if (hc->sub.get.fd >= 0) {
+    close(hc->sub.get.fd);
   }
 
-  CRRETURN(hc->pos,
-           (http_request_end(hc->rh),
-            free(hc)));
-
-  CREND();
+  handle_request(GENERIC_EVENT, NULL, hc);
 }
 
+static
+EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
+  UNUSED(ev);
+
+  struct handler_context *hc = ud;
+  bool ret;
+
+  ret = http_response_add_header(&hc->resp, "DAV", "1");
+  assert(ret);
+
+  ret = http_response_add_header(&hc->resp, "Allow",
+                                 "GET,HEAD,PUT,DELETE,MKCOL,COPY,MOVE,PROPFIND,OPTIONS");
+  assert(ret);
+
+  ret = http_response_add_header(&hc->resp, HTTP_HEADER_CONTENT_LENGTH, "0");
+  assert(ret);
+
+  http_response_set_code(&hc->resp, HTTP_STATUS_CODE_OK);
+
+  http_request_write_headers(hc->rh, &hc->resp,
+                             handle_request, ud);
+}
 
 int main(int argc, char *argv[]) {
   port_t port;

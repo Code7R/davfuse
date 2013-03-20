@@ -1,11 +1,17 @@
 #ifndef HTTP_SERVER_H
 #define HTTP_SERVER_H
 
+#include <stdint.h>
+
 #include "c_util.h"
 #include "coroutine.h"
 #include "coroutine_io.h"
 #include "events.h"
 #include "fdevent.h"
+
+#ifndef _IS_HTTP_SERVER__C
+extern const char *HTTP_HEADER_CONTENT_LENGTH;
+#endif
 
 enum {
   IN_BUF_SIZE=4096,
@@ -236,9 +242,36 @@ http_request_end(http_request_handle_t rh);
 NON_NULL_ARGS0() const char *
 http_get_header_value(const HTTPRequestHeaders *rhs, const char *header_name);
 
-NON_NULL_ARGS3(1, 3, 4)  void
+NON_NULL_ARGS3(1, 3, 4) void
 http_request_simple_response(http_request_handle_t rh,
 			     http_status_code_t code, const char *body,
 			     event_handler_t cb, void *cb_ud);
+
+HEADER_FUNCTION NON_NULL_ARGS1(1) bool
+http_response_init(HTTPResponseHeaders *rsp) {
+  rsp->num_headers = 0;
+  return true;
+}
+
+NON_NULL_ARGS3(1, 2, 3) bool
+http_response_add_header(HTTPResponseHeaders *rsp, const char *name,
+                         const char *value_fmt, ...);
+
+HEADER_FUNCTION NON_NULL_ARGS1(1) bool
+http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
+  const char *msg;
+  rsp->code = code;
+  switch (code) {
+  case HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR: msg = "Internal Server Error"; break;
+  case HTTP_STATUS_CODE_OK: msg = "OK"; break;
+  case HTTP_STATUS_CODE_NOT_FOUND: msg = "Not Found"; break;
+  case HTTP_STATUS_CODE_METHOD_NOT_ALLOWED: msg = "Method Not Allowed"; break;
+  default: msg = "Dunno"; break;
+  }
+
+  strlcpy(rsp->message, msg, sizeof(rsp->message));
+
+  return true;
+}
 
 #endif /* HTTP_SERVER_H */

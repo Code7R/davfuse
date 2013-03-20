@@ -4,7 +4,9 @@
 
 #include <assert.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,15 +16,18 @@
 #include "events.h"
 #include "fdevent.h"
 #include "fd_utils.h"
-#include "http_server.h"
 #include "logging.h"
 #include "util.h"
+
+#define _IS_HTTP_SERVER_C
+#include "http_server.h"
+#undef _IS_HTTP_SERVER_C
 
 enum {
   LISTEN_BACKLOG=5,
 };
 
-static const char *CONTENT_LENGTH_HEADER = "Content-Length";
+const char *HTTP_HEADER_CONTENT_LENGTH = "Content-Length";
 
 /* static forward decls */
 static void
@@ -302,7 +307,7 @@ http_request_write_headers(http_request_handle_t rh,
   {
     const char *content_length_str = _get_header_value(response_headers->headers,
                                                        response_headers->num_headers,
-                                                       CONTENT_LENGTH_HEADER);
+                                                       HTTP_HEADER_CONTENT_LENGTH);
     if (!content_length_str) {
       goto error;
     }
@@ -493,7 +498,7 @@ _write_out_internal_server_error(http_request_handle_t rh,
   rsp->code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
   strncpy(rsp->message, msg, sizeof(rsp->message));
   rsp->num_headers = 1;
-  strncpy(rsp->headers[0].name, CONTENT_LENGTH_HEADER, sizeof(rsp->headers[0].name));
+  strncpy(rsp->headers[0].name, HTTP_HEADER_CONTENT_LENGTH, sizeof(rsp->headers[0].name));
   snprintf(rsp->headers[0].value, sizeof(rsp->headers[0].value), "%d", 0);
 
   http_request_write_headers(rh, rsp, handler, ud);
@@ -766,7 +771,7 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
         !strcasecmp(state->request_headers->method, "PUT")) {
       /* get the content-length header */
       /* TODO: support 'chunked' encoding */
-      const char *content_length_str = http_get_header_value(state->request_headers, CONTENT_LENGTH_HEADER);
+      const char *content_length_str = http_get_header_value(state->request_headers, HTTP_HEADER_CONTENT_LENGTH);
       if (content_length_str) {
         long converted_content_length = strtol(content_length_str, NULL, 10);
         if (converted_content_length >= 0 && !errno) {
@@ -809,6 +814,31 @@ c_get_request(event_type_t ev_type, void *ev, void *ud) {
 #undef EXPECT
 }
 
+NON_NULL_ARGS0() bool
+http_response_add_header(HTTPResponseHeaders *rsp,
+                         const char *name, const char *value_fmt, ...) {
+  if (NELEMS(rsp->headers) == rsp->num_headers) {
+    return false;
+  }
+
+  // hard code error check, fix later if we have to be more defensive
+  assert(strlen(name) <= (sizeof(rsp->headers[rsp->num_headers].name) - 1));
+  strlcpy(rsp->headers[rsp->num_headers].name, name, sizeof(rsp->headers[rsp->num_headers].name));
+
+  va_list ap;
+  va_start(ap, value_fmt);
+  int best_string_size = vsnprintf(rsp->headers[rsp->num_headers].value,
+                                   sizeof(rsp->headers[rsp->num_headers].value),
+                                   value_fmt, ap);
+  assert(best_string_size >= 0);
+  assert((size_t) best_string_size <= (sizeof(rsp->headers[rsp->num_headers].value) - 1));
+  va_end(ap);
+
+  rsp->num_headers += 1;
+
+  return true;
+}
+
 NON_NULL_ARGS3(1, 3, 4) void
 http_request_simple_response(http_request_handle_t rh,
 			     http_status_code_t code, const char *body,
@@ -821,3 +851,4 @@ http_request_simple_response(http_request_handle_t rh,
   UNUSED(cb_ud);
   assert(false);
 }
+

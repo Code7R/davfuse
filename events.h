@@ -3,8 +3,9 @@
 
 /* all events types go here,
    the benefits of writing all your own code */
-   
+
 typedef enum {
+  GENERIC_EVENT,
   HTTP_NEW_REQUEST_EVENT,
   HTTP_REQUEST_READ_HEADERS_DONE_EVENT,
   HTTP_REQUEST_READ_DONE_EVENT,
@@ -20,6 +21,9 @@ typedef enum {
   C_READ_DONE_EVENT,
 } event_type_t;
 
-typedef void (*event_handler_t)(event_type_t, void *, void *);
+#define EVENT_HANDLER_DECLARE(handler) void handler(event_type_t, void *, void *)
+#define EVENT_HANDLER_DEFINE(handler, a, b, c) void handler(event_type_t a, void *b, void *c)
+
+typedef EVENT_HANDLER_DECLARE((*event_handler_t));
 
 #endif /* EVENTS_H */
