@@ -29,6 +29,7 @@ typedef struct _fdevent_link {
 } FDEventLink;
 
 typedef FDEventLink *fd_event_watch_key_t;
+#define FD_EVENT_INVALID_WATCH_KEY NULL
 
 typedef struct _fd_event_loop {
   FDEventLink *ll;

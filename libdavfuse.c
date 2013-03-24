@@ -159,6 +159,8 @@ request_coroutine(HandlerContext *hc) {
         continue;
       }
       else if (ret != sizeof(cc)) {
+        /* this could be an assert, but i feel weird assert()ing on
+           a result of an external interface */
         if (ret < 0) {
           log_debug("FD %d Error writing to out-pipe: %s", cc->f.fd,
                     strerror(errno));
@@ -172,6 +174,7 @@ request_coroutine(HandlerContext *hc) {
       break;
     }
 
+    /* wait for response from other threads */
     while (!cc->response.code) {
       CRYIELD(cc->coropos);
     }

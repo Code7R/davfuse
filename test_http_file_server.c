@@ -24,6 +24,7 @@ enum {
 
 struct handler_context {
   UTHR_CTX_BASE;
+  HTTPServer *server;
   FDEventLoop *loop;
   HTTPRequestHeaders rhs;
   HTTPResponseHeaders resp;
@@ -241,6 +242,7 @@ EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
   HTTPNewRequestEvent *new_request_ev = ev;
 
   UTHR_CALL2(request_proc, struct handler_context,
+             .server = new_request_ev->server,
              .rh = new_request_ev->request_handle,
              .loop = ud);
 }

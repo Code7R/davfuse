@@ -31,6 +31,7 @@ fdevent_add_watch(FDEventLoop *loop,
 
   ew = malloc(sizeof(*ew));
   if (!ew) {
+    *key = FD_EVENT_INVALID_WATCH_KEY;
     return false;
   }
 
@@ -89,7 +90,7 @@ fdevent_main_loop(FDEventLoop *loop) {
 
   while (true) {
     fd_set readfds, writefds;
-    int nfds = 0;
+    int nfds = -1;
     FDEventLink *ll = loop->ll;
 
     log_info("Looping...");
@@ -113,6 +114,11 @@ fdevent_main_loop(FDEventLoop *loop) {
       }
 
       ll = ll->next;
+    }
+
+    /* if there is nothing to select for, then stop the main loop */
+    if (nfds < 0) {
+      return true;
     }
 
     while (select(nfds + 1, &readfds, &writefds, NULL, NULL) < 0) {

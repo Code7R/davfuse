@@ -84,17 +84,24 @@ http_server_start(HTTPServer *http,
   return true;
 
  error:
-  memset(http, 0, sizeof(*http));
   close(fd);
+  http->fd = -1;
+  http->watch_key = FD_EVENT_INVALID_WATCH_KEY;
   return false;
 }
 
 bool
 http_server_stop(HTTPServer *http) {
-  /* TODO: implement */
-  assert(false);
-  UNUSED(http);
-  return false;
+  if (http->watch_key != FD_EVENT_INVALID_WATCH_KEY) {
+    bool ret = fdevent_remove_watch(http->loop, http->watch_key);
+    assert(ret);
+    http->watch_key = FD_EVENT_INVALID_WATCH_KEY;
+  }
+  if (http->fd >= 0) {
+    close(http->fd);
+    http->fd = -1;
+  }
+  return true;
 }
 
 void
@@ -417,6 +424,15 @@ EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
 
   log_debug("New client! %d", client_fd);
 
+  /* wait for next client */
+  /* NB: need to do this before calling the client handler because
+     it could attempt to stop the http server */
+  bool ret = fdevent_add_watch(http->loop, http->fd,
+                               create_stream_events(true, false),
+                               accept_handler, http, &http->watch_key);
+  UNUSED(ret);
+  assert(ret);
+
   if (set_non_blocking(client_fd) < 0) {
     log_error("Couldn't make client fd non-blocking: %s", strerror(errno));
     goto error;
@@ -431,13 +447,6 @@ EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
     .server = http,
   };
   UTHR_CALL(client_coroutine, HTTPConnection, ctx);
-
-  /* wait for next client */
-  bool ret = fdevent_add_watch(http->loop, http->fd,
-                               create_stream_events(true, false),
-                               accept_handler, http, NULL);
-  UNUSED(ret);
-  assert(ret);
 
   return;
 
@@ -487,6 +496,7 @@ UTHR_DEFINE(client_coroutine) {
     /* create request event, we can do this on the stack
        because the handler shouldn't use this after */
     HTTPNewRequestEvent new_request_ev = {
+      .server = cc->server,
       .request_handle = &cc->rctx,
     };
     UTHR_YIELD(cc,

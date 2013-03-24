@@ -172,6 +172,7 @@ typedef struct {
 
 typedef struct {
   http_request_handle_t request_handle;
+  HTTPServer *server;
 } HTTPNewRequestEvent;
 
 typedef _SimpleRequestActionDoneEvent HTTPRequestReadHeadersDoneEvent;
