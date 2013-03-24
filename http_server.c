@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "c_util.h"
 #include "coroutine.h"
@@ -170,7 +171,6 @@ http_request_read(http_request_handle_t rh,
 static
 UTHR_DEFINE(_http_request_write_headers_coroutine) {
   UTHR_HEADER(WriteHeadersState, whs);
-  whs->response_line = NULL;
 
   int myerrno = 0;
   whs->request_context->write_state = HTTP_REQUEST_WRITE_STATE_WRITING_HEADERS;
@@ -196,10 +196,11 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
 
   /* output response code */
   /* TODO: consider not using malloc/asprintf here */
-  int ret = asprintf(&whs->response_line,
-                     "HTTP/1.1 %d %s\r\n",
-                     whs->response_headers->code,
-                     whs->response_headers->message);
+  int ret = snprintf(whs->response_line,
+		     sizeof(whs->response_line),
+		     "HTTP/1.1 %d %s\r\n",
+		     whs->response_headers->code,
+		     whs->response_headers->message);
   if (ret < 0) {
     myerrno = ENOMEM;
     goto done;
@@ -219,10 +220,6 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
   EMIT("\r\n");
 
  done:
-  if (whs->response_line) {
-    free(whs->response_line);
-  }
-
   whs->request_context->write_state = HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS;
   HTTPRequestWriteHeadersDoneEvent write_headers_ev = {
     .request_handle = whs->request_context,
@@ -766,9 +763,11 @@ http_response_add_header(HTTPResponseHeaders *rsp,
     return false;
   }
 
+  size_t len = strlen(name);
   // hard code error check, fix later if we have to be more defensive
-  assert(strlen(name) <= (sizeof(rsp->headers[rsp->num_headers].name) - 1));
-  strlcpy(rsp->headers[rsp->num_headers].name, name, sizeof(rsp->headers[rsp->num_headers].name));
+  assert(len <= (sizeof(rsp->headers[rsp->num_headers].name) - 1));
+  memcpy(rsp->headers[rsp->num_headers].name, name, len);
+  rsp->headers[rsp->num_headers].name[len] = '\0';
 
   va_list ap;
   va_start(ap, value_fmt);

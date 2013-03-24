@@ -25,6 +25,7 @@ enum {
   MAX_NUM_HEADERS=16,
   MAX_MESSAGE_SIZE=64,
   OUT_BUF_SIZE=4096,
+  MAX_RESPONSE_LINE_SIZE=128,
 };
 
 /* forward decl */
@@ -102,8 +103,7 @@ typedef struct {
   void *cb_ud;
   /* state */
   size_t header_idx;
-  char *response_line;
-  size_t response_line_size;
+  char response_line[MAX_RESPONSE_LINE_SIZE];
 } WriteHeadersState;
 
 typedef struct {
@@ -240,17 +240,25 @@ http_response_add_header(HTTPResponseHeaders *rsp, const char *name,
 
 HEADER_FUNCTION NON_NULL_ARGS1(1) bool
 http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
-  const char *msg;
   rsp->code = code;
+  
+  size_t msg_size;
+  const char *msg;
+#define SET_MSG(msg_)				\
+  do {						\
+    msg_size = sizeof(msg_);			\
+    msg = msg_;					\
+  }						\
+  while (false)
   switch (code) {
-  case HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR: msg = "Internal Server Error"; break;
-  case HTTP_STATUS_CODE_OK: msg = "OK"; break;
-  case HTTP_STATUS_CODE_NOT_FOUND: msg = "Not Found"; break;
-  case HTTP_STATUS_CODE_METHOD_NOT_ALLOWED: msg = "Method Not Allowed"; break;
+  case HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR: SET_MSG("Internal Server Error"); break;
+  case HTTP_STATUS_CODE_OK: SET_MSG("OK"); break;
+  case HTTP_STATUS_CODE_NOT_FOUND: SET_MSG("Not Found"); break;
+  case HTTP_STATUS_CODE_METHOD_NOT_ALLOWED: SET_MSG("Method Not Allowed"); break;
   default: return false; break;
   }
 
-  strlcpy(rsp->message, msg, sizeof(rsp->message));
+  memcpy(rsp->message, msg, MIN(sizeof(rsp->message), msg_size));
 
   return true;
 }
