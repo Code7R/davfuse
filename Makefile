@@ -72,7 +72,7 @@ test_http_file_server_: ${TEST_HTTP_FILE_SERVER_OBJ}
 	@${CC} -o $@ $^ ${LDFLAGS} 
 
 test_http_file_server: options test_http_file_server_
-	@mv test_http_file_server_ $@
+	cp test_http_file_server_ $@
 
 libfuse.so.2: ${LIBFUSE_OBJ}
 	@echo LD -shared --version-script fuse_versionscript -soname $@ $^
