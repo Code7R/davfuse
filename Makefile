@@ -6,26 +6,24 @@ MINOR_VERSION = 1
 VERSION = ${MAJOR_VERSION}.${MINOR_VERSION}
 
 CPPFLAGS += -DVERSION=\"${VERSION}\"
-
-include config.mk
-
 CFLAGS += `xml2-config --cflags`
 LDFLAGS += `xml2-config --libs`
+
+# Platform dependent configuation
+include config.mk
 
 FDEVENT_MODULE = fdevent_${FDEVENT_SOURCE}
 MAKEFILES = config.mk Makefile
 HTTP_SERVER_SRC = ${FDEVENT_MODULE}.c http_server.c logging.c fd_utils.c coroutine_io.c util.c
 HTTP_SERVER_OBJ = ${HTTP_SERVER_SRC:.c=.o}
-ALL_SRC = test_http_file_server.c test_http_server.c libdavfuse.c ${HTTP_SERVER_SRC}
+ALL_SRC = posix_fs_webdav_server.c test_http_server.c libdavfuse.c ${HTTP_SERVER_SRC}
 ALL_OBJ = ${ALL_SRC:.c=.o}
-TEST_HTTP_FILE_SERVER_OBJ = test_http_file_server.o ${HTTP_SERVER_OBJ}
+POSIX_FS_WEBDAV_SERVER_OBJ = posix_fs_webdav_server.o ${HTTP_SERVER_OBJ}
 TEST_HTTP_SERVER_OBJ = test_http_server.o ${HTTP_SERVER_OBJ}
 LIBFUSE_OBJ = libdavfuse.o ${HTTP_SERVER_OBJ}
 
-.PHONY: all
-all: options davfuse libfuse.so.2 test_http_server test_http_file_server
+all: options davfuse libfuse.so.2 test_http_server posix_fs_webdav_server
 
-.PHONY: options
 options:
 	@echo "build options:"
 	@echo "CFLAGS   = ${CFLAGS}"
@@ -65,9 +63,9 @@ ${ALL_OBJ}: ${MAKEFILES}
 
 test_http_server: ${TEST_HTTP_SERVER_OBJ}
 	@echo CC -o $@ $^
-	@${CC} -o $@ $^
+	@${CC} -o $@ $^ ${LDFLAGS}
 
-test_http_file_server_: ${TEST_HTTP_FILE_SERVER_OBJ}
+posix_fs_webdav_server: ${POSIX_FS_WEBDAV_SERVER_OBJ}
 	@echo CC -o $@ $^
 	@${CC} -o $@ $^ ${LDFLAGS} 
 
@@ -85,8 +83,8 @@ MAKEDEPEND = mkdir -p ${DEPDIR}; gcc -M ${CFLAGS} -o ${df}.d $<
 
 -include $(ALL_SRC:%.c=$(DEPDIR)/%.P)
 
-.PHONY: clean
 clean:
 	-rm -f config.h fdevent.h davfuse ${ALL_OBJ} test_http_server libfuse.so.2
 	-rm -rf ${DEPDIR}
 
+.PHONY: all options clean
