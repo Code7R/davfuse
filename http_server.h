@@ -242,7 +242,7 @@ http_response_add_header(HTTPResponseHeaders *rsp, const char *name,
 HEADER_FUNCTION NON_NULL_ARGS1(1) bool
 http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
   rsp->code = code;
-  
+
   size_t msg_size;
   const char *msg;
 #define SET_MSG(msg_)				\

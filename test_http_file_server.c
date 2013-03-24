@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <strings.h>
 
+#include <libxml/parser.h>
+#include <libxml/tree.h>
+
 #include "events.h"
 #include "fdevent.h"
 #include "fd_utils.h"
@@ -35,12 +38,19 @@ struct handler_context {
       char buf[BUF_SIZE];
       int fd;
     } get;
+    struct {
+      coroutine_position_t pos;
+      char scratch_buf[BUF_SIZE];
+      char *buf;
+      size_t buf_used, buf_size;
+    } propfind;
   } sub;
 };
 
 static EVENT_HANDLER_DECLARE(handle_request);
 static EVENT_HANDLER_DECLARE(handle_get_request);
 static EVENT_HANDLER_DECLARE(handle_options_request);
+static EVENT_HANDLER_DECLARE(handle_propfind_request);
 
 static
 UTHR_DEFINE(request_proc) {
@@ -68,6 +78,9 @@ UTHR_DEFINE(request_proc) {
   }
   else if (!strcasecmp(hc->rhs.method, "OPTIONS")) {
     handler = handle_options_request;
+  }
+  else if (!strcasecmp(hc->rhs.method, "PROPFIND")) {
+    handler = handle_propfind_request;
   }
   else {
     handler = NULL;
@@ -234,6 +247,65 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
 
   http_request_write_headers(hc->rh, &hc->resp,
                              request_proc, ud);
+}
+
+static
+EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
+  UNUSED(ev);
+
+  struct handler_context *hc = ud;
+
+  CRBEGIN(hc->sub.propfind.pos);
+
+  hc->sub.propfind.buf = NULL;
+
+  /* read all posted data */
+  /* TODO: abstract this out */
+  while (true) {
+    CRYIELD(hc->sub.propfind.pos,
+            http_request_read(hc->rh,
+                              hc->sub.propfind.scratch_buf,
+                              sizeof(hc->sub.propfind.scratch_buf),
+                              handle_propfind_request, ud));
+    HTTPRequestReadDoneEvent *read_done_ev = ev;
+    if (!read_done_ev->nbyte) {
+      /* EOF */
+      break;
+    }
+
+    if (hc->sub.propfind.buf_size - hc->sub.propfind.buf_used < read_done_ev->nbyte) {
+      size_t new_buf_size = MAX(1, hc->sub.propfind.buf_size);
+      while (new_buf_size - hc->sub.propfind.buf_used < read_done_ev->nbyte) {
+        new_buf_size *= 2;
+      }
+
+      hc->sub.propfind.buf = realloc(hc->sub.propfind.buf, new_buf_size);
+      if (!hc->sub.propfind.buf) {
+        goto done;
+      }
+
+      hc->sub.propfind.buf_size = new_buf_size;
+    }
+
+    /* defensive coding, make sure we're still handling the same event */
+    assert(ev_type == HTTP_REQUEST_READ_DONE_EVENT);
+    memcpy(hc->sub.propfind.buf + hc->sub.propfind.buf_used,
+           hc->sub.propfind.scratch_buf, read_done_ev->nbyte);
+    hc->sub.propfind.buf_used += read_done_ev->nbyte;
+  }
+
+  /* now parse the xml */
+  xmlDocPtr doc = xmlReadMemory(hc->sub.propfind.buf, hc->sub.propfind.buf_used,
+                                "noname.xml", NULL, 0);
+  xmlDocDump(stdout, doc);
+  xmlFreeDoc(doc);
+
+  /* premature end, for now */
+ done:
+  CRRETURN(hc->sub.propfind.pos, request_proc(GENERIC_EVENT, NULL, hc));
+
+  CREND();
 }
 
 static

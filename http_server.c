@@ -167,7 +167,7 @@ http_request_read(http_request_handle_t rh,
   };
 
   assert(rctx->content_length >= rctx->bytes_read);
-  nbyte = MIN(nbyte, rctx->out_content_length - rctx->bytes_read);
+  nbyte = MIN(nbyte, rctx->content_length - rctx->bytes_read);
 
   return c_read(rctx->conn->server->loop, &rctx->conn->f,
                 buf, nbyte,
@@ -296,7 +296,7 @@ http_request_write_headers(http_request_handle_t rh,
     }
 
     long content_length = strtol(content_length_str, NULL, 10);
-    if ((content_length == 0 && errno) ||
+    if ((content_length == 0 && errno == EINVAL) ||
         content_length < 0) {
       goto error;
     }
@@ -307,6 +307,7 @@ http_request_write_headers(http_request_handle_t rh,
   if (false) {
     HTTPRequestWriteHeadersDoneEvent write_headers_ev;
   error:
+    rctx->last_error_number = 1;
     write_headers_ev = (HTTPRequestWriteHeadersDoneEvent) {
       .request_handle = rh,
       /* TODO set correct error */
@@ -462,14 +463,8 @@ _write_out_internal_server_error(http_request_handle_t rh,
   HTTPRequestContext *rctx = rh;
   HTTPResponseHeaders *rsp = &rctx->conn->spare.rsp;
 
-  const char msg[] = "Internal Server Error";
-
-  rsp->code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-  strncpy(rsp->message, msg, sizeof(rsp->message));
-  rsp->num_headers = 1;
-  strncpy(rsp->headers[0].name, HTTP_HEADER_CONTENT_LENGTH, sizeof(rsp->headers[0].name));
-  snprintf(rsp->headers[0].value, sizeof(rsp->headers[0].value), "%d", 0);
-
+  http_response_set_code(rsp, HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR);
+  http_response_add_header(rsp, HTTP_HEADER_CONTENT_LENGTH, "%d", 0);
   http_request_write_headers(rh, rsp, handler, ud);
 }
 
@@ -528,6 +523,12 @@ UTHR_DEFINE(client_coroutine) {
                                          sizeof(cc->spare.buffer)),
                                      client_coroutine, cc));
         assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_READ_DONE_EVENT);
+        HTTPRequestReadDoneEvent *read_done_ev = UTHR_EVENT();
+        if (read_done_ev->nbyte == 0) {
+          /* EOF */
+          break;
+        }
+
         /* cc->rctx.bytes_read is incremented in `http_request_read()` */
       }
     }
@@ -649,9 +650,9 @@ UTHR_DEFINE(c_get_request) {
   do {                                                          \
     long _val;                                                  \
     PARSEVAR(state->tmpbuf, match_digit);                       \
-    errno = 0;                                                  \
     _val = strtol(state->tmpbuf, NULL, 10);                     \
-    if (errno || _val > INT_MAX || _val < INT_MIN) {            \
+    if ((_val == 0 && errno == EINVAL) ||                       \
+        _val > INT_MAX || _val < INT_MIN) {                     \
       log_error("Didn't parse an integer: %s", state->tmpbuf);  \
       goto error;                                               \
     }                                                           \
@@ -719,14 +720,17 @@ UTHR_DEFINE(c_get_request) {
   if (err == HTTP_SUCCESS) {
     /* okay at this point we have the headers, make sure it's something
        we support */
-    if (!strcasecmp(state->request_headers->method, "POST") ||
-        !strcasecmp(state->request_headers->method, "PUT")) {
+    /* TODO: support 'chunked' encoding */
+    if (http_get_header_value(state->request_headers, "transfer-encoding")) {
+      err = HTTP_GENERIC_ERROR;
+    }
+    else {
       /* get the content-length header */
-      /* TODO: support 'chunked' encoding */
       const char *content_length_str = http_get_header_value(state->request_headers, HTTP_HEADER_CONTENT_LENGTH);
       if (content_length_str) {
         long converted_content_length = strtol(content_length_str, NULL, 10);
-        if (converted_content_length >= 0 && !errno) {
+        if (converted_content_length > 0 ||
+            (converted_content_length == 0 && errno != EINVAL)) {
           state->rh->content_length = converted_content_length;
         }
         else {
@@ -734,11 +738,9 @@ UTHR_DEFINE(c_get_request) {
         }
       }
       else {
-        err = HTTP_GENERIC_ERROR;
+        /* if there is no data header, treat it as zero-length body */
+        state->rh->content_length = 0;
       }
-    }
-    else {
-      state->rh->content_length = 0;
     }
   }
 

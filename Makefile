@@ -1,7 +1,16 @@
 # davfuse - run fuse file systems as webdav servers
 # See LICENSE file for copyright and license details.
 
+MAJOR_VERSION = 0
+MINOR_VERSION = 1
+VERSION = ${MAJOR_VERSION}.${MINOR_VERSION}
+
+CPPFLAGS += -DVERSION=\"${VERSION}\"
+
 include config.mk
+
+CFLAGS += `xml2-config --cflags`
+LDFLAGS += `xml2-config --libs`
 
 FDEVENT_MODULE = fdevent_${FDEVENT_SOURCE}
 MAKEFILES = config.mk Makefile
@@ -13,13 +22,16 @@ TEST_HTTP_FILE_SERVER_OBJ = test_http_file_server.o ${HTTP_SERVER_OBJ}
 TEST_HTTP_SERVER_OBJ = test_http_server.o ${HTTP_SERVER_OBJ}
 LIBFUSE_OBJ = libdavfuse.o ${HTTP_SERVER_OBJ}
 
+.PHONY: all
 all: options davfuse libfuse.so.2 test_http_server test_http_file_server
 
+.PHONY: options
 options:
-	@echo "davfuse build options:"
+	@echo "build options:"
 	@echo "CFLAGS   = ${CFLAGS}"
 	@echo "LDFLAGS  = ${LDFLAGS}"
 	@echo "CC       = ${CC}"
+	@echo "LD       = ${LD}"
 
 config.h: config.def.h ${MAKEFILES}
 	@echo -n Generating config.h...
@@ -52,12 +64,15 @@ davfuse: generate-davfuse.sh ${MAKEFILES}
 ${ALL_OBJ}: ${MAKEFILES}
 
 test_http_server: ${TEST_HTTP_SERVER_OBJ}
-	@echo LD -o $@ $^
+	@echo CC -o $@ $^
 	@${CC} -o $@ $^
 
-test_http_file_server: ${TEST_HTTP_FILE_SERVER_OBJ}
-	@echo LD -o $@ $^
-	@${CC} -o $@ $^
+test_http_file_server_: ${TEST_HTTP_FILE_SERVER_OBJ}
+	@echo CC -o $@ $^
+	@${CC} -o $@ $^ ${LDFLAGS} 
+
+test_http_file_server: options test_http_file_server_
+	@mv test_http_file_server_ $@
 
 libfuse.so.2: ${LIBFUSE_OBJ}
 	@echo LD -shared --version-script fuse_versionscript -soname $@ $^
@@ -66,10 +81,11 @@ libfuse.so.2: ${LIBFUSE_OBJ}
 # for dependency auto generateion
 DEPDIR = .deps
 df = ${DEPDIR}/${*F}
-MAKEDEPEND = mkdir -p ${DEPDIR}; gcc -M ${CPPFLAGS} -o ${df}.d $<
+MAKEDEPEND = mkdir -p ${DEPDIR}; gcc -M ${CFLAGS} -o ${df}.d $<
 
 -include $(ALL_SRC:%.c=$(DEPDIR)/%.P)
 
+.PHONY: clean
 clean:
 	-rm -f config.h fdevent.h davfuse ${ALL_OBJ} test_http_server libfuse.so.2
 	-rm -rf ${DEPDIR}

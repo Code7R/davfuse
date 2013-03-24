@@ -1,7 +1,3 @@
-MAJOR_VERSION = 0
-MINOR_VERSION = 1
-VERSION = ${MAJOR_VERSION}.${MINOR_VERSION}
-
 # Customize below to fit your system
 #FDEVENT_SOURCE = epoll
 FDEVENT_SOURCE = select
@@ -16,10 +12,9 @@ INCS = -I. -I/usr/include
 LIBS = -L/usr/lib -lc
 
 # flags
-CPPFLAGS = -DVERSION=\"${VERSION}\"
 #CFLAGS += -std=c99 -Wall -Wextra -Werror -DNDEBUG -O3 ${INCS} ${CPPFLAGS}
 CFLAGS += -std=c99 -Wall -Wextra -Werror -g ${INCS} ${CPPFLAGS}
-LDFLAGS += -s ${LIBS}
+LDFLAGS += ${LIBS}
 
 # compiler and linker
 CC ?= cc
