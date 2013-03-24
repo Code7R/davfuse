@@ -10,6 +10,7 @@
 #include "coroutine_io.h"
 #include "events.h"
 #include "logging.h"
+#include "uthread.h"
 
 int
 fbgetc(FDBuffer *f) {
@@ -25,29 +26,42 @@ fbpeek(FDBuffer *f) {
   return ret;
 }
 
-void
-c_fbgetc(event_type_t ev_type, void *ev, void *ud) {
-  GetCState *state = ud;
-  UNUSED(ev_type);
-  UNUSED(ev);
-  CRBEGIN(state->coropos);
-  assert(ev_type == START_COROUTINE_EVENT);
-  C_FBGETC(state->coropos, state->loop, state->f, state->out, c_fbgetc, state);
-  CRRETURN(state->coropos, state->cb(C_FBGETC_DONE_EVENT, NULL, state->ud));
-  CREND();
+static
+UTHR_DEFINE(_c_fbgetc) {
+  UTHR_HEADER(GetCState, state);
+  C_FBGETC(state, state->loop, state->f, state->out, _c_fbgetc, state);
+  UTHR_RETURN(state, state->cb(C_FBGETC_DONE_EVENT, NULL, state->ud));
+  UTHR_FOOTER();
 }
 
 void
-c_fbpeek(event_type_t ev_type, void *ev, void *ud) {
-  /* set before CRBEGIN */
-  PeekState *state = ud;
-  UNUSED(ev_type);
-  UNUSED(ev);
-  CRBEGIN(state->coropos);
-  assert(ev_type == START_COROUTINE_EVENT);
-  C_FBPEEK(state->coropos, state->loop, state->f, state->out, c_fbpeek, state);
-  CRRETURN(state->coropos, state->cb(C_FBPEEK_DONE_EVENT, NULL, state->ud));
-  CREND();
+c_fbgetc(FDEventLoop *loop, FDBuffer *f, int *out,
+         event_handler_t handler, void *ud) {
+  UTHR_CALL5(_c_fbgetc, GetCState,
+             .loop = loop,
+             .f = f,
+             .out = out,
+             .cb = handler,
+             .ud = ud);
+}
+
+static
+UTHR_DEFINE(_c_fbpeek) {
+  UTHR_HEADER(PeekState, state);
+  C_FBPEEK(state, state->loop, state->f, state->out, _c_fbpeek, state);
+  UTHR_RETURN(state, state->cb(C_FBPEEK_DONE_EVENT, NULL, state->ud));
+  UTHR_FOOTER();
+}
+
+void
+c_fbpeek(FDEventLoop *loop, FDBuffer *f, int *out,
+         event_handler_t cb, void *ud) {
+  UTHR_CALL5(_c_fbpeek, PeekState,
+             .loop = loop,
+             .f = f,
+             .out = out,
+             .cb = cb,
+             .ud = ud);
 }
 
 void
@@ -56,21 +70,16 @@ fbungetc(FDBuffer *f, int c) {
   *f->buf_start = c;
 }
 
-void
-c_getwhile(event_type_t ev_type, void *ev, void *ud) {
-  /* set before CRBEGIN */
-  GetWhileState *state = ud;
-  UNUSED(ev_type);
-  UNUSED(ev);
-  CRBEGIN(state->coropos);
-  assert(ev_type == START_COROUTINE_EVENT);
+static
+UTHR_DEFINE(_c_getwhile) {
+  UTHR_HEADER(GetWhileState, state);
   state->buf_end = state->buf;
 
   /* find terminator in existing buffer */
   do {
     /* we only call fbgetc in one place here, so we force an inline */
-    C_FBGETC(state->coropos, state->loop, state->f, &state->peeked_char,
-	     c_getwhile, state);
+    C_FBGETC(state, state->loop, state->f, &state->peeked_char,
+	     _c_getwhile, state);
     if (state->peeked_char == EOF) {
       log_error_errno("Error while expecting a character");
       break;
@@ -91,20 +100,31 @@ c_getwhile(event_type_t ev_type, void *ev, void *ud) {
   /* TODO: move this to event finish, also errors */
   *state->out = state->buf_end - state->buf;
 
-  CRRETURN(state->coropos, state->cb(C_GETWHILE_DONE_EVENT, NULL, state->ud));
+  UTHR_RETURN(state, state->cb(C_GETWHILE_DONE_EVENT, NULL, state->ud));
 
-  CREND();
+  UTHR_FOOTER();
 }
 
 void
-c_read(event_type_t ev_type, void *ev, void *ud) {
-  CReadState *state = ud;
-  int myerrno;
-  CRBEGIN(state->coropos);
+c_getwhile(FDEventLoop *loop, FDBuffer *f,
+           char *buf, size_t buf_size,
+           match_function_t match_fn, size_t *parsed,
+           event_handler_t cb, void *ud) {
+  UTHR_CALL8(_c_getwhile, GetWhileState,
+             .loop = loop,
+             .f = f,
+             .buf = buf,
+             .buf_size = buf_size,
+             .match_fn = match_fn,
+             .out = parsed,
+             .cb = cb,
+             .ud = ud);
+}
 
-  assert(ev_type == START_COROUTINE_EVENT);
-  UNUSED(ev_type);
-  UNUSED(ev);
+static
+UTHR_DEFINE(_c_read) {
+  UTHR_HEADER(CReadState, state);
+  int myerrno;
 
   state->amt_read = 0;
   myerrno = 0;
@@ -112,7 +132,7 @@ c_read(event_type_t ev_type, void *ev, void *ud) {
     /* fill fdbuffer if we need to */
     if (state->f->buf_end == state->f->buf_start) {
       ssize_t ret;
-      _FILL_BUF(state->coropos, state->loop, state->f, &ret, c_read, state);
+      _FILL_BUF(state, state->loop, state->f, &ret, _c_read, state);
       if (ret <= 0) {
         myerrno = (ret < 0) ? errno : 0;
         break;
@@ -120,34 +140,38 @@ c_read(event_type_t ev_type, void *ev, void *ud) {
       myerrno = 0;
     }
 
-    /* copy in buffer from fdbuff */
+    /* copy in buffer from fdbuffer */
     assert(state->f->buf_end >= state->f->buf_start);
     assert(state->nbyte > state->amt_read);
-    size_t to_copy = read_from_fd_buffer(state->f, state->buf + state->amt_read,
-                                         state->nbyte - state->amt_read);
-    state->amt_read += to_copy;
+    state->amt_read += read_from_fd_buffer(state->f, state->buf + state->amt_read,
+                                           state->nbyte - state->amt_read);
   }
 
   CReadDoneEvent read_done_ev = {
     .error_number = myerrno,
     .nbyte = state->amt_read,
   };
-  CRRETURN(state->coropos, state->cb(C_READ_DONE_EVENT, &read_done_ev, state->ud));
+  UTHR_RETURN(state, state->cb(C_READ_DONE_EVENT, &read_done_ev, state->ud));
 
-  CREND();
+  UTHR_FOOTER();
 }
 
 void
-c_write_all(event_type_t ev_type, void *ev, void *ud) {
-  /* set before CRBEGIN */
-  WriteAllState *state = ud;
+c_read(FDEventLoop *loop, FDBuffer *f,
+       void *buf, size_t nbyte,
+       event_handler_t cb, void *ud) {
+  UTHR_CALL6(_c_read, CReadState,
+             .loop = loop,
+             .f = f,
+             .buf = buf,
+             .nbyte = nbyte,
+             .cb = cb,
+             .ud = ud);
+}
+
+UTHR_DEFINE(_c_write_all) {
+  UTHR_HEADER(WriteAllState, state);
   int myerrno;
-
-  UNUSED(ev_type);
-  UNUSED(ev);
-  CRBEGIN(state->coropos);
-
-  assert(ev_type == START_COROUTINE_EVENT);
 
   state->buf_loc = state->buf;
   state->count_left = state->count;
@@ -157,14 +181,15 @@ c_write_all(event_type_t ev_type, void *ev, void *ud) {
     ssize_t ret2 = write(state->fd, state->buf_loc, state->count_left);
     if (ret2 < 0) {
       if (errno == EAGAIN) {
-        CRYIELD(state->coropos,
-		fdevent_add_watch(state->loop,
-				  state->fd,
-				  create_stream_events(false, true),
-				  c_write_all,
-				  state,
-				  NULL));
-        assert(ev_type == FD_EVENT);
+        bool ret = fdevent_add_watch(state->loop,
+                                     state->fd,
+                                     create_stream_events(false, true),
+                                     _c_write_all,
+                                     state,
+                                     NULL);
+        if (!ret) { abort(); }
+        UTHR_YIELD(state, 0);
+        assert(UTHR_EVENT_TYPE() == FD_EVENT);
         continue;
       }
       else {
@@ -182,10 +207,25 @@ c_write_all(event_type_t ev_type, void *ev, void *ud) {
     .error_number = myerrno,
     .nbyte = state->count - state->count_left,
   };
-  CRRETURN(state->coropos,
-           state->cb(C_WRITEALL_DONE_EVENT,
-                     &c_write_all_done_ev,
-                     state->ud));
+  UTHR_RETURN(state,
+              state->cb(C_WRITEALL_DONE_EVENT,
+                        &c_write_all_done_ev,
+                        state->ud));
+  UTHR_FOOTER();
+}
 
-  CREND();
+void
+c_write_all(FDEventLoop *loop,
+            int fd,
+            const void *buf,
+            size_t nbyte,
+            event_handler_t cb,
+            void *cb_ud) {
+  UTHR_CALL6(_c_write_all, WriteAllState,
+             .loop = loop,
+             .fd = fd,
+             .buf = buf,
+             .count = nbyte,
+             .cb = cb,
+             .ud = cb_ud);
 }

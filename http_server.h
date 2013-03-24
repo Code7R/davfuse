@@ -8,6 +8,7 @@
 #include "coroutine_io.h"
 #include "events.h"
 #include "fdevent.h"
+#include "uthread.h"
 
 #ifndef _IS_HTTP_SERVER__C
 extern const char *HTTP_HEADER_CONTENT_LENGTH;
@@ -78,55 +79,40 @@ struct _http_server {
 };
 
 typedef struct {
-  union {
-    GetWhileState getwhile_state;
-    GetCState getc_state;
-    PeekState peek_state;
-  } sub;
-  int i;
-  int ei;
-  int c;
-  size_t parsed;
-  char tmpbuf[1024];
-  coroutine_position_t coropos;
+  UTHR_CTX_BASE;
   /* args */
   http_request_handle_t rh;
-  FDEventLoop *loop;
-  FDBuffer *f;
   HTTPRequestHeaders *request_headers;
   event_handler_t cb;
   void *ud;
+  /* state */
+  int i;
+  int c;
+  size_t ei;
+  size_t parsed;
+  char tmpbuf[1024];
 } GetRequestState;
 
 typedef struct {
-  coroutine_position_t coropos;
-  union {
-    WriteAllState was;
-  } sub;
-  int header_idx;
-  char tmpbuf[1024];
-  size_t out_size;
-
+  UTHR_CTX_BASE;
   /* args */
   const HTTPResponseHeaders *response_headers;
   HTTPRequestContext *request_context;
   event_handler_t cb;
   void *cb_ud;
+  /* state */
+  size_t header_idx;
+  char *response_line;
+  size_t response_line_size;
 } WriteHeadersState;
 
 typedef struct {
-  union {
-    WriteAllState was;
-  } sub;
   http_request_handle_t request_context;
   event_handler_t cb;
   void *cb_ud;
 } WriteResponseState;
 
 typedef struct {
-  union {
-    CReadState crs;
-  } sub;
   http_request_handle_t request_context;
   event_handler_t cb;
   void *cb_ud;
@@ -159,14 +145,13 @@ struct _http_request_context {
   size_t bytes_written;
   int last_error_number;
   union {
-    WriteHeadersState whs;
-    WriteResponseState rws;
     ReadRequestState rrs;
+    WriteResponseState rws;
   } sub;
 };
 
 struct _http_connection {
-  coroutine_position_t coropos;
+  UTHR_CTX_BASE;
   FDBuffer f;
   HTTPServer *server;
   /* these might become per-request,
@@ -177,10 +162,6 @@ struct _http_connection {
     HTTPResponseHeaders rsp;
     HTTPRequestHeaders req;
   } spare;
-  union {
-    GetRequestState grs;
-    WriteAllState was;
-  } sub;
   HTTPRequestContext rctx;
 };
 
@@ -266,7 +247,7 @@ http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
   case HTTP_STATUS_CODE_OK: msg = "OK"; break;
   case HTTP_STATUS_CODE_NOT_FOUND: msg = "Not Found"; break;
   case HTTP_STATUS_CODE_METHOD_NOT_ALLOWED: msg = "Method Not Allowed"; break;
-  default: msg = "Dunno"; break;
+  default: return false; break;
   }
 
   strlcpy(rsp->message, msg, sizeof(rsp->message));

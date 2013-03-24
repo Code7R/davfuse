@@ -21,8 +21,9 @@ typedef enum {
   C_READ_DONE_EVENT,
 } event_type_t;
 
-#define EVENT_HANDLER_DECLARE(handler) void handler(event_type_t, void *, void *)
 #define EVENT_HANDLER_DEFINE(handler, a, b, c) void handler(event_type_t a, void *b, void *c)
+#define EVENT_HANDLER_DECLARE(handler) EVENT_HANDLER_DEFINE(handler, a, b, c)
+
 
 typedef EVENT_HANDLER_DECLARE((*event_handler_t));
 

@@ -16,13 +16,14 @@
 #include "fd_utils.h"
 #include "http_server.h"
 #include "logging.h"
+#include "uthread.h"
 
 enum {
   BUF_SIZE=4096,
 };
 
 struct handler_context {
-  coroutine_position_t pos;
+  UTHR_CTX_BASE;
   FDEventLoop *loop;
   HTTPRequestHeaders rhs;
   HTTPResponseHeaders resp;
@@ -36,39 +37,23 @@ struct handler_context {
   } sub;
 };
 
+static EVENT_HANDLER_DECLARE(handle_request);
 static EVENT_HANDLER_DECLARE(handle_get_request);
 static EVENT_HANDLER_DECLARE(handle_options_request);
 
 static
-EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
-  struct handler_context *hc = ud;
-
-  /* because asserts might get compiled out */
-  UNUSED(ev_type);
-
-  if (ev_type == HTTP_NEW_REQUEST_EVENT) {
-    hc = malloc(sizeof(*hc));
-    *hc = (struct handler_context) {
-      .pos = CORO_POS_INIT,
-      .loop = ud,
-    };
-  }
-
-  assert(hc);
-
-  CRBEGIN(hc->pos);
-  assert(ev_type == HTTP_NEW_REQUEST_EVENT);
-  HTTPNewRequestEvent *new_request_ev = ev;
-  hc->rh = new_request_ev->request_handle;
+UTHR_DEFINE(request_proc) {
+  UTHR_HEADER(struct handler_context, hc);
 
   log_info("New request!");
 
   /* read out headers */
-  CRYIELD(hc->pos,
-          http_request_read_headers(hc->rh,
-                                    &hc->rhs, handle_request, hc));
-  assert(ev_type == HTTP_REQUEST_READ_HEADERS_DONE_EVENT);
-  HTTPRequestReadHeadersDoneEvent *read_headers_ev = ev;
+  UTHR_YIELD(hc,
+             http_request_read_headers(hc->rh,
+                                       &hc->rhs,
+                                       request_proc, hc));
+  assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_READ_HEADERS_DONE_EVENT);
+  HTTPRequestReadHeadersDoneEvent *read_headers_ev = UTHR_EVENT();
   UNUSED(read_headers_ev);
   assert(read_headers_ev->request_handle == hc->rh);
   if (read_headers_ev->err != HTTP_SUCCESS) {
@@ -91,23 +76,21 @@ EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
   assert(ret);
 
   if (handler) {
-    CRYIELD(hc->pos, handler(START_COROUTINE_EVENT, NULL, hc));
+    UTHR_YIELD(hc, handler(GENERIC_EVENT, NULL, hc));
   }
   else {
-    CRYIELD(hc->pos,
-            http_request_simple_response(hc->rh,
-                                         HTTP_STATUS_CODE_METHOD_NOT_ALLOWED, "Not allowed",
-                                         handle_request, hc));
+    UTHR_YIELD(hc,
+               http_request_simple_response(hc->rh,
+                                            HTTP_STATUS_CODE_METHOD_NOT_ALLOWED, "Not allowed",
+                                            request_proc, hc));
   }
 
  done:
   log_info("request done!");
 
-  CRRETURN(hc->pos,
-           (http_request_end(hc->rh),
-            free(hc)));
+  UTHR_RETURN(hc, http_request_end(hc->rh));
 
-  CREND();
+  UTHR_FOOTER();
 }
 
 static
@@ -162,7 +145,8 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
     int ret = lseek(hc->sub.get.fd, 0, SEEK_SET);
     UNUSED(ret);
     assert(!ret);
-    /* TODO: must be send up to the content-length we sent */
+
+    /* TODO: must send up to the content-length we sent */
     while (true) {
       ssize_t amt_read = read(hc->sub.get.fd, hc->sub.get.buf, sizeof(hc->sub.get.buf));
       if (amt_read < 0 && errno == EAGAIN) {
@@ -220,7 +204,10 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
     close(hc->sub.get.fd);
   }
 
-  handle_request(GENERIC_EVENT, NULL, hc);
+  CRRETURN(hc->sub.get.pos,
+           request_proc(GENERIC_EVENT, NULL, hc));
+
+  CREND();
 }
 
 static
@@ -230,6 +217,9 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
 
   struct handler_context *hc = ud;
   bool ret;
+
+  ret = http_response_set_code(&hc->resp, HTTP_STATUS_CODE_OK);
+  assert(ret);
 
   ret = http_response_add_header(&hc->resp, "DAV", "1");
   assert(ret);
@@ -241,10 +231,18 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
   ret = http_response_add_header(&hc->resp, HTTP_HEADER_CONTENT_LENGTH, "0");
   assert(ret);
 
-  http_response_set_code(&hc->resp, HTTP_STATUS_CODE_OK);
-
   http_request_write_headers(hc->rh, &hc->resp,
-                             handle_request, ud);
+                             request_proc, ud);
+}
+
+static
+EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
+  assert(ev_type == HTTP_NEW_REQUEST_EVENT);
+  HTTPNewRequestEvent *new_request_ev = ev;
+
+  UTHR_CALL2(request_proc, struct handler_context,
+             .rh = new_request_ev->request_handle,
+             .loop = ud);
 }
 
 int main(int argc, char *argv[]) {
@@ -265,6 +263,7 @@ int main(int argc, char *argv[]) {
 	to_port < 0 ||
 	to_port > MAX_PORT) {
       log_critical("Bad port: %s", argv[1]);
+      return -1;
     }
     port = (port_t) to_port;
   }
