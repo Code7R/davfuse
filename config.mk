@@ -1,5 +1,5 @@
 # Customize below to fit your system
-#FDEVENT_SOURCE = epoll
+# This example is made for posix/gcc
 FDEVENT_SOURCE = select
 
 # paths
@@ -7,14 +7,14 @@ PREFIX = /usr/local
 MANPREFIX = ${PREFIX}/share/man
 LIBDIR = ${PREFIX}/lib
 
-# includes and libs
-INCS = -I. -I/usr/include
-LIBS = -L/usr/lib -lc
+# non-standard includes and libs
+INCS =
+LIBS =
 
 # flags
-#CFLAGS += -std=c99 -Wall -Wextra -Werror -DNDEBUG -O3 ${INCS} ${CPPFLAGS}
-CFLAGS += -std=c99 -Wall -Wextra -Werror -g ${INCS} ${CPPFLAGS}
-LDFLAGS += ${LIBS}
+CPPFLAGS += $(patsubst %,-I%,${INCS}) 
+CFLAGS += -std=c99 -Wall -Wextra -Werror
+LDFLAGS += $(patsubst %,-L%,${LIBS})
 
 # compiler and linker
 CC ?= cc

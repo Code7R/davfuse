@@ -1,9 +1,5 @@
 syntax: glob
 
 .deps
+out
 *~
-# for now
-*.o
-test_http_file_server
-davfuse
-test_http_server
