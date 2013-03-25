@@ -244,9 +244,17 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
 #undef EMITS
 }
 
-static PURE_FUNCTION char
+static CONST_FUNCTION char
 ascii_to_lower(char a) {
-  return a + ((65 <= a && a <= 90) ? 33 : 0);
+  enum {
+    ASCII_UPPER_CASE_LOWER_BOUND=65,
+    ASCII_UPPER_CASE_UPPER_BOUND=90,
+    ASCII_UPPER_CASE_LOWER_OFFSET=32,
+  };
+  return a + ((ASCII_UPPER_CASE_LOWER_BOUND <= a &&
+               a <= ASCII_UPPER_CASE_UPPER_BOUND) ?
+              ASCII_UPPER_CASE_LOWER_OFFSET :
+              0);
 }
 
 static PURE_FUNCTION bool
@@ -265,7 +273,7 @@ _get_header_value(const struct _header_pair *headers, size_t num_headers, const 
   /* headers can only be ascii */
   for (size_t i = 0; i < num_headers; ++i) {
     if (ascii_strcaseequal(header_name, headers[i].name)) {
-      return (char *) headers[i].value;
+      return headers[i].value;
     }
   }
 
@@ -598,7 +606,7 @@ UTHR_DEFINE(c_get_request) {
        many layers of nesting */                                \
     if ((state->c = fbgetc(&state->rh->conn->f)) < 0) {             \
       UTHR_YIELD(state,                                            \
-                 c_fbpeek(state->rh->conn->server->loop,           \
+                 c_fbgetc(state->rh->conn->server->loop,           \
                           &state->rh->conn->f,                     \
                           &state->c,                               \
                           c_get_request, state));                  \
@@ -697,11 +705,30 @@ UTHR_DEFINE(c_get_request) {
     PARSEVAR(state->request_headers->headers[state->i].name,
              match_non_null_or_colon);
     EXPECT(':');
+
+    /* TODO, turn this into PARSEFIELDVALUE
+       which itself is quite complicated, we do the bare minimum
+       and skip leading whitespace
+    */
+    /* skip lws */
+    while (true) {
+      PEEK();
+      if (state->c == ' ') {
+        EXPECT(' ');
+      }
+      else if (state->c == '\t') {
+        EXPECT('\t');
+      }
+      else {
+        break;
+      }
+    }
+
     PARSEVAR(state->request_headers->headers[state->i].value,
              match_non_null_or_carriage_return);
     EXPECTS("\r\n");
 
-    log_debug("FD %d, Parsed header %s:%s",
+    log_debug("FD %d, Parsed header %s: %s",
               state->rh->conn->f.fd,
               state->request_headers->headers[state->i].name,
               state->request_headers->headers[state->i].value);

@@ -120,9 +120,9 @@ ${LIBFUSE_TARGET}: ${LIBFUSE_OBJ}
 # for dependency auto generateion
 DEPDIR := .deps
 df = ${DEPDIR}/${*F}
-MAKEDEPEND = mkdir -p ${DEPDIR}; gcc -M ${CFLAGS} -o ${df}.d $<
+MAKEDEPEND = mkdir -p ${DEPDIR}; gcc -M -MT $@ ${CFLAGS} -o ${df}.d $<
 
--include $(ALL_SRC:%.c=$(DEPDIR)/%.P)
+-include $(ALL_SRC:${SRCROOT}/%.c=$(DEPDIR)/%.P)
 
 clean:
 	-rm -rf ${DEPDIR} ${OUTROOT}

@@ -55,6 +55,7 @@ typedef enum {
 
 typedef enum {
   HTTP_STATUS_CODE_OK=200,
+  HTTP_STATUS_CODE_BAD_REQUEST=400,
   HTTP_STATUS_CODE_NOT_FOUND=404,
   HTTP_STATUS_CODE_METHOD_NOT_ALLOWED=405,
   HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR=500,
@@ -252,10 +253,11 @@ http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
   }						\
   while (false)
   switch (code) {
-  case HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR: SET_MSG("Internal Server Error"); break;
   case HTTP_STATUS_CODE_OK: SET_MSG("OK"); break;
+  case HTTP_STATUS_CODE_BAD_REQUEST: SET_MSG("Bad Request"); break;
   case HTTP_STATUS_CODE_NOT_FOUND: SET_MSG("Not Found"); break;
   case HTTP_STATUS_CODE_METHOD_NOT_ALLOWED: SET_MSG("Method Not Allowed"); break;
+  case HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR: SET_MSG("Internal Server Error"); break;
   default: return false; break;
   }
 
