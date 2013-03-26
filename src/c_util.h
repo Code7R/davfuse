@@ -15,6 +15,7 @@
 #define NON_NULL_ARGS1(a) __attribute__ ((nonnull (a)))
 #define NON_NULL_ARGS2(a, b) __attribute__ ((nonnull (a, b)))
 #define NON_NULL_ARGS3(a, b, c) __attribute__ ((nonnull (a, b, c)))
+#define NON_NULL_ARGS4(a, b, c, d) __attribute__ ((nonnull (a, b, c, d)))
 
 #else /* __GNUC__ */
 
@@ -27,6 +28,7 @@
 #define NON_NULL_ARGS1(a)
 #define NON_NULL_ARGS2(a, b)
 #define NON_NULL_ARGS3(a, b, c)
+#define NON_NULL_ARGS4(a, b, c, d)
 
 #endif /* __GNUC__ */
 

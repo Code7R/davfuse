@@ -30,6 +30,7 @@ enum {
 };
 
 const char *HTTP_HEADER_CONTENT_LENGTH = "Content-Length";
+const char *HTTP_HEADER_CONTENT_TYPE = "Content-Type";
 
 /* static forward decls */
 static
@@ -288,6 +289,7 @@ http_request_write_headers(http_request_handle_t rh,
   HTTPRequestContext *rctx = rh;
 
   if (rctx->write_state != HTTP_REQUEST_WRITE_STATE_NONE) {
+    log_error("Handler called write headers at strange time!");
     goto error;
   }
 
@@ -300,12 +302,14 @@ http_request_write_headers(http_request_handle_t rh,
                                                        response_headers->num_headers,
                                                        HTTP_HEADER_CONTENT_LENGTH);
     if (!content_length_str) {
+      log_error("Handler did not use a valid content length string!");
       goto error;
     }
 
     long content_length = strtol(content_length_str, NULL, 10);
     if ((content_length == 0 && errno == EINVAL) ||
         content_length < 0) {
+      log_error("Handler did not use a valid content length string!");
       goto error;
     }
 
@@ -724,8 +728,15 @@ UTHR_DEFINE(c_get_request) {
       }
     }
 
-    PARSEVAR(state->request_headers->headers[state->i].value,
-             match_non_null_or_carriage_return);
+    PEEK();
+    if (state->c != '\r') {
+      PARSEVAR(state->request_headers->headers[state->i].value,
+               match_non_null_or_carriage_return);
+    }
+    else {
+      state->request_headers->headers[state->i].value[0] = '\0';
+    }
+
     EXPECTS("\r\n");
 
     log_debug("FD %d, Parsed header %s: %s",
@@ -821,17 +832,3 @@ http_response_add_header(HTTPResponseHeaders *rsp,
 
   return true;
 }
-
-NON_NULL_ARGS3(1, 3, 4) void
-http_request_simple_response(http_request_handle_t rh,
-			     http_status_code_t code, const char *body,
-			     event_handler_t cb, void *cb_ud) {
-  /* not yet implemented */
-  UNUSED(rh);
-  UNUSED(code);
-  UNUSED(body);
-  UNUSED(cb);
-  UNUSED(cb_ud);
-  assert(false);
-}
-

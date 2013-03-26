@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <assert.h>
+#include <dirent.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <strings.h>
@@ -19,6 +20,7 @@
 #include "events.h"
 #include "fdevent.h"
 #include "fd_utils.h"
+#include "http_helpers.h"
 #include "http_server.h"
 #include "logging.h"
 #include "uthread.h"
@@ -27,6 +29,12 @@
 enum {
   BUF_SIZE=4096,
 };
+
+typedef enum {
+  DEPTH_0,
+  DEPTH_1,
+  DEPTH_INF,
+} webdav_depth_t;
 
 typedef struct {
   char *element_name;
@@ -80,7 +88,120 @@ path_from_uri(const char *uri) {
 }
 
 static void
-run_propfind(const char *uri,
+add_propstat_response_for_path(const char *uri,
+                               int fd,
+                               linked_list_t props_to_get,
+                               xmlNodePtr multistatus_elt,
+                               xmlNsPtr dav_ns) {
+  struct stat st;
+  int my_errno = 0;
+  int statret = -1;
+  if (fd < 0 ||
+      (statret = fstat(fd, &st)) < 0) {
+    /* TODO: the file could not be found, 404 is also valid */
+    log_info("fstat(%d) failed: %s", fd, strerror(errno));
+    my_errno = errno;
+  }
+
+  xmlNodePtr response_elt = xmlNewChild(multistatus_elt, dav_ns, XMLSTR("response"), NULL);
+  assert(response_elt);
+
+  xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns,
+                                        XMLSTR("href"), XMLSTR(uri));
+  assert(href_elt);
+
+  xmlNodePtr propstat_not_found_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
+  assert(propstat_not_found_elt);
+  xmlNodePtr prop_not_found_elt = xmlNewChild(propstat_not_found_elt, dav_ns, XMLSTR("prop"), NULL);
+  assert(prop_not_found_elt);
+  xmlNodePtr status_not_found_elt = xmlNewTextChild(propstat_not_found_elt, dav_ns,
+                                                    XMLSTR("status"),
+                                                    XMLSTR("HTTP/1.1 404 Not Found"));
+  assert(status_not_found_elt);
+
+  xmlNodePtr propstat_success_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
+  assert(propstat_success_elt);
+  xmlNodePtr prop_success_elt = xmlNewChild(propstat_success_elt, dav_ns, XMLSTR("prop"), NULL);
+  assert(propstat_success_elt);
+  xmlNodePtr status_success_elt = xmlNewTextChild(propstat_success_elt, dav_ns,
+                                                  XMLSTR("status"),
+                                                  XMLSTR("HTTP/1.1 200 OK"));
+  assert(status_success_elt);
+
+  xmlNodePtr propstat_failure_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
+  assert(propstat_failure_elt);
+  xmlNodePtr prop_failure_elt = xmlNewChild(propstat_failure_elt, dav_ns, XMLSTR("prop"), NULL);
+  assert(prop_failure_elt);
+  xmlNodePtr status_failure_elt = xmlNewTextChild(propstat_failure_elt, dav_ns,
+                                                  XMLSTR("status"),
+                                                  XMLSTR("HTTP/1.1 500 Internal Server Error"));
+  assert(status_failure_elt);
+
+  LINKED_LIST_FOR(WebdavProperty, elt, props_to_get) {
+    xmlNodePtr correct_prop_elt = prop_not_found_elt;
+    if (statret < 0) {
+      if (!(my_errno == ENOENT ||
+            my_errno == ENOTDIR)) {
+        correct_prop_elt = prop_failure_elt;
+      }
+
+      goto not_found_elt;
+    }
+
+    if (str_equals(elt->element_name, "getlastmodified") &&
+        str_equals(elt->ns_href, "DAV:")) {
+      time_t m_time = (time_t) st.st_mtime;
+      struct tm *tm_ = gmtime(&m_time);
+      char time_str[400];
+      size_t num_chars = strftime(time_str, sizeof(time_str),
+                                  "%a, %d %b %Y %T GMT", tm_);
+      if (!num_chars) {
+        log_error("strftime failed!");
+        xmlNodePtr getlastmodified_elt = xmlNewTextChild(prop_failure_elt, dav_ns,
+                                                         XMLSTR("getlastmodified"), NULL);
+        assert(getlastmodified_elt);
+      }
+      else {
+        /* TODO place content in string */
+        xmlNodePtr getlastmodified_elt = xmlNewTextChild(prop_success_elt, dav_ns,
+                                                         XMLSTR("getlastmodified"), XMLSTR(time_str));
+        assert(getlastmodified_elt);
+      }
+    }
+    else if (str_equals(elt->element_name, "getcontentlength") &&
+             str_equals(elt->ns_href, "DAV:") &&
+             !S_ISDIR(st.st_mode)) {
+      char time_str[400];
+      snprintf(time_str, sizeof(time_str), "%lld", (long long) st.st_size);
+      xmlNodePtr getcontentlength_elt = xmlNewTextChild(prop_success_elt, dav_ns,
+                                                        XMLSTR("getcontentlength"), XMLSTR(time_str));
+      assert(getcontentlength_elt);
+    }
+    else if (str_equals(elt->element_name, "resourcetype") &&
+             str_equals(elt->ns_href, "DAV:") &&
+             S_ISDIR(st.st_mode)) {
+      xmlNodePtr resourcetype_elt = xmlNewChild(prop_success_elt, dav_ns,
+                                                XMLSTR("resourcetype"), NULL);
+      assert(resourcetype_elt);
+
+      xmlNodePtr collection_elt = xmlNewChild(resourcetype_elt, dav_ns,
+                                              XMLSTR("collection"), NULL);
+      assert(collection_elt);
+    }
+    else {
+      xmlNodePtr random_elt;
+    not_found_elt:
+      random_elt = xmlNewChild(correct_prop_elt, NULL,
+                               XMLSTR(elt->element_name), NULL);
+      assert(random_elt);
+      xmlNsPtr new_ns = xmlNewNs(random_elt, XMLSTR(elt->ns_href), NULL);
+      xmlSetNs(random_elt, new_ns);
+    }
+  }
+}
+
+static void
+run_propfind(const char *uri, webdav_depth_t depth,
              const char *req_data, size_t req_data_length,
              char **out_data, size_t *out_size,
              http_status_code_t *status_code) {
@@ -94,9 +215,20 @@ run_propfind(const char *uri,
   xmlDocPtr xml_response = NULL;
   linked_list_t props_to_get = LINKED_LIST_INITIALIZER;
   xmlDocPtr doc = NULL;
+  DIR *dir = NULL;
+  int root_fd = -1;
+  int cwd = -1;
 
-  log_debug("XML request: %s", req_data);
+  log_debug("XML request: Depth: %d, %s", depth, req_data);
 
+  /* TODO: support this */
+  if (depth == DEPTH_INF) {
+    log_info("We don't support infinity propfind requests");
+    *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto local_exit;
+  }
+
+  /* process the type of prop request */
   if (!req_data) {
     propfind_req_type = PROPFIND_ALLPROP;
   }
@@ -152,12 +284,17 @@ run_propfind(const char *uri,
                                                                   (const char *) prop_elt->ns->href));
       }
     }
+    /* TODO: also handle the case where there are multiple top-level tags,
+       we should return 400 in that case
+     */
     else {
       log_info("Invalid propname child: %s", first_child->name);
       *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
       goto local_exit;
     }
   }
+
+  /* now that's we've parsed the propfind request, do it */
 
   if (propfind_req_type != PROPFIND_PROP) {
     log_info("We only support 'prop' requests");
@@ -172,19 +309,6 @@ run_propfind(const char *uri,
     *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto local_exit;
   }
-  struct stat st;
-  int statret = stat(file_path, &st);
-  if (statret < 0) {
-    /* TODO: the file could not be found, 404 is also valid */
-    log_info("stat(%s) failed: %s", file_path, strerror(errno));
-    if (errno == ENOENT) {
-      *status_code = HTTP_STATUS_CODE_NOT_FOUND;
-    }
-    else {
-      *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    }
-    goto local_exit;
-  }
 
   xml_response = xmlNewDoc(XMLSTR("1.0"));
   assert(xml_response);
@@ -195,78 +319,65 @@ run_propfind(const char *uri,
   xmlNsPtr dav_ns = xmlNewNs(multistatus_elt, XMLSTR("DAV:"), XMLSTR("D"));
   assert(dav_ns);
   xmlSetNs(multistatus_elt, dav_ns);
-  xmlNodePtr response_elt = xmlNewChild(multistatus_elt, dav_ns, XMLSTR("response"), NULL);
-  assert(response_elt);
 
-  xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns,
-                                        XMLSTR("href"), XMLSTR(uri));
-  assert(href_elt);
-  xmlNodePtr propstat_success_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
-  assert(propstat_success_elt);
-  xmlNodePtr propstat_failure_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
-  assert(propstat_failure_elt);
+  /* try keeping a single fd open for the duration of the directory iteration */
+  if (depth == DEPTH_1) {
+    /* depth one, try directory by default first */
+    dir = opendir(file_path);
+    if (!dir) {
+      log_info("Depth 1 but couldn't open directory: %s", strerror(errno));
+    }
+  }
 
-  xmlNodePtr prop_success_elt = xmlNewChild(propstat_success_elt, dav_ns, XMLSTR("prop"), NULL);
-  assert(propstat_success_elt);
-  xmlNodePtr status_success_elt = xmlNewTextChild(propstat_success_elt, dav_ns,
-                                                  XMLSTR("status"),
-                                                  XMLSTR("HTTP/1.1 200 OK"));
-  assert(status_success_elt);
-  xmlNodePtr prop_failure_elt = xmlNewChild(propstat_failure_elt, dav_ns, XMLSTR("prop"), NULL);
-  assert(prop_failure_elt);
-  xmlNodePtr status_failure_elt = xmlNewTextChild(propstat_failure_elt, dav_ns,
-                                                  XMLSTR("status"),
-                                                  XMLSTR("HTTP/1.1 404 Not Found"));
-  assert(status_failure_elt);
+  if (dir) {
+    root_fd = dirfd(dir);
+  }
+  else {
+    root_fd = open(file_path, O_RDONLY);
+  }
 
-  LINKED_LIST_FOR(WebdavProperty, elt, props_to_get) {
-    if (str_equals(elt->element_name, "getlastmodified") &&
-        str_equals(elt->ns_href, "DAV:")) {
-      time_t m_time = (time_t) st.st_mtime;
-      struct tm *tm_ = gmtime(&m_time);
-      char time_str[400];
-      size_t num_chars = strftime(time_str, sizeof(time_str),
-                                  "%a, %d %b %Y %T GMT", tm_);
-      if (!num_chars) {
-        log_error("strftime failed!");
+  /* negative fd means check errno */
+  add_propstat_response_for_path(uri, root_fd, props_to_get, multistatus_elt, dav_ns);
+
+  if (root_fd >= 0 && dir && depth == DEPTH_1) {
+    /* preserve cwd so we can go back to it */
+    cwd = open(".", O_RDONLY);
+    if (cwd < 0) {
+      /* things are fucked */
+      *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      goto local_exit;
+    }
+
+    /* add status for every child of this directory */
+    struct dirent *d;
+    while ((d = readdir(dir)) != NULL) {
+      if (str_equals(d->d_name, ".") ||
+          str_equals(d->d_name, "..")) {
+        continue;
+      }
+
+      /* always chdir back to avoid race */
+      if (fchdir(root_fd) < 0) {
         *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
         goto local_exit;
       }
 
-      /* TODO place content in string */
-      xmlNodePtr getlastmodified_elt = xmlNewTextChild(prop_success_elt, dav_ns,
-                                                       XMLSTR("getlastmodified"), XMLSTR(time_str));
-      assert(getlastmodified_elt);
-    }
-    else if (str_equals(elt->element_name, "getcontentlength") &&
-             str_equals(elt->ns_href, "DAV:") &&
-             !S_ISDIR(st.st_mode)) {
-      char time_str[400];
-      snprintf(time_str, sizeof(time_str), "%lld", (long long) st.st_size);
-      xmlNodePtr getcontentlength_elt = xmlNewTextChild(prop_success_elt, dav_ns,
-                                                        XMLSTR("getcontentlength"), XMLSTR(time_str));
-      assert(getcontentlength_elt);
-    }
-    else if (str_equals(elt->element_name, "resourcetype") &&
-             str_equals(elt->ns_href, "DAV:") &&
-             S_ISDIR(st.st_mode)
-             ) {
-      xmlNodePtr resourcetype_elt = xmlNewChild(prop_success_elt, dav_ns,
-                                                XMLSTR("resourcetype"), NULL);
-      assert(resourcetype_elt);
-      if (S_ISDIR(st.st_mode)) {
-        xmlNodePtr collection_elt = xmlNewChild(resourcetype_elt, dav_ns,
-                                                XMLSTR("collection"), NULL);
-        assert(collection_elt);
+      int fd = open(d->d_name, O_RDONLY);
+      char new_uri[1024];
+      size_t len = strlen(uri);
+      memcpy(new_uri, uri, len);
+      strcpy(new_uri + len, d->d_name);
+
+      add_propstat_response_for_path(new_uri, fd, props_to_get, multistatus_elt, dav_ns);
+      if (fd >= 0) {
+        close(fd);
       }
     }
-    else {
-      /* not implemented for this file system */
-      xmlNodePtr creationdate_elt = xmlNewChild(prop_failure_elt, NULL,
-                                                XMLSTR(elt->element_name), NULL);
-      assert(creationdate_elt);
-      xmlNsPtr new_ns = xmlNewNs(creationdate_elt, XMLSTR(elt->ns_href), NULL);
-      xmlSetNs(creationdate_elt, new_ns);
+
+    if (fchdir(cwd) < 0) {
+      /* the program won't operate correctly in this case */
+      log_critical("Couldn't chdir back to original directlry: %s", strerror(errno));
+      abort();
     }
   }
 
@@ -277,10 +388,20 @@ run_propfind(const char *uri,
   *out_data = (char *) out_buf;
   assert(out_buf_size >= 0);
   *out_size = out_buf_size;
-
   log_debug("XML response will be %s", out_buf);
+  *status_code = HTTP_STATUS_CODE_MULTI_STATUS;
 
  local_exit:
+  if (cwd >= 0) {
+    close(cwd);
+  }
+  if (dir) {
+    closedir(dir);
+  }
+  else if (root_fd >= 0) {
+    close(root_fd);
+  }
+
   if (xml_response) {
     xmlFreeDoc(xml_response);
   }
@@ -312,11 +433,15 @@ struct handler_context {
       char *out_buf;
       size_t out_buf_size;
     } propfind;
+    struct {
+      coroutine_position_t pos;
+    } mkcol;
   } sub;
 };
 
 static EVENT_HANDLER_DECLARE(handle_request);
 static EVENT_HANDLER_DECLARE(handle_get_request);
+static EVENT_HANDLER_DECLARE(handle_mkcol_request);
 static EVENT_HANDLER_DECLARE(handle_options_request);
 static EVENT_HANDLER_DECLARE(handle_propfind_request);
 
@@ -344,6 +469,9 @@ UTHR_DEFINE(request_proc) {
   if (!strcasecmp(hc->rhs.method, "GET")) {
     handler = handle_get_request;
   }
+  else if (!strcasecmp(hc->rhs.method, "MKCOL")) {
+    handler = handle_mkcol_request;
+  }
   else if (!strcasecmp(hc->rhs.method, "OPTIONS")) {
     handler = handle_options_request;
   }
@@ -362,7 +490,7 @@ UTHR_DEFINE(request_proc) {
   }
   else {
     UTHR_YIELD(hc,
-               http_request_simple_response(hc->rh,
+               http_request_string_response(hc->rh,
                                             HTTP_STATUS_CODE_METHOD_NOT_ALLOWED, "Not allowed",
                                             request_proc, hc));
   }
@@ -496,6 +624,89 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
 }
 
 static
+EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
+
+  struct handler_context *hc = ud;
+  http_status_code_t status_code = 0;
+
+  CRBEGIN(hc->sub.mkcol.pos);
+
+  /* read body first */
+  CRYIELD(hc->sub.mkcol.pos,
+          http_request_ignore_body(hc->rh,
+                                   handle_mkcol_request, hc));
+  HTTPRequestReadBodyDoneEvent *rbev = ev;
+  if (rbev->error) {
+    log_info("Error while reading body of request");
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  if (rbev->length) {
+    log_info("Request had a body!");
+    status_code = HTTP_STATUS_CODE_UNSUPPORTED_MEDIA_TYPE;
+    goto done;
+  }
+
+  const char *uri = hc->rhs.uri;
+  const char *file_path = path_from_uri(uri);
+  if (!file_path) {
+    log_info("Couldn't make file path from %s", uri);
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  int ret = mkdir(file_path, 0777);
+  if (ret < 0) {
+    log_debug("ERRNOR is %d", errno);
+    if (errno == ENOENT) {
+      status_code = HTTP_STATUS_CODE_CONFLICT;
+    }
+    else if (errno == ENOSPC ||
+             errno == EDQUOT) {
+      status_code = HTTP_STATUS_CODE_INSUFFICIENT_STORAGE;
+    }
+    else if (errno == EACCES ||
+             errno == ENOTDIR) {
+      status_code = HTTP_STATUS_CODE_FORBIDDEN;
+    }
+    else if (errno == EEXIST) {
+      struct stat st;
+      ret = stat(file_path, &st);
+      if (ret < 0) {
+        status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      }
+      else if (S_ISDIR(st.st_mode)) {
+        status_code = HTTP_STATUS_CODE_METHOD_NOT_ALLOWED;
+      }
+      else {
+        status_code = HTTP_STATUS_CODE_FORBIDDEN;
+      }
+    }
+    else {
+      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    }
+  }
+  else {
+    status_code = HTTP_STATUS_CODE_CREATED;
+  }
+
+ done:
+  assert(status_code);
+
+  CRYIELD(hc->sub.mkcol.pos,
+          http_request_string_response(hc->rh,
+                                       status_code, "",
+                                       handle_mkcol_request, hc));
+
+  CRRETURN(hc->sub.mkcol.pos,
+           request_proc(GENERIC_EVENT, NULL, hc));
+
+  CREND();
+}
+
+static
 EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
   UNUSED(ev_type);
   UNUSED(ev);
@@ -526,58 +737,28 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   UNUSED(ev);
 
   struct handler_context *hc = ud;
-  /* reset upon re-entry */
-  http_status_code_t status_code = HTTP_STATUS_CODE_OK;
+  http_status_code_t status_code = 0;
 
   CRBEGIN(hc->sub.propfind.pos);
 
   hc->sub.propfind.buf = NULL;
+  hc->sub.propfind.buf_used = 0;
   hc->sub.propfind.out_buf = NULL;
+  hc->sub.propfind.out_buf_size = 0;
 
   /* read all posted data */
   /* TODO: abstract this out */
-  while (true) {
-    CRYIELD(hc->sub.propfind.pos,
-            http_request_read(hc->rh,
-                              hc->sub.propfind.scratch_buf,
-                              sizeof(hc->sub.propfind.scratch_buf),
-                              handle_propfind_request, ud));
-    assert(ev_type == HTTP_REQUEST_READ_DONE_EVENT);
-    HTTPRequestReadDoneEvent *read_done_ev = ev;
-    if (!read_done_ev->nbyte) {
-      /* EOF */
-      break;
-    }
-
-    if (hc->sub.propfind.buf_size - hc->sub.propfind.buf_used < read_done_ev->nbyte) {
-      size_t new_buf_size = MAX(1, hc->sub.propfind.buf_size);
-      while (new_buf_size - hc->sub.propfind.buf_used < read_done_ev->nbyte) {
-        new_buf_size *= 2;
-      }
-
-      void *new_ptr = realloc(hc->sub.propfind.buf, new_buf_size);
-      if (!new_ptr) {
-        status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-        goto done;
-      }
-
-      hc->sub.propfind.buf = new_ptr;
-      hc->sub.propfind.buf_size = new_buf_size;
-    }
-
-    /* defensive coding, make sure we're still handling the same event */
-    assert(ev_type == HTTP_REQUEST_READ_DONE_EVENT);
-    memcpy(hc->sub.propfind.buf + hc->sub.propfind.buf_used,
-           hc->sub.propfind.scratch_buf, read_done_ev->nbyte);
-    hc->sub.propfind.buf_used += read_done_ev->nbyte;
+  http_request_read_body(hc->rh, handle_propfind_request, hc);
+  HTTPRequestReadBodyDoneEvent *rbev = ev;
+  if (rbev->error) {
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
   }
+  hc->sub.propfind.buf = rbev->body;
+  hc->sub.propfind.buf_used = rbev->length;
 
   /* figure out depth */
-  enum {
-    DEPTH_0,
-    DEPTH_1,
-    DEPTH_INF,
-  } depth;
+  webdav_depth_t depth;
 
   const char *depth_str = http_get_header_value(&hc->rhs, "depth");
   if (!depth_str || !strcasecmp(depth_str, "infinity")) {
@@ -594,61 +775,24 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
     depth = ret ? DEPTH_1 : DEPTH_0;
   }
 
-  /* TODO: support this */
-  if (depth != DEPTH_0) {
-    log_info("We don't support non-depth 0 propfind requests");
-    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    goto done;
-  }
-
   /* run the request */
-  run_propfind(hc->rhs.uri,
+  run_propfind(hc->rhs.uri, depth,
                hc->sub.propfind.buf, hc->sub.propfind.buf_used,
                &hc->sub.propfind.out_buf, &hc->sub.propfind.out_buf_size,
                &status_code);
 
  done:
+  assert(status_code);
   log_debug("Responding with status: %d", status_code);
-  /* send headers */
-  bool ret = http_response_set_code(&hc->resp, status_code);
-  assert(ret);
 
-  size_t content_length;
-  if (status_code == HTTP_STATUS_CODE_OK) {
-    content_length = hc->sub.propfind.out_buf_size;
-  }
-  else {
-    content_length = 0;
-  }
+  CRYIELD(hc->sub.propfind.pos,
+          http_request_simple_response(hc->rh,
+                                       status_code,
+                                       hc->sub.propfind.out_buf,
+                                       hc->sub.propfind.out_buf_size,
+                                       "application/xml",
+                                       handle_propfind_request, hc));
 
-  ret = http_response_add_header(&hc->resp, HTTP_HEADER_CONTENT_LENGTH,
-                                 "%zu", content_length);
-  assert(ret);
-  CRYIELD(hc->sub.get.pos,
-          http_request_write_headers(hc->rh, &hc->resp,
-                                     handle_propfind_request, hc));
-  assert(ev_type == HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT);
-  HTTPRequestWriteHeadersDoneEvent *write_headers_ev = ev;
-  assert(write_headers_ev->request_handle == hc->rh);
-  if (write_headers_ev->err != HTTP_SUCCESS) {
-    goto totally_done;
-  }
-
-  if (status_code == HTTP_STATUS_CODE_OK) {
-    assert(hc->sub.propfind.out_buf);
-    CRYIELD(hc->sub.propfind.pos,
-            http_request_write(hc->rh,
-                               hc->sub.propfind.out_buf,
-                               hc->sub.propfind.out_buf_size,
-                               handle_propfind_request, hc));
-    assert(ev_type == HTTP_REQUEST_WRITE_DONE_EVENT);
-    HTTPRequestWriteDoneEvent *write_ev = ev;
-    if (write_ev->err != HTTP_SUCCESS) {
-      goto totally_done;
-    }
-  }
-
- totally_done:
   if (hc->sub.propfind.out_buf) {
     /* TODO: use a generic returned free function */
     xmlFree(hc->sub.propfind.out_buf);

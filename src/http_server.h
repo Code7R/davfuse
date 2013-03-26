@@ -12,6 +12,7 @@
 
 #ifndef _IS_HTTP_SERVER__C
 extern const char *HTTP_HEADER_CONTENT_LENGTH;
+extern const char *HTTP_HEADER_CONTENT_TYPE;
 #endif
 
 enum {
@@ -55,10 +56,16 @@ typedef enum {
 
 typedef enum {
   HTTP_STATUS_CODE_OK=200,
+  HTTP_STATUS_CODE_CREATED=201,
+  HTTP_STATUS_CODE_MULTI_STATUS=207,
   HTTP_STATUS_CODE_BAD_REQUEST=400,
+  HTTP_STATUS_CODE_FORBIDDEN=403,
   HTTP_STATUS_CODE_NOT_FOUND=404,
   HTTP_STATUS_CODE_METHOD_NOT_ALLOWED=405,
+  HTTP_STATUS_CODE_CONFLICT=409,
+  HTTP_STATUS_CODE_UNSUPPORTED_MEDIA_TYPE=415,
   HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR=500,
+  HTTP_STATUS_CODE_INSUFFICIENT_STORAGE=507,
 } http_status_code_t;
 
 typedef struct {
@@ -225,11 +232,6 @@ http_request_end(http_request_handle_t rh);
 NON_NULL_ARGS0() const char *
 http_get_header_value(const HTTPRequestHeaders *rhs, const char *header_name);
 
-NON_NULL_ARGS3(1, 3, 4) void
-http_request_simple_response(http_request_handle_t rh,
-			     http_status_code_t code, const char *body,
-			     event_handler_t cb, void *cb_ud);
-
 HEADER_FUNCTION NON_NULL_ARGS1(1) bool
 http_response_init(HTTPResponseHeaders *rsp) {
   rsp->num_headers = 0;
@@ -252,11 +254,16 @@ http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
     msg = msg_;					\
   }						\
   while (false)
+
   switch (code) {
   case HTTP_STATUS_CODE_OK: SET_MSG("OK"); break;
+  case HTTP_STATUS_CODE_CREATED: SET_MSG("Created"); break;
+  case HTTP_STATUS_CODE_MULTI_STATUS: SET_MSG("Multi-Status"); break;
   case HTTP_STATUS_CODE_BAD_REQUEST: SET_MSG("Bad Request"); break;
   case HTTP_STATUS_CODE_NOT_FOUND: SET_MSG("Not Found"); break;
   case HTTP_STATUS_CODE_METHOD_NOT_ALLOWED: SET_MSG("Method Not Allowed"); break;
+  case HTTP_STATUS_CODE_CONFLICT: SET_MSG("Conflict"); break;
+  case HTTP_STATUS_CODE_UNSUPPORTED_MEDIA_TYPE: SET_MSG("Unsupported Media Type"); break;
   case HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR: SET_MSG("Internal Server Error"); break;
   default: return false; break;
   }
@@ -264,6 +271,7 @@ http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
   memcpy(rsp->message, msg, MIN(sizeof(rsp->message), msg_size));
 
   return true;
+#undef SET_MSG
 }
 
 #endif /* HTTP_SERVER_H */
