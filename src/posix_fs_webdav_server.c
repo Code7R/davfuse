@@ -66,6 +66,17 @@ str_equals(const char *a, const char *b) {
 }
 
 static bool PURE_FUNCTION
+str_startswith(const char *a, const char *b) {
+  size_t len_a = strlen(a);
+  size_t len_b = strlen(b);
+  if (len_a < len_b) {
+    return false;
+  }
+
+  return !memcmp(a, b, len_b);
+}
+
+static bool PURE_FUNCTION
 xml_str_equals(const xmlChar *restrict a, const char *restrict b) {
   return str_equals((const char *) a, b);
 }
@@ -436,10 +447,14 @@ struct handler_context {
     struct {
       coroutine_position_t pos;
     } mkcol;
+    struct {
+      coroutine_position_t pos;
+    } delete;
   } sub;
 };
 
 static EVENT_HANDLER_DECLARE(handle_request);
+static EVENT_HANDLER_DECLARE(handle_delete_request);
 static EVENT_HANDLER_DECLARE(handle_get_request);
 static EVENT_HANDLER_DECLARE(handle_mkcol_request);
 static EVENT_HANDLER_DECLARE(handle_options_request);
@@ -469,6 +484,9 @@ UTHR_DEFINE(request_proc) {
   if (!strcasecmp(hc->rhs.method, "GET")) {
     handler = handle_get_request;
   }
+  else if (!strcasecmp(hc->rhs.method, "DELETE")) {
+    handler = handle_delete_request;
+  }
   else if (!strcasecmp(hc->rhs.method, "MKCOL")) {
     handler = handle_mkcol_request;
   }
@@ -491,7 +509,7 @@ UTHR_DEFINE(request_proc) {
   else {
     UTHR_YIELD(hc,
                http_request_string_response(hc->rh,
-                                            HTTP_STATUS_CODE_METHOD_NOT_ALLOWED, "Not allowed",
+                                            HTTP_STATUS_CODE_NOT_IMPLEMENTED, "Not Implemented",
                                             request_proc, hc));
   }
 
@@ -624,6 +642,139 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
 }
 
 static
+EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
+  UNUSED(ev);
+
+  struct handler_context *hc = ud;
+
+  CRBEGIN(hc->sub.delete.pos);
+
+  /* recursive delete, this should be fun */
+  linked_list_t failed_to_delete = LINKED_LIST_INITIALIZER;
+  linked_list_t delete_queue = LINKED_LIST_INITIALIZER;
+  http_status_code_t status_code = HTTP_STATUS_CODE_OK;
+  DIR *dir = NULL;
+
+  char *fpath = path_from_uri(hc->rhs.uri);
+  if (!fpath) {
+    log_info("Couldn't make file path from %s", hc->rhs.uri);
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  delete_queue = linked_list_prepend(delete_queue, fpath);
+  while (delete_queue) {
+    char *path;
+    delete_queue = linked_list_popleft(delete_queue, (void **) &path);
+
+    struct stat st;
+    int ret = stat(path, &st);
+    if (ret < 0) {
+      log_debug("Error while stat(\"%s\"): %s", path, strerror(errno));
+      goto minidone;
+    }
+
+    log_debug("Deleting %s", path);
+    if (S_ISDIR(st.st_mode)) {
+      /* if we're a directory, attempt to delete first */
+      ret = rmdir(path);
+      if (ret < 0) {
+        if (errno == ENOTEMPTY) {
+          /* not empty... if the top of the failed_to_delete stack is an descendant of ours,
+             then add ourselves to it, otherwise, add ourselves back to the queue an all of
+             our children */
+          char *top_child = linked_list_peekleft(failed_to_delete);
+
+          log_debug("TOP CHILD: %s", top_child);
+          log_debug("path: %s", path);
+          if (top_child && str_startswith(top_child, path)) {
+            failed_to_delete = linked_list_prepend(failed_to_delete, path);
+            path = NULL;
+          }
+          else {
+            char *path_alias = path;
+            /* keep the dir around, try to delete later */
+            delete_queue = linked_list_prepend(delete_queue, path);
+            /* don't free path, now that it's back on the top of the delete queue */
+            path = NULL;
+
+            struct dirent *d;
+            dir = opendir(path_alias);
+            if (!dir) {
+              log_debug("Error while opendir(%s): %s", path_alias, strerror(errno));
+              goto minidone;
+            }
+
+            size_t len_of_dirname = strlen(path_alias);
+            while ((d = readdir(dir)) != NULL) {
+              if (str_equals(d->d_name, "..") ||
+                  str_equals(d->d_name, ".")) {
+                continue;
+              }
+
+              size_t len_of_basename = strlen(d->d_name);
+              char *new_child = malloc(len_of_dirname + 1 + len_of_basename + 1);
+              if (!new_child) {
+                goto minidone;
+              }
+
+              memcpy(new_child, path_alias, len_of_dirname);
+              new_child[len_of_dirname] = '/';
+              memcpy(new_child + len_of_dirname + 1, d->d_name, len_of_basename);
+              new_child[len_of_dirname + 1 + len_of_basename] = '\0';
+
+              delete_queue = linked_list_prepend(delete_queue, new_child);
+            }
+
+            closedir(dir);
+            dir = NULL;
+          }
+        }
+        else {
+          /* failed to delete, just move on */
+          failed_to_delete = linked_list_prepend(failed_to_delete, path);
+          path = NULL;
+        }
+      }
+    }
+    else {
+      ret = unlink(path);
+      if (ret < 0) {
+        /* failed to delete, just move on */
+        failed_to_delete = linked_list_prepend(failed_to_delete, path);
+        path = NULL;
+      }
+    }
+
+    if (false) {
+  minidone:
+      free(path);
+      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      goto done;
+    }
+  }
+
+ done:
+  if (dir) {
+    closedir(dir);
+  }
+
+  linked_list_free(failed_to_delete, free);
+  linked_list_free(delete_queue, free);
+
+  CRYIELD(hc->sub.delete.pos,
+          http_request_string_response(hc->rh,
+                                       status_code, "",
+                                       handle_delete_request, hc));
+
+  CRRETURN(hc->sub.delete.pos,
+           request_proc(GENERIC_EVENT, NULL, hc));
+
+  CREND();
+}
+
+static
 EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
   UNUSED(ev_type);
 
@@ -667,9 +818,11 @@ EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
              errno == EDQUOT) {
       status_code = HTTP_STATUS_CODE_INSUFFICIENT_STORAGE;
     }
-    else if (errno == EACCES ||
-             errno == ENOTDIR) {
+    else if (errno == ENOTDIR) {
       status_code = HTTP_STATUS_CODE_FORBIDDEN;
+    }
+    else if (errno == EACCES) {
+      status_code = HTTP_STATUS_CODE_METHOD_NOT_ALLOWED;
     }
     else if (errno == EEXIST) {
       struct stat st;
@@ -678,7 +831,7 @@ EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
         status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
       }
       else if (S_ISDIR(st.st_mode)) {
-        status_code = HTTP_STATUS_CODE_METHOD_NOT_ALLOWED;
+        status_code = HTTP_STATUS_CODE_CREATED;
       }
       else {
         status_code = HTTP_STATUS_CODE_FORBIDDEN;

@@ -65,6 +65,7 @@ typedef enum {
   HTTP_STATUS_CODE_CONFLICT=409,
   HTTP_STATUS_CODE_UNSUPPORTED_MEDIA_TYPE=415,
   HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR=500,
+  HTTP_STATUS_CODE_NOT_IMPLEMENTED=501,
   HTTP_STATUS_CODE_INSUFFICIENT_STORAGE=507,
 } http_status_code_t;
 
@@ -265,6 +266,7 @@ http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
   case HTTP_STATUS_CODE_CONFLICT: SET_MSG("Conflict"); break;
   case HTTP_STATUS_CODE_UNSUPPORTED_MEDIA_TYPE: SET_MSG("Unsupported Media Type"); break;
   case HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR: SET_MSG("Internal Server Error"); break;
+  case HTTP_STATUS_CODE_NOT_IMPLEMENTED: SET_MSG("Not Implemented"); break;
   default: return false; break;
   }
 

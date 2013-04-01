@@ -42,3 +42,25 @@ linked_list_free(linked_list_t ll, linked_list_elt_handler_t handle) {
     free(old);
   }
 }
+
+linked_list_t
+linked_list_popleft(linked_list_t ll, void **elt) {
+  if (!ll) {
+    *elt = NULL;
+    return NULL;
+  }
+
+  *elt = ll->elt;
+  linked_list_t next = ll->next;
+  free(ll);
+
+  return next;
+}
+
+void *
+linked_list_peekleft(linked_list_t ll) {
+  if (!ll) {
+    return NULL;
+  }
+  return ll->elt;
+}

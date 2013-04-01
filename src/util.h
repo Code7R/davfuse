@@ -17,11 +17,14 @@ typedef void (*linked_list_elt_handler_t)(void *);
 linked_list_t
 linked_list_prepend(linked_list_t, void *elt);
 
-linked_list_t
-linked_list_next(linked_list_t);
-
 void
 linked_list_free(linked_list_t, linked_list_elt_handler_t);
+
+linked_list_t
+linked_list_popleft(linked_list_t, void **elt);
+
+void *
+linked_list_peekleft(linked_list_t);
 
 size_t
 strnlen(const char *s, size_t maxlen);
