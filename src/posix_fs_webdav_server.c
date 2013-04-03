@@ -870,11 +870,11 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
   ret = http_response_set_code(&hc->resp, HTTP_STATUS_CODE_OK);
   assert(ret);
 
-  ret = http_response_add_header(&hc->resp, "DAV", "1");
+  ret = http_response_add_header(&hc->resp, "DAV", "1,2");
   assert(ret);
 
   ret = http_response_add_header(&hc->resp, "Allow",
-                                 "GET,HEAD,PUT,DELETE,MKCOL,COPY,MOVE,PROPFIND,OPTIONS");
+                                 "GET,HEAD,PUT,DELETE,MKCOL,COPY,MOVE,PROPFIND,LOCK,OPTIONS");
   assert(ret);
 
   ret = http_response_add_header(&hc->resp, HTTP_HEADER_CONTENT_LENGTH, "0");
