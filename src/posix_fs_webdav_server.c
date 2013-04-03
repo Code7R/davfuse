@@ -98,6 +98,24 @@ path_from_uri(const char *uri) {
   return strdup(&uri[1]);
 }
 
+static int
+file_exists(const char *file_path) {
+  struct stat st;
+  int ret = stat(file_path, &st);
+  if (ret < 0) {
+    if (errno == ENOENT ||
+        errno == ENOTDIR) {
+      return 0;
+    }
+    else {
+      return ret;
+    }
+  }
+  else {
+    return 1;
+  }
+}
+
 static void
 add_propstat_response_for_path(const char *uri,
                                int fd,
@@ -433,9 +451,15 @@ struct handler_context {
   union {
     struct {
       coroutine_position_t pos;
+    } delete;
+    struct {
+      coroutine_position_t pos;
       char buf[BUF_SIZE];
       int fd;
     } get;
+    struct {
+      coroutine_position_t pos;
+    } mkcol;
     struct {
       coroutine_position_t pos;
       char scratch_buf[BUF_SIZE];
@@ -446,10 +470,10 @@ struct handler_context {
     } propfind;
     struct {
       coroutine_position_t pos;
-    } mkcol;
-    struct {
-      coroutine_position_t pos;
-    } delete;
+      char read_buf[BUF_SIZE];
+      http_status_code_t success_status_code;
+      int fd;
+    } put;
   } sub;
 };
 
@@ -459,6 +483,7 @@ static EVENT_HANDLER_DECLARE(handle_get_request);
 static EVENT_HANDLER_DECLARE(handle_mkcol_request);
 static EVENT_HANDLER_DECLARE(handle_options_request);
 static EVENT_HANDLER_DECLARE(handle_propfind_request);
+static EVENT_HANDLER_DECLARE(handle_put_request);
 
 static
 UTHR_DEFINE(request_proc) {
@@ -495,6 +520,9 @@ UTHR_DEFINE(request_proc) {
   }
   else if (!strcasecmp(hc->rhs.method, "PROPFIND")) {
     handler = handle_propfind_request;
+  }
+  else if (!strcasecmp(hc->rhs.method, "PUT")) {
+    handler = handle_put_request;
   }
   else {
     handler = NULL;
@@ -655,6 +683,7 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   linked_list_t delete_queue = LINKED_LIST_INITIALIZER;
   http_status_code_t status_code = HTTP_STATUS_CODE_OK;
   DIR *dir = NULL;
+  int num_times = 0;
 
   char *fpath = path_from_uri(hc->rhs.uri);
   if (!fpath) {
@@ -663,6 +692,7 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
     goto done;
   }
 
+  /* TODO: yield after every delete */
   delete_queue = linked_list_prepend(delete_queue, fpath);
   while (delete_queue) {
     char *path;
@@ -671,8 +701,14 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
     struct stat st;
     int ret = stat(path, &st);
     if (ret < 0) {
-      log_debug("Error while stat(\"%s\"): %s", path, strerror(errno));
-      goto minidone;
+      if (!num_times && errno == ENOENT) {
+        status_code = HTTP_STATUS_CODE_NOT_FOUND;
+        goto okay_done;
+      }
+      else {
+        log_debug("Error while stat(\"%s\"): %s", path, strerror(errno));
+        goto minidone;
+      }
     }
 
     log_debug("Deleting %s", path);
@@ -748,11 +784,14 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
     }
 
     if (false) {
-  minidone:
-      free(path);
+    minidone:
       status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    okay_done:
+      free(path);
       goto done;
     }
+
+    num_times += 1;
   }
 
  done:
@@ -831,7 +870,7 @@ EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
         status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
       }
       else if (S_ISDIR(st.st_mode)) {
-        status_code = HTTP_STATUS_CODE_CREATED;
+        status_code = HTTP_STATUS_CODE_METHOD_NOT_ALLOWED;
       }
       else {
         status_code = HTTP_STATUS_CODE_FORBIDDEN;
@@ -957,17 +996,106 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
 }
 
 static
+EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
+
+  struct handler_context *hc = ud;
+  /* always re-init to 0 */
+  http_status_code_t status_code = 0;
+
+  CRBEGIN(hc->sub.put.pos);
+
+  hc->sub.put.fd = -1;
+
+  const char *uri = hc->rhs.uri;
+  const char *file_path = path_from_uri(uri);
+  if (!file_path) {
+    log_warning("Couldn't make file path from %s", uri);
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  hc->sub.put.success_status_code = (file_exists(file_path) > 0
+                                     ? HTTP_STATUS_CODE_OK
+                                     : HTTP_STATUS_CODE_CREATED);
+
+  hc->sub.put.fd = open(file_path, O_WRONLY | O_CREAT | O_TRUNC | O_NONBLOCK, 0666);
+  if (hc->sub.put.fd < 0) {
+    log_debug("ERRNO is %d", errno);
+    if (errno == ENOTDIR) {
+      status_code = HTTP_STATUS_CODE_CONFLICT;
+      goto done;
+    }
+    else if (errno == EACCES) {
+      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      goto done;
+    }
+  }
+
+  /* TODO: implement `sendfile()` in http_request_* */
+  while (true) {
+    CRYIELD(hc->sub.put.pos,
+            http_request_read(hc->rh,
+                              hc->sub.put.read_buf, sizeof(hc->sub.put.read_buf),
+                              handle_put_request, hc));
+    HTTPRequestReadDoneEvent *read_done_ev = ev;
+    if (read_done_ev->err != HTTP_SUCCESS) {
+      goto error;
+    }
+
+    /* EOF */
+    if (!read_done_ev->nbyte) {
+      break;
+    }
+
+    CRYIELD(hc->sub.put.pos,
+            c_write_all(hc->loop, hc->sub.put.fd,
+                        hc->sub.put.read_buf,
+                        read_done_ev->nbyte,
+                        handle_put_request,
+                        hc));
+    CWriteAllDoneEvent *c_write_all_done_ev = ev;
+    if (c_write_all_done_ev->error_number) {
+      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      goto done;
+    }
+  }
+
+  status_code = hc->sub.put.success_status_code;
+
+ done:
+  assert(status_code);
+
+  if (hc->sub.put.fd >= 0) {
+    close(hc->sub.put.fd);
+  }
+
+  CRYIELD(hc->sub.put.pos,
+          http_request_string_response(hc->rh,
+                                       status_code, "",
+                                       handle_put_request, hc));
+
+ error:
+  CRRETURN(hc->sub.put.pos,
+           request_proc(GENERIC_EVENT, NULL, hc));
+
+  CREND();
+}
+
+
+static
 EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
   assert(ev_type == HTTP_NEW_REQUEST_EVENT);
   HTTPNewRequestEvent *new_request_ev = ev;
 
-  UTHR_CALL2(request_proc, struct handler_context,
+  UTHR_CALL3(request_proc, struct handler_context,
              .server = new_request_ev->server,
              .rh = new_request_ev->request_handle,
              .loop = ud);
 }
 
-int main(int argc, char *argv[]) {
+int
+main(int argc, char *argv[]) {
   port_t port;
 
   /* TODO: make configurable */

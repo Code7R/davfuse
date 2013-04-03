@@ -261,6 +261,7 @@ http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
   case HTTP_STATUS_CODE_CREATED: SET_MSG("Created"); break;
   case HTTP_STATUS_CODE_MULTI_STATUS: SET_MSG("Multi-Status"); break;
   case HTTP_STATUS_CODE_BAD_REQUEST: SET_MSG("Bad Request"); break;
+  case HTTP_STATUS_CODE_FORBIDDEN:SET_MSG("Forbidden"); break;
   case HTTP_STATUS_CODE_NOT_FOUND: SET_MSG("Not Found"); break;
   case HTTP_STATUS_CODE_METHOD_NOT_ALLOWED: SET_MSG("Method Not Allowed"); break;
   case HTTP_STATUS_CODE_CONFLICT: SET_MSG("Conflict"); break;
