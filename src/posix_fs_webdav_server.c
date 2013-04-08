@@ -26,6 +26,12 @@
 #include "uthread.h"
 #include "util.h"
 
+#define XMLSTR(a) ((const xmlChar *) a)
+
+const char *WEBDAV_HEADER_DEPTH = "Depth";
+const char *WEBDAV_HEADER_DESTINATION = "Destination";
+const char *WEBDAV_HEADER_OVERWRITE = "Overwrite";
+
 enum {
   BUF_SIZE=4096,
 };
@@ -34,6 +40,7 @@ typedef enum {
   DEPTH_0,
   DEPTH_1,
   DEPTH_INF,
+  DEPTH_INVALID,
 } webdav_depth_t;
 
 typedef struct {
@@ -41,7 +48,53 @@ typedef struct {
   char *ns_href;
 } WebdavProperty;
 
-#define XMLSTR(a) ((const xmlChar *) a)
+struct handler_context {
+  UTHR_CTX_BASE;
+  HTTPServer *server;
+  FDEventLoop *loop;
+  HTTPRequestHeaders rhs;
+  HTTPResponseHeaders resp;
+  http_request_handle_t rh;
+  union {
+    struct {
+      coroutine_position_t pos;
+    } copy;
+    struct {
+      coroutine_position_t pos;
+    } delete;
+    struct {
+      coroutine_position_t pos;
+      char buf[BUF_SIZE];
+      int fd;
+    } get;
+    struct {
+      coroutine_position_t pos;
+    } mkcol;
+    struct {
+      coroutine_position_t pos;
+      char scratch_buf[BUF_SIZE];
+      char *buf;
+      size_t buf_used, buf_size;
+      char *out_buf;
+      size_t out_buf_size;
+    } propfind;
+    struct {
+      coroutine_position_t pos;
+      char read_buf[BUF_SIZE];
+      http_status_code_t success_status_code;
+      int fd;
+    } put;
+  } sub;
+};
+
+static EVENT_HANDLER_DECLARE(handle_request);
+static EVENT_HANDLER_DECLARE(handle_copy_request);
+static EVENT_HANDLER_DECLARE(handle_delete_request);
+static EVENT_HANDLER_DECLARE(handle_get_request);
+static EVENT_HANDLER_DECLARE(handle_mkcol_request);
+static EVENT_HANDLER_DECLARE(handle_options_request);
+static EVENT_HANDLER_DECLARE(handle_propfind_request);
+static EVENT_HANDLER_DECLARE(handle_put_request);
 
 static WebdavProperty *
 create_webdav_property(const char *element_name, const char *ns_href) {
@@ -66,6 +119,11 @@ str_equals(const char *a, const char *b) {
 }
 
 static bool PURE_FUNCTION
+str_case_equals(const char *a, const char *b) {
+  return !strcasecmp(a, b);
+}
+
+static bool PURE_FUNCTION
 str_startswith(const char *a, const char *b) {
   size_t len_a = strlen(a);
   size_t len_b = strlen(b);
@@ -79,23 +137,6 @@ str_startswith(const char *a, const char *b) {
 static bool PURE_FUNCTION
 xml_str_equals(const xmlChar *restrict a, const char *restrict b) {
   return str_equals((const char *) a, b);
-}
-
-static char *
-path_from_uri(const char *uri) {
-  /* todo make this not suck, and use server context */
-  if (uri[0] != '/') {
-    /* can't parse this */
-    return NULL;
-  }
-
-  //if  uri == "/"
-  if (uri[1] == '\0') {
-    return strdup(".");
-  }
-
-  /* return relative path */
-  return strdup(&uri[1]);
 }
 
 static int
@@ -114,6 +155,71 @@ file_exists(const char *file_path) {
   else {
     return 1;
   }
+}
+
+static char *
+path_from_uri(struct handler_context *hc, const char *uri) {
+  UNUSED(hc);
+
+  const char *real_uri = uri;
+
+  if (uri[0] != '/') {
+    /* can't parse this */
+    const char *host_header = http_get_header_value(&hc->rhs, HTTP_HEADER_HOST);
+    /* this is guaranteed to be exist */
+    if (!host_header) {
+      abort();
+    }
+    size_t http_len = strlen("http://");
+    size_t host_len = strlen(host_header);
+    char *prefix = malloc(http_len + host_len + 2);
+    if (!prefix) {
+      abort();
+    }
+    memcpy(prefix, "http://", http_len);
+    memcpy(prefix + http_len, host_header, host_len);
+    /* intentionally copying the trailing null byte here */
+    memcpy(prefix + http_len + host_len, "/", sizeof("/"));
+
+    if (str_startswith(uri, prefix)) {
+      real_uri = &uri[strlen(prefix) - 1];
+      free(prefix);
+    }
+    else {
+      free(prefix);
+      return NULL;
+    }
+  }
+
+  if (str_equals(real_uri, "/")) {
+    return strdup(".");
+  }
+
+  /* return relative path */
+  return strdup(&real_uri[1]);
+}
+
+static webdav_depth_t
+webdav_get_depth(const HTTPRequestHeaders *rhs) {
+  webdav_depth_t depth;
+
+  const char *depth_str = http_get_header_value(rhs, WEBDAV_HEADER_DEPTH);
+  if (!depth_str || !strcasecmp(depth_str, "infinity")) {
+    depth = DEPTH_INF;
+  }
+  else {
+    long ret = strtol(depth_str, NULL, 10);
+    if ((ret == 0 && errno == EINVAL) ||
+        (ret != 0 && ret != 1)) {
+      depth = DEPTH_INVALID;
+      log_info("Client sent up bad depth header: %s", depth_str);
+    }
+    else {
+      depth = ret ? DEPTH_1 : DEPTH_0;
+    }
+  }
+
+  return depth;
 }
 
 static void
@@ -230,7 +336,8 @@ add_propstat_response_for_path(const char *uri,
 }
 
 static void
-run_propfind(const char *uri, webdav_depth_t depth,
+run_propfind(struct handler_context *hc,
+             const char *uri, webdav_depth_t depth,
              const char *req_data, size_t req_data_length,
              char **out_data, size_t *out_size,
              http_status_code_t *status_code) {
@@ -332,7 +439,7 @@ run_propfind(const char *uri, webdav_depth_t depth,
   }
 
   /* build up response */
-  file_path = path_from_uri(uri);
+  file_path = path_from_uri(hc, uri);
   if (!file_path) {
     log_info("Couldn't make file path from %s", uri);
     *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -441,50 +548,6 @@ run_propfind(const char *uri, webdav_depth_t depth,
   free(file_path);
 }
 
-struct handler_context {
-  UTHR_CTX_BASE;
-  HTTPServer *server;
-  FDEventLoop *loop;
-  HTTPRequestHeaders rhs;
-  HTTPResponseHeaders resp;
-  http_request_handle_t rh;
-  union {
-    struct {
-      coroutine_position_t pos;
-    } delete;
-    struct {
-      coroutine_position_t pos;
-      char buf[BUF_SIZE];
-      int fd;
-    } get;
-    struct {
-      coroutine_position_t pos;
-    } mkcol;
-    struct {
-      coroutine_position_t pos;
-      char scratch_buf[BUF_SIZE];
-      char *buf;
-      size_t buf_used, buf_size;
-      char *out_buf;
-      size_t out_buf_size;
-    } propfind;
-    struct {
-      coroutine_position_t pos;
-      char read_buf[BUF_SIZE];
-      http_status_code_t success_status_code;
-      int fd;
-    } put;
-  } sub;
-};
-
-static EVENT_HANDLER_DECLARE(handle_request);
-static EVENT_HANDLER_DECLARE(handle_delete_request);
-static EVENT_HANDLER_DECLARE(handle_get_request);
-static EVENT_HANDLER_DECLARE(handle_mkcol_request);
-static EVENT_HANDLER_DECLARE(handle_options_request);
-static EVENT_HANDLER_DECLARE(handle_propfind_request);
-static EVENT_HANDLER_DECLARE(handle_put_request);
-
 static
 UTHR_DEFINE(request_proc) {
   UTHR_HEADER(struct handler_context, hc);
@@ -504,13 +567,15 @@ UTHR_DEFINE(request_proc) {
     goto done;
   }
 
-  /* "GET", not supported */
   event_handler_t handler;
-  if (!strcasecmp(hc->rhs.method, "GET")) {
-    handler = handle_get_request;
+  if (!strcasecmp(hc->rhs.method, "COPY")) {
+    handler = handle_copy_request;
   }
   else if (!strcasecmp(hc->rhs.method, "DELETE")) {
     handler = handle_delete_request;
+  }
+  else if (!strcasecmp(hc->rhs.method, "GET")) {
+    handler = handle_get_request;
   }
   else if (!strcasecmp(hc->rhs.method, "MKCOL")) {
     handler = handle_mkcol_request;
@@ -550,120 +615,136 @@ UTHR_DEFINE(request_proc) {
 }
 
 static
-EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
+EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
+  UNUSED(ev);
+
   struct handler_context *hc = ud;
 
-  CRBEGIN(hc->sub.get.pos);
+  http_status_code_t status_code;
 
-  size_t content_length;
-  off_t pos;
-  http_status_code_t code;
+  CRBEGIN(hc->sub.copy.pos);
 
-  static const char toret[] = "SORRY BRO";
+  const char *destination_url = NULL;
+  char *destination_path = NULL;
+  char *file_path = path_from_uri(hc, hc->rhs.uri);
+  int src_fd = -1;
+  int dst_fd = -1;
 
-  char *path = path_from_uri(hc->rhs.uri);
-  if (path &&
-      (hc->sub.get.fd = open(path, O_RDONLY | O_NONBLOCK)) >= 0 &&
-      (pos = lseek(hc->sub.get.fd, 0, SEEK_END)) >= 0) {
-    code = HTTP_STATUS_CODE_OK;
-    content_length = pos;
-  }
-  else {
-    /* we couldn't open find just respond */
-    code = HTTP_STATUS_CODE_NOT_FOUND;
-    content_length = sizeof(toret) - 1;
-  }
-
-  if (path) {
-    free(path);
-  }
-
-  bool ret;
-  ret = http_response_set_code(&hc->resp, code);
-  assert(ret);
-  ret = http_response_add_header(&hc->resp,
-                                 HTTP_HEADER_CONTENT_LENGTH, "%zu", content_length);
-  assert(ret);
-
-  CRYIELD(hc->sub.get.pos,
-          http_request_write_headers(hc->rh, &hc->resp,
-                                     handle_get_request, hc));
-  assert(ev_type == HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT);
-  HTTPRequestWriteHeadersDoneEvent *write_headers_ev = ev;
-  assert(write_headers_ev->request_handle == hc->rh);
-  if (write_headers_ev->err != HTTP_SUCCESS) {
+  /* destination */
+  destination_url = http_get_header_value(&hc->rhs, WEBDAV_HEADER_DESTINATION);
+  if (!destination_url) {
+    log_debug("copy failed: request didn't have destination");
+    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
   }
 
-  log_debug("Sent headers!");
-
-  if (hc->resp.code == HTTP_STATUS_CODE_OK) {
-    log_debug("Sending file %s, length: %s", &hc->rhs.uri[1], hc->resp.headers[0].value);
-
-    /* seek back to beginning of file */
-    int ret = lseek(hc->sub.get.fd, 0, SEEK_SET);
-    UNUSED(ret);
-    assert(!ret);
-
-    /* TODO: must send up to the content-length we sent */
-    while (true) {
-      ssize_t amt_read = read(hc->sub.get.fd, hc->sub.get.buf, sizeof(hc->sub.get.buf));
-      if (amt_read < 0 && errno == EAGAIN) {
-        bool ret = fdevent_add_watch(hc->loop, hc->sub.get.fd,
-                                     create_stream_events(true, false),
-                                     handle_get_request, hc,
-                                     NULL);
-        UNUSED(ret);
-        assert(ret);
-        CRYIELD(hc->sub.get.pos, 0);
-        assert(ev_type == FD_EVENT);
-        continue;
-      }
-      else if (amt_read < 0) {
-        log_error_errno("Error while read()ing file");
-        /* error while reading the file */
-        goto done;
-      }
-      else if (!amt_read) {
-        /* EOF */
-        log_debug("EOF done reading file; %zu", sizeof(hc->sub.get.buf));
-        break;
-      }
-
-      log_debug("Sending %zd bytes", amt_read);
-
-      /* now write to socket */
-      CRYIELD(hc->sub.get.pos,
-              http_request_write(hc->rh, hc->sub.get.buf, amt_read,
-                                 handle_get_request, hc));
-      assert(ev_type == HTTP_REQUEST_WRITE_DONE_EVENT);
-      HTTPRequestWriteDoneEvent *write_ev = ev;
-      UNUSED(write_ev);
-      assert(write_ev->request_handle == hc->rh);
-      if (write_ev->err != HTTP_SUCCESS) {
-        goto done;
-      }
-    }
+  /* destination file path */
+  destination_path = path_from_uri(hc, destination_url);
+  if (!destination_path) {
+    log_debug("copy failed: couldn't get path from destination URI");
+    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
   }
-  else {
-    CRYIELD(hc->sub.get.pos,
-            http_request_write(hc->rh, toret, sizeof(toret) - 1,
-                               handle_get_request, hc));
-    assert(ev_type == HTTP_REQUEST_WRITE_DONE_EVENT);
-    HTTPRequestWriteDoneEvent *write_ev = ev;
-    UNUSED(write_ev);
-    assert(write_ev->request_handle == hc->rh);
-    if (write_ev->err != HTTP_SUCCESS) {
+
+  /* depth */
+  webdav_depth_t depth = webdav_get_depth(&hc->rhs);
+  if (depth == DEPTH_INVALID) {
+    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
+  }
+
+  /* check if the resource is a file */
+  struct stat st;
+  int ret = stat(file_path, &st);
+  if (ret < 0) {
+    log_debug("copy failed: couldn't stat %s: %s", file_path, strerror(errno));
+    status_code = errno == ENOENT
+      ? HTTP_STATUS_CODE_NOT_FOUND
+      : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  /* XXX: we don't currently support collection copies */
+  if (!S_ISREG(st.st_mode)) {
+    log_debug("copy failed: can't copy collections");
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  src_fd = open(file_path, O_RDONLY | O_NONBLOCK);
+  if (src_fd < 0) {
+    log_debug("copy failed: open source %s failed: %s", file_path, strerror(errno));
+    status_code = errno == ENOENT
+      ? HTTP_STATUS_CODE_NOT_FOUND
+      : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  const char *overwrite_str = http_get_header_value(&hc->rhs, WEBDAV_HEADER_OVERWRITE);
+  bool overwrite = !(overwrite_str && str_case_equals(overwrite_str, "f"));
+
+  int extra_open_flags = overwrite ? 0 : O_EXCL;
+  dst_fd = open(destination_path,
+                O_WRONLY | /*O_NONBLOCK | */O_CREAT | O_TRUNC | extra_open_flags,
+                0666);
+  if (dst_fd < 0) {
+    log_debug("copy failed: open destination %s failed: %s",
+              destination_path, strerror(errno));
+    status_code = errno == EEXIST
+      ? HTTP_STATUS_CODE_PRECONDITION_FAILED
+      : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  /* TODO: just NBIO/coroutine_io.h */
+  while (true) {
+    char buffer[BUF_SIZE];
+    ssize_t amt = read(src_fd, buffer, sizeof(buffer));
+    if (amt < 0) {
+      log_debug("copy failed: failed read %s failed: %s",
+                file_path, strerror(errno));
+      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
       goto done;
     }
+    /* EOF */
+    else if (!amt) {
+      break;
+    }
+
+    ssize_t written = 0;
+    while (written < amt) {
+      ssize_t just_wrote = write(dst_fd, buffer + written, amt - written);
+      if (just_wrote < 0) {
+        log_debug("copy failed: failed write %s failed: %s",
+                  destination_path, strerror(errno));
+        status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+        goto done;
+      }
+      written += just_wrote;
+    }
   }
+
+  status_code = HTTP_STATUS_CODE_CREATED;
 
  done:
-  if (hc->sub.get.fd >= 0) {
-    close(hc->sub.get.fd);
+  if (dst_fd >= 0) {
+    close(dst_fd);
   }
 
-  CRRETURN(hc->sub.get.pos,
+  if (src_fd >= 0) {
+    close(src_fd);
+  }
+
+  free(file_path);
+  free(destination_path);
+
+  CRYIELD(hc->sub.copy.pos,
+          http_request_string_response(hc->rh,
+                                       status_code, "",
+                                       handle_copy_request, hc));
+
+  CRRETURN(hc->sub.copy.pos,
            request_proc(GENERIC_EVENT, NULL, hc));
 
   CREND();
@@ -685,7 +766,7 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   DIR *dir = NULL;
   int num_times = 0;
 
-  char *fpath = path_from_uri(hc->rhs.uri);
+  char *fpath = path_from_uri(hc, hc->rhs.uri);
   if (!fpath) {
     log_info("Couldn't make file path from %s", hc->rhs.uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -814,6 +895,126 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
 }
 
 static
+EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
+  struct handler_context *hc = ud;
+
+  CRBEGIN(hc->sub.get.pos);
+
+  size_t content_length;
+  off_t pos;
+  http_status_code_t code;
+
+  static const char toret[] = "SORRY BRO";
+
+  char *path = path_from_uri(hc, hc->rhs.uri);
+  if (path &&
+      (hc->sub.get.fd = open(path, O_RDONLY | O_NONBLOCK)) >= 0 &&
+      (pos = lseek(hc->sub.get.fd, 0, SEEK_END)) >= 0) {
+    code = HTTP_STATUS_CODE_OK;
+    content_length = pos;
+  }
+  else {
+    /* we couldn't open find just respond */
+    code = HTTP_STATUS_CODE_NOT_FOUND;
+    content_length = sizeof(toret) - 1;
+  }
+
+  if (path) {
+    free(path);
+  }
+
+  bool ret;
+  ret = http_response_set_code(&hc->resp, code);
+  assert(ret);
+  ret = http_response_add_header(&hc->resp,
+                                 HTTP_HEADER_CONTENT_LENGTH, "%zu", content_length);
+  assert(ret);
+
+  CRYIELD(hc->sub.get.pos,
+          http_request_write_headers(hc->rh, &hc->resp,
+                                     handle_get_request, hc));
+  assert(ev_type == HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT);
+  HTTPRequestWriteHeadersDoneEvent *write_headers_ev = ev;
+  assert(write_headers_ev->request_handle == hc->rh);
+  if (write_headers_ev->err != HTTP_SUCCESS) {
+    goto done;
+  }
+
+  log_debug("Sent headers!");
+
+  if (hc->resp.code == HTTP_STATUS_CODE_OK) {
+    log_debug("Sending file %s, length: %s", &hc->rhs.uri[1], hc->resp.headers[0].value);
+
+    /* seek back to beginning of file */
+    int ret = lseek(hc->sub.get.fd, 0, SEEK_SET);
+    UNUSED(ret);
+    assert(!ret);
+
+    /* TODO: must send up to the content-length we sent */
+    while (true) {
+      ssize_t amt_read = read(hc->sub.get.fd, hc->sub.get.buf, sizeof(hc->sub.get.buf));
+      if (amt_read < 0 && errno == EAGAIN) {
+        bool ret = fdevent_add_watch(hc->loop, hc->sub.get.fd,
+                                     create_stream_events(true, false),
+                                     handle_get_request, hc,
+                                     NULL);
+        UNUSED(ret);
+        assert(ret);
+        CRYIELD(hc->sub.get.pos, 0);
+        assert(ev_type == FD_EVENT);
+        continue;
+      }
+      else if (amt_read < 0) {
+        log_error_errno("Error while read()ing file");
+        /* error while reading the file */
+        goto done;
+      }
+      else if (!amt_read) {
+        /* EOF */
+        log_debug("EOF done reading file; %zu", sizeof(hc->sub.get.buf));
+        break;
+      }
+
+      log_debug("Sending %zd bytes", amt_read);
+
+      /* now write to socket */
+      CRYIELD(hc->sub.get.pos,
+              http_request_write(hc->rh, hc->sub.get.buf, amt_read,
+                                 handle_get_request, hc));
+      assert(ev_type == HTTP_REQUEST_WRITE_DONE_EVENT);
+      HTTPRequestWriteDoneEvent *write_ev = ev;
+      UNUSED(write_ev);
+      assert(write_ev->request_handle == hc->rh);
+      if (write_ev->err != HTTP_SUCCESS) {
+        goto done;
+      }
+    }
+  }
+  else {
+    CRYIELD(hc->sub.get.pos,
+            http_request_write(hc->rh, toret, sizeof(toret) - 1,
+                               handle_get_request, hc));
+    assert(ev_type == HTTP_REQUEST_WRITE_DONE_EVENT);
+    HTTPRequestWriteDoneEvent *write_ev = ev;
+    UNUSED(write_ev);
+    assert(write_ev->request_handle == hc->rh);
+    if (write_ev->err != HTTP_SUCCESS) {
+      goto done;
+    }
+  }
+
+ done:
+  if (hc->sub.get.fd >= 0) {
+    close(hc->sub.get.fd);
+  }
+
+  CRRETURN(hc->sub.get.pos,
+           request_proc(GENERIC_EVENT, NULL, hc));
+
+  CREND();
+}
+
+static
 EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
   UNUSED(ev_type);
 
@@ -826,6 +1027,9 @@ EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
   CRYIELD(hc->sub.mkcol.pos,
           http_request_ignore_body(hc->rh,
                                    handle_mkcol_request, hc));
+
+  char *file_path = NULL;
+
   HTTPRequestReadBodyDoneEvent *rbev = ev;
   if (rbev->error) {
     log_info("Error while reading body of request");
@@ -839,10 +1043,9 @@ EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
     goto done;
   }
 
-  const char *uri = hc->rhs.uri;
-  const char *file_path = path_from_uri(uri);
+  file_path = path_from_uri(hc, hc->rhs.uri);
   if (!file_path) {
-    log_info("Couldn't make file path from %s", uri);
+    log_info("Couldn't make file path from %s", hc->rhs.uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -886,6 +1089,8 @@ EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
 
  done:
   assert(status_code);
+
+  free(file_path);
 
   CRYIELD(hc->sub.mkcol.pos,
           http_request_string_response(hc->rh,
@@ -950,25 +1155,14 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   hc->sub.propfind.buf_used = rbev->length;
 
   /* figure out depth */
-  webdav_depth_t depth;
-
-  const char *depth_str = http_get_header_value(&hc->rhs, "depth");
-  if (!depth_str || !strcasecmp(depth_str, "infinity")) {
-    depth = DEPTH_INF;
-  }
-  else {
-    long ret = strtol(depth_str, NULL, 10);
-    if ((ret == 0 && errno == EINVAL) ||
-        (ret != 0 && ret != 1)) {
-      log_info("Client sent up bad depth header: %s", depth_str);
-      status_code = HTTP_STATUS_CODE_BAD_REQUEST;
-      goto done;
-    }
-    depth = ret ? DEPTH_1 : DEPTH_0;
+  webdav_depth_t depth = webdav_get_depth(&hc->rhs);
+  if (depth == DEPTH_INVALID) {
+    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
   }
 
   /* run the request */
-  run_propfind(hc->rhs.uri, depth,
+  run_propfind(hc, hc->rhs.uri, depth,
                hc->sub.propfind.buf, hc->sub.propfind.buf_used,
                &hc->sub.propfind.out_buf, &hc->sub.propfind.out_buf_size,
                &status_code);
@@ -1008,7 +1202,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
   hc->sub.put.fd = -1;
 
   const char *uri = hc->rhs.uri;
-  const char *file_path = path_from_uri(uri);
+  const char *file_path = path_from_uri(hc, uri);
   if (!file_path) {
     log_warning("Couldn't make file path from %s", uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;

@@ -31,6 +31,7 @@ enum {
 
 const char *HTTP_HEADER_CONTENT_LENGTH = "Content-Length";
 const char *HTTP_HEADER_CONTENT_TYPE = "Content-Type";
+const char *HTTP_HEADER_HOST = "Host";
 
 /* static forward decls */
 static

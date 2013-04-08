@@ -15,7 +15,7 @@ create_bound_socket(const struct sockaddr *addr, socklen_t address_len);
 typedef uint16_t port_t;
 
 enum {
-  MAX_PORT=(1 << 16) - 1,
+  MAX_PORT=UINT16_MAX,
 };
 
 int

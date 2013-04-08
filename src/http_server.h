@@ -13,6 +13,7 @@
 #ifndef _IS_HTTP_SERVER__C
 extern const char *HTTP_HEADER_CONTENT_LENGTH;
 extern const char *HTTP_HEADER_CONTENT_TYPE;
+extern const char *HTTP_HEADER_HOST;
 #endif
 
 enum {
@@ -63,6 +64,7 @@ typedef enum {
   HTTP_STATUS_CODE_NOT_FOUND=404,
   HTTP_STATUS_CODE_METHOD_NOT_ALLOWED=405,
   HTTP_STATUS_CODE_CONFLICT=409,
+  HTTP_STATUS_CODE_PRECONDITION_FAILED=412,
   HTTP_STATUS_CODE_UNSUPPORTED_MEDIA_TYPE=415,
   HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR=500,
   HTTP_STATUS_CODE_NOT_IMPLEMENTED=501,
@@ -249,25 +251,28 @@ http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
 
   size_t msg_size;
   const char *msg;
-#define SET_MSG(msg_)				\
-  do {						\
-    msg_size = sizeof(msg_);			\
-    msg = msg_;					\
-  }						\
-  while (false)
+#define SCS(code, msg_)				\
+  case code:                                    \
+    do {                                        \
+      msg_size = sizeof(msg_);			\
+      msg = msg_;                               \
+    }						\
+    while (false);                              \
+  break
 
   switch (code) {
-  case HTTP_STATUS_CODE_OK: SET_MSG("OK"); break;
-  case HTTP_STATUS_CODE_CREATED: SET_MSG("Created"); break;
-  case HTTP_STATUS_CODE_MULTI_STATUS: SET_MSG("Multi-Status"); break;
-  case HTTP_STATUS_CODE_BAD_REQUEST: SET_MSG("Bad Request"); break;
-  case HTTP_STATUS_CODE_FORBIDDEN:SET_MSG("Forbidden"); break;
-  case HTTP_STATUS_CODE_NOT_FOUND: SET_MSG("Not Found"); break;
-  case HTTP_STATUS_CODE_METHOD_NOT_ALLOWED: SET_MSG("Method Not Allowed"); break;
-  case HTTP_STATUS_CODE_CONFLICT: SET_MSG("Conflict"); break;
-  case HTTP_STATUS_CODE_UNSUPPORTED_MEDIA_TYPE: SET_MSG("Unsupported Media Type"); break;
-  case HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR: SET_MSG("Internal Server Error"); break;
-  case HTTP_STATUS_CODE_NOT_IMPLEMENTED: SET_MSG("Not Implemented"); break;
+    SCS(HTTP_STATUS_CODE_OK, "OK");
+    SCS(HTTP_STATUS_CODE_CREATED, "Created");
+    SCS(HTTP_STATUS_CODE_MULTI_STATUS, "Multi-Status");
+    SCS(HTTP_STATUS_CODE_BAD_REQUEST, "Bad Request");
+    SCS(HTTP_STATUS_CODE_FORBIDDEN, "Forbidden");
+    SCS(HTTP_STATUS_CODE_NOT_FOUND, "Not Found");
+    SCS(HTTP_STATUS_CODE_METHOD_NOT_ALLOWED, "Method Not Allowed");
+    SCS(HTTP_STATUS_CODE_CONFLICT, "Conflict");
+    SCS(HTTP_STATUS_CODE_PRECONDITION_FAILED, "Precondition Failed");
+    SCS(HTTP_STATUS_CODE_UNSUPPORTED_MEDIA_TYPE, "Unsupported Media Type");
+    SCS(HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR, "Internal Server Error");
+    SCS(HTTP_STATUS_CODE_NOT_IMPLEMENTED, "Not Implemented");
   default: return false; break;
   }
 
