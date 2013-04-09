@@ -28,7 +28,7 @@ FDEVENT_MODULE := fdevent_${FDEVENT_SOURCE}
 MAKEFILES := config.mk Makefile
 
 # Files in $SRCROOT
-HTTP_SERVER_SRC_ := ${FDEVENT_MODULE}.c http_server.c logging.c fd_utils.c coroutine_io.c util.c http_helpers.c
+HTTP_SERVER_SRC_ := ${FDEVENT_MODULE}.c http_server.c logging.c fd_utils.c coroutine_io.c util.c http_helpers.c file_utils.c
 TARGET_SRC_ := posix_fs_webdav_server.c test_http_server.c libdavfuse.c
 ALL_SRC_ := ${TARGET_SRC_} ${HTTP_SERVER_SRC_}
 

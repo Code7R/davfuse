@@ -1,6 +1,8 @@
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 
+#include "c_util.h"
 #include "util.h"
 
 size_t
@@ -63,4 +65,20 @@ linked_list_peekleft(linked_list_t ll) {
     return NULL;
   }
   return ll->elt;
+}
+
+bool PURE_FUNCTION
+str_startswith(const char *a, const char *b) {
+  size_t len_a = strlen(a);
+  size_t len_b = strlen(b);
+  if (len_a < len_b) {
+    return false;
+  }
+
+  return !memcmp(a, b, len_b);
+}
+
+bool PURE_FUNCTION
+str_equals(const char *a, const char *b) {
+  return !strcmp(a, b);
 }

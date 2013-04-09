@@ -1,8 +1,7 @@
 /*
   A webdav compatible http file server out of the current directory
  */
-#define _ISOC99_SOURCE
-
+//#define _ISOC99_SOURCE
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -20,6 +19,7 @@
 #include "events.h"
 #include "fdevent.h"
 #include "fd_utils.h"
+#include "file_utils.h"
 #include "http_helpers.h"
 #include "http_server.h"
 #include "logging.h"
@@ -114,24 +114,8 @@ free_webdav_property(WebdavProperty *wp) {
 }
 
 static bool PURE_FUNCTION
-str_equals(const char *a, const char *b) {
-  return !strcmp(a, b);
-}
-
-static bool PURE_FUNCTION
 str_case_equals(const char *a, const char *b) {
   return !strcasecmp(a, b);
-}
-
-static bool PURE_FUNCTION
-str_startswith(const char *a, const char *b) {
-  size_t len_a = strlen(a);
-  size_t len_b = strlen(b);
-  if (len_a < len_b) {
-    return false;
-  }
-
-  return !memcmp(a, b, len_b);
 }
 
 static bool PURE_FUNCTION
@@ -139,29 +123,12 @@ xml_str_equals(const xmlChar *restrict a, const char *restrict b) {
   return str_equals((const char *) a, b);
 }
 
-static int
-file_exists(const char *file_path) {
-  struct stat st;
-  int ret = stat(file_path, &st);
-  if (ret < 0) {
-    if (errno == ENOENT ||
-        errno == ENOTDIR) {
-      return 0;
-    }
-    else {
-      return ret;
-    }
-  }
-  else {
-    return 1;
-  }
-}
 
 static char *
 path_from_uri(struct handler_context *hc, const char *uri) {
   UNUSED(hc);
 
-  const char *real_uri = uri;
+  const char *real_uri;
 
   if (uri[0] != '/') {
     /* can't parse this */
@@ -182,7 +149,7 @@ path_from_uri(struct handler_context *hc, const char *uri) {
     memcpy(prefix + http_len + host_len, "/", sizeof("/"));
 
     if (str_startswith(uri, prefix)) {
-      real_uri = &uri[strlen(prefix) - 1];
+      real_uri = &uri[strlen(prefix)];
       free(prefix);
     }
     else {
@@ -190,13 +157,22 @@ path_from_uri(struct handler_context *hc, const char *uri) {
       return NULL;
     }
   }
+  else {
+    /* don't include leading slash */
+    real_uri = &uri[1];
+  }
 
   if (str_equals(real_uri, "/")) {
     return strdup(".");
   }
 
-  /* return relative path */
-  return strdup(&real_uri[1]);
+  /* return relative path (no leading slash), but also
+     don't include trailing slash, since posix treats that like "/." */
+  size_t uri_len = strlen(real_uri);
+  if (real_uri[uri_len - 1] == '/') {
+    uri_len -= 1;
+  }
+  return strndup(real_uri, uri_len);
 }
 
 static webdav_depth_t
@@ -631,101 +607,108 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   int src_fd = -1;
   int dst_fd = -1;
 
+#define HANDLE_ERROR(if_err, status_code_, ...) \
+  do {                                               \
+    if (if_err) {                                    \
+      log_debug("copy failed: " __VA_ARGS__);        \
+      status_code = status_code_;                    \
+      goto done;                                     \
+    }                                                \
+  }                                                  \
+  while (false)
+
   /* destination */
   destination_url = http_get_header_value(&hc->rhs, WEBDAV_HEADER_DESTINATION);
-  if (!destination_url) {
-    log_debug("copy failed: request didn't have destination");
-    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
-    goto done;
-  }
+  HANDLE_ERROR(!destination_url, HTTP_STATUS_CODE_BAD_REQUEST,
+               "request didn't have destination");
 
   /* destination file path */
   destination_path = path_from_uri(hc, destination_url);
-  if (!destination_path) {
-    log_debug("copy failed: couldn't get path from destination URI");
-    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
-    goto done;
-  }
+  HANDLE_ERROR(!destination_path, HTTP_STATUS_CODE_BAD_REQUEST,
+               "couldn't get path from destination URI");
 
   /* depth */
   webdav_depth_t depth = webdav_get_depth(&hc->rhs);
-  if (depth == DEPTH_INVALID) {
-    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
-    goto done;
-  }
+  HANDLE_ERROR(depth == DEPTH_INVALID, HTTP_STATUS_CODE_BAD_REQUEST,
+               "bad depth header");
 
-  /* check if the resource is a file */
-  struct stat st;
-  int ret = stat(file_path, &st);
-  if (ret < 0) {
-    log_debug("copy failed: couldn't stat %s: %s", file_path, strerror(errno));
-    status_code = errno == ENOENT
-      ? HTTP_STATUS_CODE_NOT_FOUND
-      : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    goto done;
-  }
+  struct stat src_st;
+  int src_ret = stat(file_path, &src_st);
+  HANDLE_ERROR(src_ret < 0, errno == ENOENT
+               ? HTTP_STATUS_CODE_NOT_FOUND
+               : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
+               "copy failed: couldn't stat source %s: %s",
+               file_path, strerror(errno));
 
   /* XXX: we don't currently support collection copies */
-  if (!S_ISREG(st.st_mode)) {
-    log_debug("copy failed: can't copy collections");
-    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    goto done;
-  }
+  HANDLE_ERROR(!S_ISREG(src_st.st_mode), HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
+               "copy failed: can't copy collections");
 
-  src_fd = open(file_path, O_RDONLY | O_NONBLOCK);
-  if (src_fd < 0) {
-    log_debug("copy failed: open source %s failed: %s", file_path, strerror(errno));
-    status_code = errno == ENOENT
-      ? HTTP_STATUS_CODE_NOT_FOUND
-      : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    goto done;
-  }
+  struct stat dst_st;
+  int dst_ret = stat(destination_path, &dst_st);
+  HANDLE_ERROR(dst_ret < 0 && errno != ENOENT,
+               HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
+               "copy failed: couldn't stat destination %s: %s",
+               destination_path, strerror(errno));
+  bool dst_existed = !dst_ret;
 
   const char *overwrite_str = http_get_header_value(&hc->rhs, WEBDAV_HEADER_OVERWRITE);
   bool overwrite = !(overwrite_str && str_case_equals(overwrite_str, "f"));
+
+  /* kill directory if we're overwriting it */
+  if (overwrite && !dst_ret && S_ISDIR(dst_st.st_mode)) {
+    linked_list_free(rmtree(destination_path), free);
+  }
+
+  src_fd = open(file_path, O_RDONLY/* | O_NONBLOCK*/);
+  HANDLE_ERROR(src_fd < 0, errno == ENOENT
+               ? HTTP_STATUS_CODE_NOT_FOUND
+               : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
+               "copy failed: open source %s failed: %s",
+               file_path, strerror(errno));
 
   int extra_open_flags = overwrite ? 0 : O_EXCL;
   dst_fd = open(destination_path,
                 O_WRONLY | /*O_NONBLOCK | */O_CREAT | O_TRUNC | extra_open_flags,
                 0666);
-  if (dst_fd < 0) {
-    log_debug("copy failed: open destination %s failed: %s",
-              destination_path, strerror(errno));
-    status_code = errno == EEXIST
-      ? HTTP_STATUS_CODE_PRECONDITION_FAILED
-      : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    goto done;
-  }
+  HANDLE_ERROR(dst_fd < 0, errno == EEXIST
+               ? HTTP_STATUS_CODE_PRECONDITION_FAILED
+               /* should not get ENOENT when doing O_CREAT unless
+                  an intermediate directory does not exist */
+               /* not sure if ENOTDIR should return the same code
+                  but seems reasonable
+                */
+               : errno == ENOENT || errno == ENOTDIR
+               ? HTTP_STATUS_CODE_CONFLICT
+               : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
+               "copy failed: open destination %s failed: %s",
+               destination_path, strerror(errno));
 
   /* TODO: just NBIO/coroutine_io.h */
   while (true) {
     char buffer[BUF_SIZE];
     ssize_t amt = read(src_fd, buffer, sizeof(buffer));
-    if (amt < 0) {
-      log_debug("copy failed: failed read %s failed: %s",
-                file_path, strerror(errno));
-      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-      goto done;
-    }
+    HANDLE_ERROR(amt < 0, HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
+                 "copy failed: failed read %s failed: %s",
+                 file_path, strerror(errno));
     /* EOF */
-    else if (!amt) {
+    if (!amt) {
       break;
     }
 
     ssize_t written = 0;
     while (written < amt) {
       ssize_t just_wrote = write(dst_fd, buffer + written, amt - written);
-      if (just_wrote < 0) {
-        log_debug("copy failed: failed write %s failed: %s",
-                  destination_path, strerror(errno));
-        status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-        goto done;
-      }
+      HANDLE_ERROR(just_wrote < 0, HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
+                   "copy failed: failed write %s failed: %s",
+                   destination_path, strerror(errno));
       written += just_wrote;
     }
   }
 
-  status_code = HTTP_STATUS_CODE_CREATED;
+  status_code = dst_existed
+    ? HTTP_STATUS_CODE_NO_CONTENT
+    : HTTP_STATUS_CODE_CREATED;
 
  done:
   if (dst_fd >= 0) {
@@ -747,6 +730,8 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   CRRETURN(hc->sub.copy.pos,
            request_proc(GENERIC_EVENT, NULL, hc));
 
+#undef HANDLE_ERROR
+
   CREND();
 }
 
@@ -759,12 +744,7 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
 
   CRBEGIN(hc->sub.delete.pos);
 
-  /* recursive delete, this should be fun */
-  linked_list_t failed_to_delete = LINKED_LIST_INITIALIZER;
-  linked_list_t delete_queue = LINKED_LIST_INITIALIZER;
   http_status_code_t status_code = HTTP_STATUS_CODE_OK;
-  DIR *dir = NULL;
-  int num_times = 0;
 
   char *fpath = path_from_uri(hc, hc->rhs.uri);
   if (!fpath) {
@@ -774,114 +754,27 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   }
 
   /* TODO: yield after every delete */
-  delete_queue = linked_list_prepend(delete_queue, fpath);
-  while (delete_queue) {
-    char *path;
-    delete_queue = linked_list_popleft(delete_queue, (void **) &path);
+  int ret = file_exists(fpath);
+  if (ret < 0) {
+    log_info("Couldn't check if path %s existed, %s", fpath, strerror(errno));
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+  }
+  else if (ret) {
+    linked_list_t failed_to_delete = rmtree(fpath);
 
-    struct stat st;
-    int ret = stat(path, &st);
-    if (ret < 0) {
-      if (!num_times && errno == ENOENT) {
-        status_code = HTTP_STATUS_CODE_NOT_FOUND;
-        goto okay_done;
-      }
-      else {
-        log_debug("Error while stat(\"%s\"): %s", path, strerror(errno));
-        goto minidone;
-      }
-    }
-
-    log_debug("Deleting %s", path);
-    if (S_ISDIR(st.st_mode)) {
-      /* if we're a directory, attempt to delete first */
-      ret = rmdir(path);
-      if (ret < 0) {
-        if (errno == ENOTEMPTY) {
-          /* not empty... if the top of the failed_to_delete stack is an descendant of ours,
-             then add ourselves to it, otherwise, add ourselves back to the queue an all of
-             our children */
-          char *top_child = linked_list_peekleft(failed_to_delete);
-
-          log_debug("TOP CHILD: %s", top_child);
-          log_debug("path: %s", path);
-          if (top_child && str_startswith(top_child, path)) {
-            failed_to_delete = linked_list_prepend(failed_to_delete, path);
-            path = NULL;
-          }
-          else {
-            char *path_alias = path;
-            /* keep the dir around, try to delete later */
-            delete_queue = linked_list_prepend(delete_queue, path);
-            /* don't free path, now that it's back on the top of the delete queue */
-            path = NULL;
-
-            struct dirent *d;
-            dir = opendir(path_alias);
-            if (!dir) {
-              log_debug("Error while opendir(%s): %s", path_alias, strerror(errno));
-              goto minidone;
-            }
-
-            size_t len_of_dirname = strlen(path_alias);
-            while ((d = readdir(dir)) != NULL) {
-              if (str_equals(d->d_name, "..") ||
-                  str_equals(d->d_name, ".")) {
-                continue;
-              }
-
-              size_t len_of_basename = strlen(d->d_name);
-              char *new_child = malloc(len_of_dirname + 1 + len_of_basename + 1);
-              if (!new_child) {
-                goto minidone;
-              }
-
-              memcpy(new_child, path_alias, len_of_dirname);
-              new_child[len_of_dirname] = '/';
-              memcpy(new_child + len_of_dirname + 1, d->d_name, len_of_basename);
-              new_child[len_of_dirname + 1 + len_of_basename] = '\0';
-
-              delete_queue = linked_list_prepend(delete_queue, new_child);
-            }
-
-            closedir(dir);
-            dir = NULL;
-          }
-        }
-        else {
-          /* failed to delete, just move on */
-          failed_to_delete = linked_list_prepend(failed_to_delete, path);
-          path = NULL;
-        }
-      }
-    }
-    else {
-      ret = unlink(path);
-      if (ret < 0) {
-        /* failed to delete, just move on */
-        failed_to_delete = linked_list_prepend(failed_to_delete, path);
-        path = NULL;
-      }
-    }
-
-    if (false) {
-    minidone:
+    /* TODO: return multi-status */
+    if (failed_to_delete) {
       status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    okay_done:
-      free(path);
-      goto done;
     }
 
-    num_times += 1;
+    linked_list_free(failed_to_delete, free);
+  }
+  else {
+    status_code = HTTP_STATUS_CODE_NOT_FOUND;
   }
 
  done:
-  if (dir) {
-    closedir(dir);
-  }
-
-  linked_list_free(failed_to_delete, free);
-  linked_list_free(delete_queue, free);
+  free(fpath);
 
   CRYIELD(hc->sub.delete.pos,
           http_request_string_response(hc->rh,

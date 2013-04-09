@@ -214,11 +214,17 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
     myerrno = ENOMEM;
     goto done;
   }
+  log_debug("Writing response, code: %d, message: %s",
+            whs->response_headers->code,
+            whs->response_headers->message);
   EMITN(whs->response_line, ret);
 
   /* output each header */
   for (whs->header_idx = 0; whs->header_idx < whs->response_headers->num_headers;
        ++whs->header_idx) {
+    log_debug("Writing response header: %s: %s",
+              whs->response_headers->headers[whs->header_idx].name,
+              whs->response_headers->headers[whs->header_idx].value);
     EMITS(whs->response_headers->headers[whs->header_idx].name);
     EMIT(":");
     EMITS(whs->response_headers->headers[whs->header_idx].value);

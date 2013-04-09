@@ -58,6 +58,7 @@ typedef enum {
 typedef enum {
   HTTP_STATUS_CODE_OK=200,
   HTTP_STATUS_CODE_CREATED=201,
+  HTTP_STATUS_CODE_NO_CONTENT=204,
   HTTP_STATUS_CODE_MULTI_STATUS=207,
   HTTP_STATUS_CODE_BAD_REQUEST=400,
   HTTP_STATUS_CODE_FORBIDDEN=403,
@@ -263,6 +264,7 @@ http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
   switch (code) {
     SCS(HTTP_STATUS_CODE_OK, "OK");
     SCS(HTTP_STATUS_CODE_CREATED, "Created");
+    SCS(HTTP_STATUS_CODE_NO_CONTENT, "No Content");
     SCS(HTTP_STATUS_CODE_MULTI_STATUS, "Multi-Status");
     SCS(HTTP_STATUS_CODE_BAD_REQUEST, "Bad Request");
     SCS(HTTP_STATUS_CODE_FORBIDDEN, "Forbidden");
