@@ -45,6 +45,21 @@ linked_list_free(linked_list_t ll, linked_list_elt_handler_t handle) {
   }
 }
 
+void
+linked_list_free_ud(linked_list_t ll, linked_list_elt_handler_ud_t handle, void *ud) {
+  while (ll) {
+    if (handle) {
+      handle(ll->elt, ud);
+    }
+
+    linked_list_t old = ll;
+    ll = old->next;
+
+    free(old);
+  }
+}
+
+
 linked_list_t
 linked_list_popleft(linked_list_t ll, void **elt) {
   if (!ll) {
@@ -52,7 +67,9 @@ linked_list_popleft(linked_list_t ll, void **elt) {
     return NULL;
   }
 
-  *elt = ll->elt;
+  if (elt) {
+    *elt = ll->elt;
+  }
   linked_list_t next = ll->next;
   free(ll);
 
