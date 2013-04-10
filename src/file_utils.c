@@ -1,10 +1,12 @@
-#include <errno.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <assert.h>
 #include <dirent.h>
+#include <errno.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "dfs.h"
@@ -27,6 +29,17 @@ file_exists(const char *file_path) {
   else {
     return 1;
   }
+}
+
+int
+file_is_dir(const char *file_path) {
+  struct stat st;
+  int ret = stat(file_path, &st);
+  if (ret < 0) {
+    return ret;
+  }
+
+  return S_ISDIR(st.st_mode);
 }
 
 static linked_list_t
@@ -78,37 +91,13 @@ rmtree(const char *fpath_) {
     abort();
   }
 
-  depth_first_t dfs = dfs_create((void *) fpath, _rm_tree_expand, free);
+  depth_first_t dfs = dfs_create((void *) fpath, true,
+                                 _rm_tree_expand, free);
   char *path;
-  bool pre_order;
 
-  while ((dfs_next(dfs, &pre_order, (void **) &path), path)) {
-    /* pre order means we will visit this entry again, delete after */
-    if (pre_order) {
-      continue;
-    }
-
-    struct stat st;
-    int ret = stat(path, &st);
-    if (ret < 0) {
-      if (errno != ENOENT) {
-        failed_to_delete = linked_list_prepend(failed_to_delete, path);
-        path = NULL;
-        log_debug("Error while stat(\"%s\"): %s", path, strerror(errno));
-      }
-
-      goto done;
-    }
-
+  while ((path = dfs_next(dfs))) {
     log_debug("Deleting %s", path);
-    if (S_ISDIR(st.st_mode)) {
-      /* if we're a directory, attempt to delete first */
-      ret = rmdir(path);
-    }
-    else {
-      ret = unlink(path);
-    }
-
+    int ret = remove(path);
     if (ret < 0) {
       /* failed to delete, just move on */
       log_debug("Failed to delete %s: %s", path, strerror(errno));
@@ -116,11 +105,132 @@ rmtree(const char *fpath_) {
       path = NULL;
     }
 
-  done:
     free(path);
   }
 
   dfs_destroy(dfs);
 
   return failed_to_delete;
+}
+
+bool
+copyfile(const char *from_path, const char *to_path) {
+  enum {
+    BUF_SIZE=2 << 5,
+  };
+  int dst_fd = -1;
+  int src_fd = -1;
+  bool success = false;
+
+  src_fd = open(from_path, O_RDONLY/* | O_NONBLOCK*/);
+  if (src_fd < 0) {
+    goto done;
+  }
+
+  dst_fd = open(to_path,
+                O_WRONLY | /*O_NONBLOCK | */O_CREAT | O_TRUNC | O_EXCL,
+                0666);
+  if (dst_fd < 0) {
+    goto done;
+  }
+
+  while (true) {
+    char buffer[BUF_SIZE];
+    ssize_t amt = read(src_fd, buffer, sizeof(buffer));
+    if (amt < 0) {
+      goto done;
+    }
+    /* EOF */
+    if (!amt) {
+      break;
+    }
+
+    ssize_t written = 0;
+    while (written < amt) {
+      ssize_t just_wrote = write(dst_fd, buffer + written, amt - written);
+      if (just_wrote < 0) {
+        goto done;
+      }
+      written += just_wrote;
+    }
+  }
+
+  success = true;
+
+ done:
+  if (src_fd >= 0) {
+    close(src_fd);
+  }
+
+  if (dst_fd >= 0) {
+    close(dst_fd);
+  }
+
+  return success;
+}
+
+static char *
+reparent_path(const char *from_path, const char *to_path,
+              const char *to_transform) {
+  assert(str_startswith(to_transform, from_path));
+  size_t from_path_len = strlen(from_path);
+  assert(to_transform[from_path_len] == '/');
+
+  size_t to_path_len = strlen(to_path);
+  size_t appendage_len = strlen(to_transform + from_path_len);
+  char *new_str = malloc(to_path_len + appendage_len + 1);
+  memcpy(new_str, to_path, to_path_len);
+  memcpy(new_str + to_path_len, to_transform + from_path_len, appendage_len);
+  new_str[to_path_len + appendage_len] = '\0';
+
+  return new_str;
+}
+
+linked_list_t
+copytree(const char *from_path, const char *to_path) {
+  char *fpath = strdup(from_path);
+  if (!fpath) {
+    abort();
+  }
+
+  linked_list_t failed_to_copy = LINKED_LIST_INITIALIZER;
+  depth_first_t dfs = dfs_create((void *) fpath, false,
+                                 _rm_tree_expand, free);
+  char *path;
+
+  while ((path = dfs_next(dfs))) {
+    char *dest_path = NULL;
+    int is_dir = file_is_dir(path);
+    if (is_dir < 0) {
+      if (errno != ENOENT) {
+        failed_to_copy = linked_list_prepend(failed_to_copy, path);
+        path = NULL;
+      }
+      goto done;
+    }
+
+    dest_path = reparent_path(from_path, to_path, path);
+
+    bool copy_success;
+    if (is_dir) {
+      int ret = mkdir(dest_path, 0777);
+      copy_success = ret >= 0;
+    }
+    else {
+      copy_success = copyfile(path, dest_path);
+    }
+
+    if (!copy_success) {
+      log_debug("Error copying %s to %s: %s",
+                path, dest_path, strerror(errno));
+      failed_to_copy = linked_list_prepend(failed_to_copy, path);
+      path = NULL;
+    }
+
+  done:
+    free(dest_path);
+    free(path);
+  }
+
+  return failed_to_copy;
 }

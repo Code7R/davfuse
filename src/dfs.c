@@ -21,8 +21,9 @@ clear_pointer_postorder(void *p) {
   return (void *)(((intptr_t) p) & ~0x1);
 }
 
-NON_NULL_ARGS2(2, 3) depth_first_t
+NON_NULL_ARGS3(1, 3, 4) depth_first_t
 dfs_create(void *init,
+           bool is_postorder,
            expand_fn expand_,
            free_fn free_) {
   EASY_ALLOC(struct depth_first, df);
@@ -37,13 +38,14 @@ dfs_create(void *init,
     .curnode = NULL,
     .expand_ = expand_,
     .free_ = free_,
+    .is_postorder = is_postorder,
   };
 
   return df;
 }
 
-NON_NULL_ARGS0() void
-dfs_next(depth_first_t ctx, bool *pre_order, void **next) {
+NON_NULL_ARGS0() void *
+dfs_next(depth_first_t ctx) {
   CRBEGIN(ctx->coropos);
 
   while (true) {
@@ -51,32 +53,36 @@ dfs_next(depth_first_t ctx, bool *pre_order, void **next) {
       ctx->stack = linked_list_popleft(ctx->stack, &ctx->curnode);
 
       /* first yield this node */
-      *pre_order = pointer_is_preorder(ctx->curnode);
-      *next = clear_pointer_postorder(ctx->curnode);
+      bool is_preorder_node = pointer_is_preorder(ctx->curnode);
+      void *next = clear_pointer_postorder(ctx->curnode);
 
       /* if this is pre-order then populate the stack with
          the post-order node and its child entries */
-      if (*pre_order) {
-        ctx->stack = linked_list_prepend(ctx->stack,
-                                         make_pointer_postorder(ctx->curnode));
+      if (is_preorder_node) {
+        if (ctx->is_postorder) {
+          ctx->stack = linked_list_prepend(ctx->stack,
+                                           make_pointer_postorder(ctx->curnode));
+        }
 
         /* XXX: it would be good to assert that each one of these nodes
            don't have their 0th bit set */
+        /* XXX: also that none of them are NULL */
         linked_list_t old_stack = ctx->stack;
         ctx->stack = ctx->expand_(ctx->curnode, ctx->stack);
 
         if (old_stack == ctx->stack) {
-          /* this entry didn't extend, treat this like a post-order entry */
-          *pre_order = false;
+          /* this entry didn't extend, it's just a leaf */
+          is_preorder_node = false;
           ctx->stack = linked_list_popleft(ctx->stack, NULL);
         }
       }
 
-      CRYIELD(ctx->coropos, 0);
+      if (!(is_preorder_node && ctx->is_postorder)) {
+        CRYIELD(ctx->coropos, next);
+      }
     }
 
-    *next = NULL;
-    CRYIELD(ctx->coropos, 0);
+    CRYIELD(ctx->coropos, NULL);
   }
 
   /* not reached */

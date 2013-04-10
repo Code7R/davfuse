@@ -604,8 +604,6 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   const char *destination_url = NULL;
   char *destination_path = NULL;
   char *file_path = path_from_uri(hc, hc->rhs.uri);
-  int src_fd = -1;
-  int dst_fd = -1;
 
 #define HANDLE_ERROR(if_err, status_code_, ...) \
   do {                                               \
@@ -640,10 +638,6 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
                "copy failed: couldn't stat source %s: %s",
                file_path, strerror(errno));
 
-  /* XXX: we don't currently support collection copies */
-  HANDLE_ERROR(!S_ISREG(src_st.st_mode), HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
-               "copy failed: can't copy collections");
-
   struct stat dst_st;
   int dst_ret = stat(destination_path, &dst_st);
   HANDLE_ERROR(dst_ret < 0 && errno != ENOENT,
@@ -656,69 +650,19 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   bool overwrite = !(overwrite_str && str_case_equals(overwrite_str, "f"));
 
   /* kill directory if we're overwriting it */
-  if (overwrite && !dst_ret && S_ISDIR(dst_st.st_mode)) {
+  if (overwrite && !dst_ret) {
     linked_list_free(rmtree(destination_path), free);
   }
 
-  src_fd = open(file_path, O_RDONLY/* | O_NONBLOCK*/);
-  HANDLE_ERROR(src_fd < 0, errno == ENOENT
-               ? HTTP_STATUS_CODE_NOT_FOUND
-               : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
-               "copy failed: open source %s failed: %s",
-               file_path, strerror(errno));
-
-  int extra_open_flags = overwrite ? 0 : O_EXCL;
-  dst_fd = open(destination_path,
-                O_WRONLY | /*O_NONBLOCK | */O_CREAT | O_TRUNC | extra_open_flags,
-                0666);
-  HANDLE_ERROR(dst_fd < 0, errno == EEXIST
-               ? HTTP_STATUS_CODE_PRECONDITION_FAILED
-               /* should not get ENOENT when doing O_CREAT unless
-                  an intermediate directory does not exist */
-               /* not sure if ENOTDIR should return the same code
-                  but seems reasonable
-                */
-               : errno == ENOENT || errno == ENOTDIR
-               ? HTTP_STATUS_CODE_CONFLICT
-               : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
-               "copy failed: open destination %s failed: %s",
-               destination_path, strerror(errno));
-
   /* TODO: just NBIO/coroutine_io.h */
-  while (true) {
-    char buffer[BUF_SIZE];
-    ssize_t amt = read(src_fd, buffer, sizeof(buffer));
-    HANDLE_ERROR(amt < 0, HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
-                 "copy failed: failed read %s failed: %s",
-                 file_path, strerror(errno));
-    /* EOF */
-    if (!amt) {
-      break;
-    }
-
-    ssize_t written = 0;
-    while (written < amt) {
-      ssize_t just_wrote = write(dst_fd, buffer + written, amt - written);
-      HANDLE_ERROR(just_wrote < 0, HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
-                   "copy failed: failed write %s failed: %s",
-                   destination_path, strerror(errno));
-      written += just_wrote;
-    }
-  }
+  linked_list_t failed_to_copy = copytree(file_path, destination_path);
+  linked_list_free(failed_to_copy, free);
 
   status_code = dst_existed
     ? HTTP_STATUS_CODE_NO_CONTENT
     : HTTP_STATUS_CODE_CREATED;
 
  done:
-  if (dst_fd >= 0) {
-    close(dst_fd);
-  }
-
-  if (src_fd >= 0) {
-    close(src_fd);
-  }
-
   free(file_path);
   free(destination_path);
 
@@ -853,7 +797,7 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
                                      NULL);
         UNUSED(ret);
         assert(ret);
-        CRYIELD(hc->sub.get.pos, 0);
+        CRYIELD(hc->sub.get.pos, (void) 0);
         assert(ev_type == FD_EVENT);
         continue;
       }

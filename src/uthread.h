@@ -22,7 +22,7 @@
 
 #define UTHR_FOOTER() CREND()
 
-#define UTHR_YIELD(ctx, ret) CRYIELD(ctx->__coropos, ret)
+#define UTHR_YIELD(ctx, ret) CRYIELD(ctx->__coropos, (void) (ret))
 #define UTHR_RETURN(ctx, ret) \
   CRRETURN(ctx->__coropos,                                              \
            ((void) ret, free(ctx)))

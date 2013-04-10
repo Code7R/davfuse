@@ -15,17 +15,19 @@ struct depth_first {
   void *curnode;
   expand_fn expand_;
   free_fn free_;
+  bool is_postorder;
 };
 
 typedef struct depth_first *depth_first_t;
 
-NON_NULL_ARGS2(2, 3) depth_first_t
+NON_NULL_ARGS3(1, 3, 4) depth_first_t
 dfs_create(void *init,
+           bool is_postorder,
            expand_fn expand_,
            free_fn free_);
 
-NON_NULL_ARGS0() void
-dfs_next(depth_first_t t, bool *pre_order, void **next);
+NON_NULL_ARGS0() void *
+dfs_next(depth_first_t t);
 
 NON_NULL_ARGS0() void
 dfs_destroy(depth_first_t t);
