@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <dirent.h>
 #include <libgen.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <strings.h>
@@ -65,6 +66,7 @@ struct handler_context {
   union {
     struct {
       coroutine_position_t pos;
+      bool is_move;
     } copy;
     struct {
       coroutine_position_t pos;
@@ -345,7 +347,8 @@ run_propfind(struct handler_context *hc,
   int root_fd = -1;
   int cwd = -1;
 
-  log_debug("XML request: Depth: %d, %s", depth, req_data);
+  assert(req_data_length <= INT_MAX);
+  log_debug("XML request: Depth: %d, %.*s", depth, (int)req_data_length, req_data);
 
   /* TODO: support this */
   if (depth == DEPTH_INF) {
@@ -359,15 +362,25 @@ run_propfind(struct handler_context *hc,
     propfind_req_type = PROPFIND_ALLPROP;
   }
   else {
-    xmlParserOption options = XML_PARSE_COMPACT | XML_PARSE_NOBLANKS;
+    xmlParserOption options = (XML_PARSE_COMPACT |
+                               XML_PARSE_NOBLANKS |
+                               XML_PARSE_NONET |
+                               XML_PARSE_PEDANTIC);
 #ifdef NDEBUG
     options |= XML_PARSE_NOERROR | XML_PARSER_NOWARNING;
 #endif
+    xmlResetLastError();
     doc = xmlReadMemory(req_data, req_data_length,
                         "noname.xml", NULL, options);
     if (!doc) {
       /* bad xml */
       log_info("Client sent up invalid xml");
+      *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+      goto local_exit;
+    }
+
+    if (xmlGetLastError()) {
+      log_info("There was an error while parsing!");
       *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
       goto local_exit;
     }
@@ -557,9 +570,13 @@ UTHR_DEFINE(request_proc) {
     goto done;
   }
 
+  /* TODO: move to hash-based dispatch where each method
+     maps to a different bucket
+   */
   event_handler_t handler;
   if (!strcasecmp(hc->rhs.method, "COPY")) {
     handler = handle_copy_request;
+    hc->sub.copy.is_move = false;
   }
   else if (!strcasecmp(hc->rhs.method, "DELETE")) {
     handler = handle_delete_request;
@@ -569,6 +586,12 @@ UTHR_DEFINE(request_proc) {
   }
   else if (!strcasecmp(hc->rhs.method, "MKCOL")) {
     handler = handle_mkcol_request;
+  }
+  else if (!strcasecmp(hc->rhs.method, "MOVE")) {
+    /* move is essentially copy, then delete source */
+    /* allows for servers to optimize as well */
+    handler = handle_copy_request;
+    hc->sub.copy.is_move = true;
   }
   else if (!strcasecmp(hc->rhs.method, "OPTIONS")) {
     handler = handle_options_request;
@@ -610,14 +633,9 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   UNUSED(ev);
 
   struct handler_context *hc = ud;
-
   http_status_code_t status_code;
 
   CRBEGIN(hc->sub.copy.pos);
-
-  const char *destination_url = NULL;
-  char *destination_path = NULL;
-  char *file_path = path_from_uri(hc, hc->rhs.uri);
 
 #define HANDLE_ERROR(if_err, status_code_, ...) \
   do {                                               \
@@ -628,6 +646,12 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
     }                                                \
   }                                                  \
   while (false)
+
+  const char *destination_url = NULL;
+  char *destination_path = NULL;
+  char *file_path = path_from_uri(hc, hc->rhs.uri);
+  HANDLE_ERROR(!file_path, HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
+               "couldn't get source path");
 
   /* destination */
   destination_url = http_get_header_value(&hc->rhs, WEBDAV_HEADER_DESTINATION);
@@ -685,10 +709,22 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   }
 
   /* TODO: use NBIO/coroutine_io.h */
-  bool copy_failed = false;
-  linked_list_t failed_to_copy = copytree(file_path, destination_path);
-  copy_failed = failed_to_copy;
-  linked_list_free(failed_to_copy, free);
+  bool copy_failed = true;
+  if (hc->sub.copy.is_move) {
+    /* first try moving */
+    int ret = rename(file_path, destination_path);
+    HANDLE_ERROR(ret < 0 && errno != EXDEV, HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
+                 "couldn't move %s to %s: %s", file_path, destination_path,
+                 strerror(errno));
+    copy_failed = ret < 0;
+  }
+
+  if (copy_failed) {
+    linked_list_t failed_to_copy = copytree(file_path, destination_path,
+                                            hc->sub.copy.is_move);
+    copy_failed = failed_to_copy;
+    linked_list_free(failed_to_copy, free);
+  }
 
   if (copy_failed) {
     /* TODO: should do a multi response */
@@ -1020,7 +1056,8 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
 
   /* read all posted data */
   /* TODO: abstract this out */
-  http_request_read_body(hc->rh, handle_propfind_request, hc);
+  CRYIELD(hc->sub.propfind.pos,
+          http_request_read_body(hc->rh, handle_propfind_request, hc));
   HTTPRequestReadBodyDoneEvent *rbev = ev;
   if (rbev->error) {
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;

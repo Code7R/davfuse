@@ -196,7 +196,7 @@ reparent_path(const char *from_path, const char *to_path,
 }
 
 linked_list_t
-copytree(const char *from_path, const char *to_path) {
+copytree(const char *from_path, const char *to_path, bool delete_original) {
   char *fpath = strdup(from_path);
   if (!fpath) {
     abort();
@@ -228,6 +228,14 @@ copytree(const char *from_path, const char *to_path) {
     }
     else {
       copy_success = copyfile(path, dest_path);
+      if (copy_success && delete_original) {
+        /* eagerly delete this entry */
+        int ret = unlink(path);
+        if (ret < 0 && errno != ENOENT) {
+          log_warning("Failed to delete %s after copying: %s",
+                      path, strerror(errno));
+        }
+      }
     }
 
     if (!copy_success) {
@@ -240,6 +248,29 @@ copytree(const char *from_path, const char *to_path) {
   done:
     free(dest_path);
     free(path);
+  }
+
+  dfs_destroy(dfs);
+
+  if (delete_original) {
+    /* delete all entries left over, but only if they exist */
+    dfs = dfs_create((void *) fpath, true,
+                     _rm_tree_expand, free);
+    while ((path = dfs_next(dfs))) {
+      char *dest_path = reparent_path(from_path, to_path, path);
+      if (file_is_dir(path) &&
+          file_is_dir(dest_path)) {
+        /* move was successful, delete parent */
+        int ret = rmdir(path);
+        if (ret < 0 && errno != ENOENT) {
+          log_warning("Failing to delete %s after copying: %s",
+                      path, strerror(errno));
+        }
+      }
+      free(dest_path);
+      free(path);
+    }
+    dfs_destroy(dfs);
   }
 
   return failed_to_copy;
