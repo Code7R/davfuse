@@ -73,7 +73,9 @@ dfs_next(depth_first_t ctx) {
         if (old_stack == ctx->stack) {
           /* this entry didn't extend, it's just a leaf */
           is_preorder_node = false;
-          ctx->stack = linked_list_popleft(ctx->stack, NULL);
+          if (ctx->is_postorder) {
+            ctx->stack = linked_list_popleft(ctx->stack, NULL);
+          }
         }
       }
 

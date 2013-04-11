@@ -172,6 +172,15 @@ copyfile(const char *from_path, const char *to_path) {
 static char *
 reparent_path(const char *from_path, const char *to_path,
               const char *to_transform) {
+  /* we only accept absolute paths */
+  assert(str_startswith(from_path, "/"));
+  assert(str_startswith(to_path, "/"));
+  assert(str_startswith(to_transform, "/"));
+
+  if (str_equals(from_path, to_transform)) {
+    return strdup(to_path);
+  }
+
   assert(str_startswith(to_transform, from_path));
   size_t from_path_len = strlen(from_path);
   assert(to_transform[from_path_len] == '/');
@@ -210,6 +219,7 @@ copytree(const char *from_path, const char *to_path) {
     }
 
     dest_path = reparent_path(from_path, to_path, path);
+    log_debug("Copying %s to %s", path, dest_path);
 
     bool copy_success;
     if (is_dir) {
@@ -221,7 +231,7 @@ copytree(const char *from_path, const char *to_path) {
     }
 
     if (!copy_success) {
-      log_debug("Error copying %s to %s: %s",
+      log_info("Error copying %s to %s: %s",
                 path, dest_path, strerror(errno));
       failed_to_copy = linked_list_prepend(failed_to_copy, path);
       path = NULL;

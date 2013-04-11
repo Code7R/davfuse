@@ -1,13 +1,14 @@
 /*
   A webdav compatible http file server out of the current directory
  */
-//#define _ISOC99_SOURCE
+#define _ISOC99_SOURCE
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <assert.h>
 #include <dirent.h>
+#include <libgen.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <strings.h>
@@ -48,10 +49,16 @@ typedef struct {
   char *ns_href;
 } WebdavProperty;
 
+struct webdav_server {
+  HTTPServer *http;
+  FDEventLoop *loop;
+  char *base_path;
+  size_t base_path_len;
+};
+
 struct handler_context {
   UTHR_CTX_BASE;
-  HTTPServer *server;
-  FDEventLoop *loop;
+  struct webdav_server *serv;
   HTTPRequestHeaders rhs;
   HTTPResponseHeaders resp;
   http_request_handle_t rh;
@@ -149,7 +156,7 @@ path_from_uri(struct handler_context *hc, const char *uri) {
     memcpy(prefix + http_len + host_len, "/", sizeof("/"));
 
     if (str_startswith(uri, prefix)) {
-      real_uri = &uri[strlen(prefix)];
+      real_uri = &uri[strlen(prefix) - 1];
       free(prefix);
     }
     else {
@@ -158,21 +165,28 @@ path_from_uri(struct handler_context *hc, const char *uri) {
     }
   }
   else {
-    /* don't include leading slash */
-    real_uri = &uri[1];
+    real_uri = uri;
   }
 
+  size_t uri_len = strlen(real_uri);
   if (str_equals(real_uri, "/")) {
-    return strdup(".");
+    uri_len = 0;
   }
-
   /* return relative path (no leading slash), but also
      don't include trailing slash, since posix treats that like "/." */
-  size_t uri_len = strlen(real_uri);
-  if (real_uri[uri_len - 1] == '/') {
+  else if (real_uri[uri_len - 1] == '/') {
     uri_len -= 1;
   }
-  return strndup(real_uri, uri_len);
+
+  char *toret = malloc(hc->serv->base_path_len + uri_len + 1);
+  if (!toret) {
+    return NULL;
+  }
+  memcpy(toret, hc->serv->base_path, hc->serv->base_path_len);
+  memcpy(toret + hc->serv->base_path_len, real_uri, uri_len);
+  toret[hc->serv->base_path_len + uri_len] = '\0';
+
+  return toret;
 }
 
 static webdav_depth_t
@@ -625,6 +639,14 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   HANDLE_ERROR(!destination_path, HTTP_STATUS_CODE_BAD_REQUEST,
                "couldn't get path from destination URI");
 
+  /* check if destination path parent exists, otherwise 409 */
+  char *destination_path_copy = strdup(destination_path);
+  char *destination_path_dirname = dirname(destination_path_copy);
+  bool an_error = !file_exists(destination_path_dirname);
+  free(destination_path_copy);
+  HANDLE_ERROR(an_error, HTTP_STATUS_CODE_CONFLICT,
+               "destination parent did not exist");
+
   /* depth */
   webdav_depth_t depth = webdav_get_depth(&hc->rhs);
   HANDLE_ERROR(depth == DEPTH_INVALID, HTTP_STATUS_CODE_BAD_REQUEST,
@@ -635,14 +657,14 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   HANDLE_ERROR(src_ret < 0, errno == ENOENT
                ? HTTP_STATUS_CODE_NOT_FOUND
                : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
-               "copy failed: couldn't stat source %s: %s",
+               "couldn't stat source %s: %s",
                file_path, strerror(errno));
 
   struct stat dst_st;
   int dst_ret = stat(destination_path, &dst_st);
   HANDLE_ERROR(dst_ret < 0 && errno != ENOENT,
                HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
-               "copy failed: couldn't stat destination %s: %s",
+               "couldn't stat destination %s: %s",
                destination_path, strerror(errno));
   bool dst_existed = !dst_ret;
 
@@ -650,17 +672,33 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   bool overwrite = !(overwrite_str && str_case_equals(overwrite_str, "f"));
 
   /* kill directory if we're overwriting it */
-  if (overwrite && !dst_ret) {
-    linked_list_free(rmtree(destination_path), free);
+  if (dst_existed) {
+    if (overwrite) {
+      linked_list_t failed_to_remove = rmtree(destination_path);
+      linked_list_free(failed_to_remove, free);
+    }
+    else {
+      HANDLE_ERROR(true, HTTP_STATUS_CODE_PRECONDITION_FAILED,
+                   "%s already existed and overwrite is false",
+                   destination_path);
+    }
   }
 
-  /* TODO: just NBIO/coroutine_io.h */
+  /* TODO: use NBIO/coroutine_io.h */
+  bool copy_failed = false;
   linked_list_t failed_to_copy = copytree(file_path, destination_path);
+  copy_failed = failed_to_copy;
   linked_list_free(failed_to_copy, free);
 
-  status_code = dst_existed
-    ? HTTP_STATUS_CODE_NO_CONTENT
-    : HTTP_STATUS_CODE_CREATED;
+  if (copy_failed) {
+    /* TODO: should do a multi response */
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+  }
+  else {
+    status_code = dst_existed
+      ? HTTP_STATUS_CODE_NO_CONTENT
+      : HTTP_STATUS_CODE_CREATED;
+  }
 
  done:
   free(file_path);
@@ -791,7 +829,7 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
     while (true) {
       ssize_t amt_read = read(hc->sub.get.fd, hc->sub.get.buf, sizeof(hc->sub.get.buf));
       if (amt_read < 0 && errno == EAGAIN) {
-        bool ret = fdevent_add_watch(hc->loop, hc->sub.get.fd,
+        bool ret = fdevent_add_watch(hc->serv->loop, hc->sub.get.fd,
                                      create_stream_events(true, false),
                                      handle_get_request, hc,
                                      NULL);
@@ -1080,7 +1118,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
     }
 
     CRYIELD(hc->sub.put.pos,
-            c_write_all(hc->loop, hc->sub.put.fd,
+            c_write_all(hc->serv->loop, hc->sub.put.fd,
                         hc->sub.put.read_buf,
                         read_done_ev->nbyte,
                         handle_put_request,
@@ -1120,9 +1158,8 @@ EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
   HTTPNewRequestEvent *new_request_ev = ev;
 
   UTHR_CALL3(request_proc, struct handler_context,
-             .server = new_request_ev->server,
              .rh = new_request_ev->request_handle,
-             .loop = ud);
+             .serv = ud);
 }
 
 int
@@ -1163,8 +1200,15 @@ main(int argc, char *argv[]) {
 
   /* start http server */
   HTTPServer http;
+  struct webdav_server serv = {
+    .http = &http,
+    .loop = &loop,
+    .base_path = getcwd(NULL, 0),
+  };
+  assert(serv.base_path);
+  serv.base_path_len = strlen(serv.base_path);
   ret = http_server_start(&http, &loop, server_fd,
-			  handle_request, &loop);
+			  handle_request, &serv);
   assert(ret);
 
   log_info("Starting main loop");

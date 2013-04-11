@@ -63,7 +63,9 @@ linked_list_free_ud(linked_list_t ll, linked_list_elt_handler_ud_t handle, void 
 linked_list_t
 linked_list_popleft(linked_list_t ll, void **elt) {
   if (!ll) {
-    *elt = NULL;
+    if (elt) {
+      *elt = NULL;
+    }
     return NULL;
   }
 
