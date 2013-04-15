@@ -2,6 +2,8 @@
   A webdav compatible http file server out of the current directory
  */
 #define _ISOC99_SOURCE
+#define _BSD_SOURCE
+
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -12,6 +14,7 @@
 #include <limits.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <string.h>
 #include <strings.h>
 #include <time.h>
 
@@ -523,7 +526,9 @@ run_propfind(struct handler_context *hc,
   /* convert doc to text and send to client */
   xmlChar *out_buf;
   int out_buf_size;
-  xmlDocDumpFormatMemory(xml_response, &out_buf, &out_buf_size, 1);
+  int format_xml = 1;
+  xmlDocDumpFormatMemory(xml_response, &out_buf, &out_buf_size,
+			 format_xml);
   *out_data = (char *) out_buf;
   assert(out_buf_size >= 0);
   *out_size = out_buf_size;
@@ -774,7 +779,8 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   /* TODO: yield after every delete */
   int ret = file_exists(fpath);
   if (ret < 0) {
-    log_info("Couldn't check if path %s existed, %s", fpath, strerror(errno));
+    log_info("Couldn't check if path %s existed, (errno %d) %s",
+	     fpath, errno, strerror(errno));
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
   }
   else if (ret) {
