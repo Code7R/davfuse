@@ -92,6 +92,13 @@ struct handler_context {
     } propfind;
     struct {
       coroutine_position_t pos;
+      char *request_body;
+      size_t request_body_size;
+      char *response_body;
+      size_t response_body_size;
+    } proppatch;
+    struct {
+      coroutine_position_t pos;
       char read_buf[BUF_SIZE];
       http_status_code_t success_status_code;
       int fd;
@@ -106,6 +113,7 @@ static EVENT_HANDLER_DECLARE(handle_get_request);
 static EVENT_HANDLER_DECLARE(handle_mkcol_request);
 static EVENT_HANDLER_DECLARE(handle_options_request);
 static EVENT_HANDLER_DECLARE(handle_propfind_request);
+static EVENT_HANDLER_DECLARE(handle_proppatch_request);
 static EVENT_HANDLER_DECLARE(handle_put_request);
 
 static WebdavProperty *
@@ -123,11 +131,6 @@ free_webdav_property(WebdavProperty *wp) {
   free(wp->element_name);
   free(wp->ns_href);
   free(wp);
-}
-
-static bool PURE_FUNCTION
-str_case_equals(const char *a, const char *b) {
-  return !strcasecmp(a, b);
 }
 
 static bool PURE_FUNCTION
@@ -579,32 +582,35 @@ UTHR_DEFINE(request_proc) {
      maps to a different bucket
    */
   event_handler_t handler;
-  if (!strcasecmp(hc->rhs.method, "COPY")) {
+  if (str_case_equals(hc->rhs.method, "COPY")) {
     handler = handle_copy_request;
     hc->sub.copy.is_move = false;
   }
-  else if (!strcasecmp(hc->rhs.method, "DELETE")) {
+  else if (str_case_equals(hc->rhs.method, "DELETE")) {
     handler = handle_delete_request;
   }
-  else if (!strcasecmp(hc->rhs.method, "GET")) {
+  else if (str_case_equals(hc->rhs.method, "GET")) {
     handler = handle_get_request;
   }
-  else if (!strcasecmp(hc->rhs.method, "MKCOL")) {
+  else if (str_case_equals(hc->rhs.method, "MKCOL")) {
     handler = handle_mkcol_request;
   }
-  else if (!strcasecmp(hc->rhs.method, "MOVE")) {
+  else if (str_case_equals(hc->rhs.method, "MOVE")) {
     /* move is essentially copy, then delete source */
     /* allows for servers to optimize as well */
     handler = handle_copy_request;
     hc->sub.copy.is_move = true;
   }
-  else if (!strcasecmp(hc->rhs.method, "OPTIONS")) {
+  else if (str_case_equals(hc->rhs.method, "OPTIONS")) {
     handler = handle_options_request;
   }
-  else if (!strcasecmp(hc->rhs.method, "PROPFIND")) {
+  else if (str_case_equals(hc->rhs.method, "PROPFIND")) {
     handler = handle_propfind_request;
   }
-  else if (!strcasecmp(hc->rhs.method, "PUT")) {
+  else if (str_case_equals(hc->rhs.method, "PROPPATCH")) {
+    handler = handle_proppatch_request;
+  }
+  else if (str_case_equals(hc->rhs.method, "PUT")) {
     handler = handle_put_request;
   }
   else {
@@ -1061,7 +1067,6 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   hc->sub.propfind.out_buf_size = 0;
 
   /* read all posted data */
-  /* TODO: abstract this out */
   CRYIELD(hc->sub.propfind.pos,
           http_request_read_body(hc->rh, handle_propfind_request, hc));
   HTTPRequestReadBodyDoneEvent *rbev = ev;
@@ -1106,6 +1111,80 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
 
   CREND();
 }
+
+static void
+run_proppatch(struct handler_context *hc, const char *uri,
+	      const char *input, size_t input_size,
+	      char **output, size_t *output_size,
+	      http_status_code_t *status_code);
+
+static
+EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
+  UNUSED(ev);
+
+  struct handler_context *hc = ud;
+  http_status_code_t status_code = 0;
+
+  CRBEGIN(hc->sub.proppatch.pos);
+
+  hc->sub.proppatch.request_body = NULL;
+  hc->sub.proppatch.request_body_size = 0;
+
+  /* read all posted data */
+  CRYIELD(hc->sub.proppatch.pos,
+          http_request_read_body(hc->rh, handle_proppatch_request, hc));
+  HTTPRequestReadBodyDoneEvent *rbev = ev;
+  if (rbev->error) {
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+  hc->sub.proppatch.request_body = rbev->body;
+  hc->sub.proppatch.request_body_size = rbev->length;
+
+  /* run the request */
+  run_proppatch(hc, hc->rhs.uri,
+		hc->sub.proppatch.request_body, hc->sub.proppatch.request_body_size,
+		&hc->sub.proppatch.response_body, &hc->sub.proppatch.response_body_size,
+		&status_code);
+
+ done:
+  assert(status_code);
+  CRYIELD(hc->sub.proppatch.pos,
+          http_request_simple_response(hc->rh,
+                                       status_code,
+                                       hc->sub.proppatch.response_body,
+                                       hc->sub.proppatch.response_body_size,
+                                       "application/xml",
+                                       handle_proppatch_request, hc));
+
+  if (hc->sub.proppatch.response_body) {
+    /* TODO: use a generic returned free function */
+    free(hc->sub.proppatch.response_body);
+  }
+  free(hc->sub.proppatch.request_body);
+  CRRETURN(hc->sub.proppatch.pos, request_proc(GENERIC_EVENT, NULL, hc));
+
+  CREND();
+}
+
+static void
+run_proppatch(struct handler_context *hc, const char *uri,
+	      const char *input, size_t input_size,
+	      char **output, size_t *output_size,
+	      http_status_code_t *status_code) {
+  UNUSED(hc);
+  UNUSED(uri);
+
+  /* first parse the xml */
+  assert(input_size <= INT_MAX);  
+  log_debug("XML request: %.*s", (int)input_size, input);
+
+  *output = strdup("");
+  *output_size = 0;
+  *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+}
+		    
 
 static
 EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {

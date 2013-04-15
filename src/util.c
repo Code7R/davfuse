@@ -20,7 +20,6 @@ skip_ws(const char *str) {
   return &str[i];
 }
 
-
 linked_list_t
 linked_list_prepend(linked_list_t ll, void *elt) {
   linked_list_t new = malloc(sizeof(*new));
@@ -59,7 +58,6 @@ linked_list_free_ud(linked_list_t ll, linked_list_elt_handler_ud_t handle, void 
   }
 }
 
-
 linked_list_t
 linked_list_popleft(linked_list_t ll, void **elt) {
   if (!ll) {
@@ -95,9 +93,4 @@ str_startswith(const char *a, const char *b) {
   }
 
   return !memcmp(a, b, len_b);
-}
-
-bool PURE_FUNCTION
-str_equals(const char *a, const char *b) {
-  return !strcmp(a, b);
 }

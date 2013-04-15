@@ -1,8 +1,10 @@
 #ifndef LOGGING_H
 #define LOGGING_H
 
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef enum {
@@ -20,15 +22,13 @@ extern FILE *_logging_dest;
 extern log_level_t _logging_cur_level;
 #endif
 
-#define log(level, ...)                         \
-  do {                                          \
-    if ((level) > _logging_cur_level) {         \
-      break;                                    \
-    }                                           \
-    assert(_logging_dest);                      \
-    fprintf(_logging_dest, __VA_ARGS__);        \
-    fprintf(_logging_dest, "\n");               \
-  }                                             \
+/* NB: perhaps this should just be a header function */
+#define log(level, ...)				 \
+  do {						 \
+    if ((level) <= _logging_cur_level) {	 \
+      _log(__FILE__, level, __VA_ARGS__);	 \
+    }						 \
+  }						 \
   while (false)
 
 #define log_debug(...) log(LOG_DEBUG, __VA_ARGS__)
@@ -44,5 +44,8 @@ extern log_level_t _logging_cur_level;
 
 bool
 init_logging(FILE *log_destination, log_level_t level);
+
+void
+_log(const char *filename, log_level_t level, const char *format, ...);
 
 #endif

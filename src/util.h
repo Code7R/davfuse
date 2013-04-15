@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
+#include <strings.h>
 
 #include "c_util.h"
 
@@ -38,11 +40,18 @@ strnlen(const char *s, size_t maxlen);
 const char *
 skip_ws(const char *str);
 
-bool PURE_FUNCTION
+PURE_FUNCTION bool
 str_startswith(const char *a, const char *b);
 
-bool PURE_FUNCTION
-str_equals(const char *a, const char *b);
+HEADER_FUNCTION PURE_FUNCTION bool
+str_equals(const char *a, const char *b) {
+  return !strcmp(a, b);
+}
+
+HEADER_FUNCTION PURE_FUNCTION bool
+str_case_equals(const char *a, const char *b) {
+  return !strcasecmp(a, b);
+}
 
 #define EASY_ALLOC(type, name) type *name = malloc(sizeof(*name)); do { if (!name) { abort();} } while (false)
 
