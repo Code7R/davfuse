@@ -18,7 +18,6 @@ typedef enum {
 
 /* initializes to zero so logging must be explicitly enabled */
 #ifndef _IS_LOGGING_C
-extern FILE *_logging_dest;
 extern log_level_t _logging_cur_level;
 #endif
 

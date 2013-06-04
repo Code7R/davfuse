@@ -1,19 +1,32 @@
+#include <unistd.h>
+
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "c_util.h"
+#include "util.h"
 
 #define _IS_LOGGING_C
 #include "logging.h"
 
-FILE *_logging_dest;
+/* NB: non-static because it's accessed by the header function */
 log_level_t _logging_cur_level;
+
+static FILE *_logging_dest;
+static bool _show_colors;
 
 bool
 init_logging(FILE *log_destination, log_level_t level) {
   _logging_dest = log_destination;
   _logging_cur_level = level;
+
+  /* this code makes this module become POSIX */
+  char *term_env = getenv("TERM");
+  _show_colors = (isatty(fileno(_logging_dest)) &&
+                  term_env && !str_equals(term_env, "dumb"));
+
   return true;
 }
 
@@ -60,26 +73,32 @@ _log(const char *filename, log_level_t level, const char *format, ...) {
     basename_ += 1;
   }
 
-  const char *color_code = color_for_filename(basename_);
-
   /* TODO: only do this on VT100 compatible terminals */
-  fprintf(_logging_dest, "\x1b[%sm%s\x1b[0m: ", color_code, basename_);
+  if (_show_colors) {
+    const char *color_code = color_for_filename(basename_);
 
-  if (level == LOG_DEBUG) {
-    /* display text as blue if it's debug */
-    fprintf(_logging_dest, "\x1b[1;30m");
+    fprintf(_logging_dest, "\x1b[%sm%s\x1b[0m: ", color_code, basename_);
+
+    if (level == LOG_DEBUG) {
+      /* display text as gray if it's debug */
+      fprintf(_logging_dest, "\x1b[1;30m");
+    }
+    else if (level <= LOG_WARNING) {
+      fprintf(_logging_dest, "\x1b[31m");
+    }
   }
-  else if (level <= LOG_WARNING) {
-    fprintf(_logging_dest, "\x1b[31m");
+  else {
+    fprintf(_logging_dest, "%s: ", basename_);
   }
-  
+
   va_list ap;
   va_start(ap, format);
   vfprintf(_logging_dest, format, ap);
   va_end(ap);
 
-  if (level == LOG_DEBUG ||
-      level <= LOG_WARNING) {
+  if (_show_colors &&
+      (level == LOG_DEBUG ||
+       level <= LOG_WARNING)) {
     fprintf(_logging_dest, "\x1b[0m");
   }
 

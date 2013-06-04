@@ -32,6 +32,9 @@
 #include "util.h"
 
 #define XMLSTR(a) ((const xmlChar *) a)
+#define STR(a) ((char *) a)
+
+const char *DAV_XML_NS = "DAV:";
 
 const char *WEBDAV_HEADER_DEPTH = "Depth";
 const char *WEBDAV_HEADER_DESTINATION = "Destination";
@@ -282,7 +285,7 @@ add_propstat_response_for_path(const char *uri,
     }
 
     if (str_equals(elt->element_name, "getlastmodified") &&
-        str_equals(elt->ns_href, "DAV:")) {
+        str_equals(elt->ns_href, DAV_XML_NS)) {
       time_t m_time = (time_t) st.st_mtime;
       struct tm *tm_ = gmtime(&m_time);
       char time_str[400];
@@ -302,7 +305,7 @@ add_propstat_response_for_path(const char *uri,
       }
     }
     else if (str_equals(elt->element_name, "getcontentlength") &&
-             str_equals(elt->ns_href, "DAV:") &&
+             str_equals(elt->ns_href, DAV_XML_NS) &&
              !S_ISDIR(st.st_mode)) {
       char time_str[400];
       snprintf(time_str, sizeof(time_str), "%lld", (long long) st.st_size);
@@ -311,7 +314,7 @@ add_propstat_response_for_path(const char *uri,
       assert(getcontentlength_elt);
     }
     else if (str_equals(elt->element_name, "resourcetype") &&
-             str_equals(elt->ns_href, "DAV:") &&
+             str_equals(elt->ns_href, DAV_XML_NS) &&
              S_ISDIR(st.st_mode)) {
       xmlNodePtr resourcetype_elt = xmlNewChild(prop_success_elt, dav_ns,
                                                 XMLSTR("resourcetype"), NULL);
@@ -331,6 +334,31 @@ add_propstat_response_for_path(const char *uri,
       xmlSetNs(random_elt, new_ns);
     }
   }
+}
+
+static xmlDocPtr
+parse_xml_string(const char *req_data, size_t req_data_length) {
+  xmlParserOption options = (XML_PARSE_COMPACT |
+                             XML_PARSE_NOBLANKS |
+                             XML_PARSE_NONET |
+                             XML_PARSE_PEDANTIC);
+#ifdef NDEBUG
+  options |= XML_PARSE_NOERROR | XML_PARSER_NOWARNING;
+#endif
+  xmlResetLastError();
+  xmlDocPtr doc = xmlReadMemory(req_data, req_data_length,
+                                "noname.xml", NULL, options);
+  if (!doc) {
+    /* bad xml */
+    return doc;
+  }
+
+  if (xmlGetLastError()) {
+    xmlFreeDoc(doc);
+    doc = NULL;
+  }
+
+  return doc;
 }
 
 static void
@@ -368,25 +396,9 @@ run_propfind(struct handler_context *hc,
     propfind_req_type = PROPFIND_ALLPROP;
   }
   else {
-    xmlParserOption options = (XML_PARSE_COMPACT |
-                               XML_PARSE_NOBLANKS |
-                               XML_PARSE_NONET |
-                               XML_PARSE_PEDANTIC);
-#ifdef NDEBUG
-    options |= XML_PARSE_NOERROR | XML_PARSER_NOWARNING;
-#endif
-    xmlResetLastError();
-    doc = xmlReadMemory(req_data, req_data_length,
-                        "noname.xml", NULL, options);
+    doc = parse_xml_string(req_data, req_data_length);
     if (!doc) {
-      /* bad xml */
       log_info("Client sent up invalid xml");
-      *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
-      goto local_exit;
-    }
-
-    if (xmlGetLastError()) {
-      log_info("There was an error while parsing!");
       *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
       goto local_exit;
     }
@@ -394,7 +406,8 @@ run_propfind(struct handler_context *hc,
     /* the root element should be DAV:propfind */
     xmlNodePtr root_element = xmlDocGetRootElement(doc);
     if (!(xml_str_equals(root_element->name, "propfind") &&
-          xml_str_equals(root_element->ns->href, "DAV:"))) {
+          root_element->ns &&
+          xml_str_equals(root_element->ns->href, DAV_XML_NS))) {
       /* root element is not propfind, this is bad */
       log_info("root element is not DAV:, propfind");
       *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
@@ -408,7 +421,7 @@ run_propfind(struct handler_context *hc,
     if (!first_child ||
         !first_child->ns ||
         !first_child->ns->href ||
-        !xml_str_equals(first_child->ns->href, "DAV:")) {
+        !xml_str_equals(first_child->ns->href, DAV_XML_NS)) {
       log_info("propfind element contains no child, or has bad namespace");
       *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
       goto local_exit;
@@ -461,7 +474,7 @@ run_propfind(struct handler_context *hc,
   assert(multistatus_elt);
   xmlDocSetRootElement(xml_response, multistatus_elt);
 
-  xmlNsPtr dav_ns = xmlNewNs(multistatus_elt, XMLSTR("DAV:"), XMLSTR("D"));
+  xmlNsPtr dav_ns = xmlNewNs(multistatus_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
   assert(dav_ns);
   xmlSetNs(multistatus_elt, dav_ns);
 
@@ -535,7 +548,7 @@ run_propfind(struct handler_context *hc,
   *out_data = (char *) out_buf;
   assert(out_buf_size >= 0);
   *out_size = out_buf_size;
-  log_debug("XML response will be %s", out_buf);
+  log_debug("XML response will be:\n%.*s", out_buf_size, *out_data);
   *status_code = HTTP_STATUS_CODE_MULTI_STATUS;
 
  local_exit:
@@ -1160,12 +1173,18 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
 
   if (hc->sub.proppatch.response_body) {
     /* TODO: use a generic returned free function */
-    free(hc->sub.proppatch.response_body);
+    xmlFree(hc->sub.proppatch.response_body);
   }
   free(hc->sub.proppatch.request_body);
   CRRETURN(hc->sub.proppatch.pos, request_proc(GENERIC_EVENT, NULL, hc));
 
   CREND();
+}
+
+static PURE_FUNCTION bool
+ns_equals(xmlNodePtr elt, const char *href) {
+  return (elt->ns &&
+          str_equals(STR(elt->ns->href), href));
 }
 
 static void
@@ -1174,17 +1193,111 @@ run_proppatch(struct handler_context *hc, const char *uri,
 	      char **output, size_t *output_size,
 	      http_status_code_t *status_code) {
   UNUSED(hc);
-  UNUSED(uri);
 
   /* first parse the xml */
-  assert(input_size <= INT_MAX);  
-  log_debug("XML request: %.*s", (int)input_size, input);
+  assert(input_size <= INT_MAX);
+  log_debug("XML request:\n%.*s", (int) input_size, input);
 
-  *output = strdup("");
-  *output_size = 0;
-  *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+  xmlDocPtr doc = parse_xml_string(input, input_size);
+  if (!doc) {
+    *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
+  }
+
+  xmlNodePtr root_element = xmlDocGetRootElement(doc);
+  if (!(str_equals(STR(root_element->name), "propertyupdate") &&
+        ns_equals(root_element, DAV_XML_NS))) {
+    /* root element is not propertyupdate, this is bad */
+    log_info("root element is not DAV:, propertyupdate %s",
+             root_element->name);
+    *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
+  }
+
+  /* build response */
+  xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
+  assert(xml_response);
+  xmlNodePtr multistatus_elt = xmlNewDocNode(xml_response, NULL,
+                                             XMLSTR("multistatus"), NULL);
+  assert(multistatus_elt);
+  xmlDocSetRootElement(xml_response, multistatus_elt);
+
+  xmlNsPtr dav_ns = xmlNewNs(multistatus_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
+  assert(dav_ns);
+  xmlSetNs(multistatus_elt, dav_ns);
+
+  xmlNodePtr response_elt = xmlNewChild(multistatus_elt, dav_ns,
+                                        XMLSTR("response"), NULL);
+  assert(response_elt);
+
+  xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns,
+                                        XMLSTR("href"), XMLSTR(uri));
+  assert(href_elt);
+
+  xmlNodePtr propstat_elt = xmlNewChild(response_elt, dav_ns,
+                                        XMLSTR("propstat"), NULL);
+  xmlNodePtr new_prop_elt = xmlNewChild(propstat_elt, dav_ns,
+                                        XMLSTR("prop"), NULL);
+  xmlNodePtr new_status_elt = xmlNewTextChild(propstat_elt, dav_ns,
+                                              XMLSTR("status"),
+                                              XMLSTR("HTTP/1.1 409 Conflict"));
+  assert(new_status_elt);
+
+  /* now iterate over every propertyupdate directive */
+  /* TODO: for now we don't support setting anything */
+  /* we don't support arbitrary dead properties */
+  for (xmlNodePtr cur_child = root_element->children; cur_child;
+       cur_child = cur_child->next) {
+    if (ns_equals(cur_child, DAV_XML_NS) &&
+        (str_equals(STR(cur_child->name), "set") ||
+         str_equals(STR(cur_child->name), "remove"))) {
+      /* get the prop elt */
+      xmlNodePtr prop_elt = cur_child->children;
+      for (; prop_elt; prop_elt = prop_elt->next) {
+        if (ns_equals(prop_elt, DAV_XML_NS) &&
+            str_equals(STR(prop_elt->name), "prop")) {
+          break;
+        }
+      }
+
+      /* now iterate over each prop being modified in
+         this directive (either set/remove) */
+      if (prop_elt) {
+        for (xmlNodePtr xml_prop = prop_elt->children; xml_prop;
+             xml_prop = xml_prop->next) {
+          /* add this element to the proppatch response */
+          xmlNodePtr new_xml_prop = xmlNewChild(new_prop_elt, NULL,
+                                                xml_prop->name, NULL);
+          assert(new_xml_prop);
+          if (xml_prop->ns) {
+            xmlNsPtr ns_ptr = xmlNewNs(new_xml_prop, xml_prop->ns->href, xml_prop->ns->prefix);
+            xmlSetNs(new_xml_prop, ns_ptr);
+          }
+        }
+      }
+    }
+    else {
+      /* this is just bad input XML schema */
+      /* we'll ignore it for now though, doesn't really hurt anything */
+    }
+  }
+
+  int format_xml = 1;
+  int out_size;
+  xmlDocDumpFormatMemory(xml_response, (xmlChar **) output, &out_size, format_xml);
+  log_debug("XML response will be:\n%.*s", out_size, *output);
+  *output_size = out_size;
+
+  if (xml_response) {
+    xmlFreeDoc(xml_response);
+  }
+  *status_code = HTTP_STATUS_CODE_MULTI_STATUS;
+
+ done:
+  if (doc) {
+    xmlFreeDoc(doc);
+  }
 }
-		    
 
 static
 EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
