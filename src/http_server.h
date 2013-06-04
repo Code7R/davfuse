@@ -67,6 +67,7 @@ typedef enum {
   HTTP_STATUS_CODE_CONFLICT=409,
   HTTP_STATUS_CODE_PRECONDITION_FAILED=412,
   HTTP_STATUS_CODE_UNSUPPORTED_MEDIA_TYPE=415,
+  HTTP_STATUS_CODE_EXPECTATION_FAILED=417,
   HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR=500,
   HTTP_STATUS_CODE_NOT_IMPLEMENTED=501,
   HTTP_STATUS_CODE_INSUFFICIENT_STORAGE=507,
@@ -104,6 +105,9 @@ typedef struct {
   size_t ei;
   size_t parsed;
   char tmpbuf[1024];
+  /* this is used for early exit on bad input headers,
+     e.g. expect headers we don't understand */
+  HTTPResponseHeaders *response_headers;
 } GetRequestState;
 
 typedef struct {
@@ -188,7 +192,6 @@ typedef struct {
 } HTTPNewRequestEvent;
 
 typedef _SimpleRequestActionDoneEvent HTTPRequestReadHeadersDoneEvent;
-typedef _SimpleRequestActionDoneEvent HTTPRHTTPRequestWriteHeadersDoneEvent;
 typedef _SimpleRequestActionDoneEvent HTTPRequestWriteHeadersDoneEvent;
 typedef _SimpleRequestActionDoneEvent HTTPRequestWriteDoneEvent;
 
@@ -273,6 +276,7 @@ http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
     SCS(HTTP_STATUS_CODE_CONFLICT, "Conflict");
     SCS(HTTP_STATUS_CODE_PRECONDITION_FAILED, "Precondition Failed");
     SCS(HTTP_STATUS_CODE_UNSUPPORTED_MEDIA_TYPE, "Unsupported Media Type");
+    SCS(HTTP_STATUS_CODE_EXPECTATION_FAILED, "Expectation Failed");
     SCS(HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR, "Internal Server Error");
     SCS(HTTP_STATUS_CODE_NOT_IMPLEMENTED, "Not Implemented");
   default: return false; break;

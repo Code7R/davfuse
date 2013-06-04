@@ -762,7 +762,8 @@ UTHR_DEFINE(c_get_request) {
     err = HTTP_GENERIC_ERROR;
   }
 
-  if (err == HTTP_SUCCESS) {
+  /* deal with the request headers that dictate how the request body is tranferred */
+  if (!err) {
     /* okay at this point we have the headers, make sure it's something
        we support */
     /* TODO: support 'chunked' encoding */
@@ -770,7 +771,7 @@ UTHR_DEFINE(c_get_request) {
       err = HTTP_GENERIC_ERROR;
     }
     else {
-      /* get the content-length header */
+      /* get the "Content-Length" header */
       const char *content_length_str = http_get_header_value(state->request_headers, HTTP_HEADER_CONTENT_LENGTH);
       if (content_length_str) {
         long converted_content_length = strtol(content_length_str, NULL, 10);
@@ -785,6 +786,56 @@ UTHR_DEFINE(c_get_request) {
       else {
         /* if there is no data header, treat it as zero-length body */
         state->rh->content_length = 0;
+      }
+    }
+  }
+
+  /* deal with the "Expect" request header */
+  if (!err) {
+    const char *expect_str = http_get_header_value(state->request_headers, "expect");
+    if (expect_str) {
+      if (str_equals(expect_str, "100-continue")) {
+        /* write out 100 continue response */
+        UTHR_YIELD(state,
+                   c_write_all(state->rh->conn->server->loop,
+                               state->rh->conn->f.fd,
+                               "HTTP/1.1 100 Continue\r\n",
+                               sizeof("HTTP/1.1 100 Continue\r\n") - 1,
+                               c_get_request,
+                               state));
+        assert(UTHR_EVENT_TYPE() == C_WRITEALL_DONE_EVENT);
+        if (((CWriteAllDoneEvent *) UTHR_EVENT())->error_number) {
+          err = HTTP_GENERIC_ERROR;
+        }
+        else {
+          /* we have to reinitialize since we're potentially re-entering this scope
+             after the yield thta has just happened */
+          err = HTTP_SUCCESS;
+        }
+      }
+      else {
+        /* we don't understand this, have to send an 417 (Expectation Failed) */
+        state->response_headers = malloc(sizeof(HTTPResponseHeaders));
+
+        assert(state->response_headers);
+        http_response_init(state->response_headers);
+        bool ret = http_response_set_code(state->response_headers,
+                                          HTTP_STATUS_CODE_EXPECTATION_FAILED);
+        assert(ret);
+        ret = http_response_add_header(state->response_headers,
+                                       HTTP_HEADER_CONTENT_LENGTH, "0");
+        assert(ret);
+
+        UTHR_YIELD(state,
+                   http_request_write_headers(state->rh, state->response_headers,
+                                              c_get_request, state));
+
+        free(state->response_headers);
+
+        assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT);
+
+        /* return an error to the user's handler so it stops processing */
+        err = HTTP_GENERIC_ERROR;
       }
     }
   }
