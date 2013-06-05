@@ -29,6 +29,7 @@ enum {
   LISTEN_BACKLOG=5,
 };
 
+const char *HTTP_HEADER_CONNECTION = "Connection";
 const char *HTTP_HEADER_CONTENT_LENGTH = "Content-Length";
 const char *HTTP_HEADER_CONTENT_TYPE = "Content-Type";
 const char *HTTP_HEADER_HOST = "Host";
@@ -230,6 +231,9 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
     EMITS(whs->response_headers->headers[whs->header_idx].value);
     EMIT("\r\n");
   }
+
+  /* TODO: support persistent connections */
+  EMIT("Connection: close\r\n");
 
   /* finish headers */
   EMIT("\r\n");
@@ -577,6 +581,9 @@ UTHR_DEFINE(client_coroutine) {
       }
     }
 
+    /* TODO: support persistent connections */
+    break;
+
     if (cc->rctx.last_error_number) {
       /* break if there was an error */
       break;
@@ -823,7 +830,7 @@ UTHR_DEFINE(c_get_request) {
                                           HTTP_STATUS_CODE_EXPECTATION_FAILED);
         assert(ret);
         ret = http_response_add_header(state->response_headers,
-                                       HTTP_HEADER_CONTENT_LENGTH, "0");
+                                       HTTP_HEADER_CONTENT_LENGTH, "%d", 0);
         assert(ret);
 
         UTHR_YIELD(state,

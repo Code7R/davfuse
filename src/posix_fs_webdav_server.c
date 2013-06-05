@@ -189,6 +189,8 @@ path_from_uri(struct handler_context *hc, const char *uri) {
     uri_len -= 1;
   }
 
+  /* TODO: de-urlencode `real_uri` */
+
   char *toret = malloc(hc->serv->base_path_len + uri_len + 1);
   if (!toret) {
     return NULL;
@@ -231,10 +233,9 @@ add_propstat_response_for_path(const char *uri,
                                xmlNsPtr dav_ns) {
   struct stat st;
   int my_errno = 0;
-  int statret = -1;
-  if (fd < 0 ||
-      (statret = fstat(fd, &st)) < 0) {
-    /* TODO: the file could not be found, 404 is also valid */
+  int statret = fstat(fd, &st);
+
+  if (statret < 0) {
     log_info("fstat(%d) failed: %s", fd, strerror(errno));
     my_errno = errno;
   }
@@ -284,25 +285,32 @@ add_propstat_response_for_path(const char *uri,
       goto not_found_elt;
     }
 
-    if (str_equals(elt->element_name, "getlastmodified") &&
-        str_equals(elt->ns_href, DAV_XML_NS)) {
+    if (str_equals(elt->ns_href, DAV_XML_NS) &&
+        (str_equals(elt->element_name, "getlastmodified") ||
+         /* TODO: this should be configurable but for now we just
+            set it to the same because that's what apache mod_dav does */
+         /* TODO: this should be an RFC3339 date... */
+         str_equals(elt->element_name, "creationdate"))) {
       time_t m_time = (time_t) st.st_mtime;
       struct tm *tm_ = gmtime(&m_time);
-      char time_str[400];
-      size_t num_chars = strftime(time_str, sizeof(time_str),
+      char time_buf[400], *time_str;
+      size_t num_chars = strftime(time_buf, sizeof(time_buf),
                                   "%a, %d %b %Y %T GMT", tm_);
+      xmlNodePtr xml_node;
+
       if (!num_chars) {
         log_error("strftime failed!");
-        xmlNodePtr getlastmodified_elt = xmlNewTextChild(prop_failure_elt, dav_ns,
-                                                         XMLSTR("getlastmodified"), NULL);
-        assert(getlastmodified_elt);
+        time_str = NULL;
+        xml_node = prop_failure_elt;
       }
       else {
-        /* TODO place content in string */
-        xmlNodePtr getlastmodified_elt = xmlNewTextChild(prop_success_elt, dav_ns,
-                                                         XMLSTR("getlastmodified"), XMLSTR(time_str));
-        assert(getlastmodified_elt);
+        time_str = time_buf;
+        xml_node = prop_success_elt;
       }
+
+      xmlNodePtr getlastmodified_elt = xmlNewTextChild(xml_node, dav_ns,
+                                                       XMLSTR(elt->element_name), XMLSTR(time_str));
+      assert(getlastmodified_elt);
     }
     else if (str_equals(elt->element_name, "getcontentlength") &&
              str_equals(elt->ns_href, DAV_XML_NS) &&
@@ -314,15 +322,16 @@ add_propstat_response_for_path(const char *uri,
       assert(getcontentlength_elt);
     }
     else if (str_equals(elt->element_name, "resourcetype") &&
-             str_equals(elt->ns_href, DAV_XML_NS) &&
-             S_ISDIR(st.st_mode)) {
+             str_equals(elt->ns_href, DAV_XML_NS)) {
       xmlNodePtr resourcetype_elt = xmlNewChild(prop_success_elt, dav_ns,
                                                 XMLSTR("resourcetype"), NULL);
       assert(resourcetype_elt);
 
-      xmlNodePtr collection_elt = xmlNewChild(resourcetype_elt, dav_ns,
-                                              XMLSTR("collection"), NULL);
-      assert(collection_elt);
+      if (S_ISDIR(st.st_mode)) {
+        xmlNodePtr collection_elt = xmlNewChild(resourcetype_elt, dav_ns,
+                                                XMLSTR("collection"), NULL);
+        assert(collection_elt);
+      }
     }
     else {
       xmlNodePtr random_elt;
@@ -333,6 +342,21 @@ add_propstat_response_for_path(const char *uri,
       xmlNsPtr new_ns = xmlNewNs(random_elt, XMLSTR(elt->ns_href), NULL);
       xmlSetNs(random_elt, new_ns);
     }
+  }
+
+  if (!prop_not_found_elt->children) {
+    xmlUnlinkNode(propstat_not_found_elt);
+    xmlFreeNode(propstat_not_found_elt);
+  }
+
+  if (!prop_success_elt->children) {
+    xmlUnlinkNode(propstat_success_elt);
+    xmlFreeNode(propstat_success_elt);
+  }
+
+  if (!prop_failure_elt->children) {
+    xmlUnlinkNode(propstat_failure_elt);
+    xmlFreeNode(propstat_failure_elt);
   }
 }
 
@@ -388,6 +412,43 @@ run_propfind(struct handler_context *hc,
   if (depth == DEPTH_INF) {
     log_info("We don't support infinity propfind requests");
     *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto local_exit;
+  }
+
+  /* build up response */
+  file_path = path_from_uri(hc, uri);
+  if (!file_path) {
+    log_info("Couldn't make file path from %s", uri);
+    *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto local_exit;
+  }
+
+  /* try keeping a single fd open for the duration of the directory iteration */
+  if (depth == DEPTH_1) {
+    /* depth one, try directory by default first */
+    dir = opendir(file_path);
+    if (!dir) {
+      log_info("Depth 1 but couldn't open directory: %s", strerror(errno));
+      *status_code = (errno == ENOENT)
+        ? HTTP_STATUS_CODE_NOT_FOUND
+        : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      goto local_exit;
+    }
+  }
+
+  if (dir) {
+    root_fd = dirfd(dir);
+  }
+  else {
+    root_fd = open(file_path, O_RDONLY);
+  }
+
+  if (root_fd < 0) {
+    log_info("Couldn't get descriptor of file \"%s\": %s",
+             file_path, strerror(errno));
+    *status_code = (errno == ENOENT)
+      ? HTTP_STATUS_CODE_NOT_FOUND
+      : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto local_exit;
   }
 
@@ -460,14 +521,6 @@ run_propfind(struct handler_context *hc,
     goto local_exit;
   }
 
-  /* build up response */
-  file_path = path_from_uri(hc, uri);
-  if (!file_path) {
-    log_info("Couldn't make file path from %s", uri);
-    *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    goto local_exit;
-  }
-
   xml_response = xmlNewDoc(XMLSTR("1.0"));
   assert(xml_response);
   xmlNodePtr multistatus_elt = xmlNewDocNode(xml_response, NULL, XMLSTR("multistatus"), NULL);
@@ -478,23 +531,6 @@ run_propfind(struct handler_context *hc,
   assert(dav_ns);
   xmlSetNs(multistatus_elt, dav_ns);
 
-  /* try keeping a single fd open for the duration of the directory iteration */
-  if (depth == DEPTH_1) {
-    /* depth one, try directory by default first */
-    dir = opendir(file_path);
-    if (!dir) {
-      log_info("Depth 1 but couldn't open directory: %s", strerror(errno));
-    }
-  }
-
-  if (dir) {
-    root_fd = dirfd(dir);
-  }
-  else {
-    root_fd = open(file_path, O_RDONLY);
-  }
-
-  /* negative fd means check errno */
   add_propstat_response_for_path(uri, root_fd, props_to_get, multistatus_elt, dav_ns);
 
   if (root_fd >= 0 && dir && depth == DEPTH_1) {
@@ -521,14 +557,20 @@ run_propfind(struct handler_context *hc,
       }
 
       int fd = open(d->d_name, O_RDONLY);
-      char new_uri[1024];
-      size_t len = strlen(uri);
-      memcpy(new_uri, uri, len);
-      strcpy(new_uri + len, d->d_name);
 
-      add_propstat_response_for_path(new_uri, fd, props_to_get, multistatus_elt, dav_ns);
       if (fd >= 0) {
+        char new_uri[1024];
+        size_t len = strlen(uri);
+        memcpy(new_uri, uri, len);
+        strcpy(new_uri + len, d->d_name);
+
+        add_propstat_response_for_path(new_uri, fd, props_to_get, multistatus_elt, dav_ns);
         close(fd);
+      }
+      else {
+        /* directory entry couldn't be opened */
+        log_info("open(%s/%s) failed: %s",
+                 file_path, d->d_name, strerror(errno));
       }
     }
 
