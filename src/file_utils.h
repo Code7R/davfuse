@@ -8,6 +8,12 @@
 int
 file_exists(const char *file_path);
 
+int
+file_is_dir(const char *file_path);
+
+int
+touch(const char *file_path);
+
 linked_list_t
 rmtree(const char *file_path);
 

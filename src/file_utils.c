@@ -3,7 +3,10 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/types.h>
 #include <unistd.h>
+#include <utime.h>
 
 #include <assert.h>
 #include <dirent.h>
@@ -43,6 +46,19 @@ file_is_dir(const char *file_path) {
   }
 
   return S_ISDIR(st.st_mode);
+}
+
+bool
+touch(const char *file_path) {
+  int fd = open(file_path, O_WRONLY | O_CREAT);
+  if (fd >= 0) {
+    /* ignore failure here */
+    utimes(file_path, NULL);
+    close(fd);
+    return true;
+  }
+
+  return false;
 }
 
 static linked_list_t

@@ -6,6 +6,7 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <assert.h>
@@ -31,14 +32,16 @@
 #include "uthread.h"
 #include "util.h"
 
-#define XMLSTR(a) ((const xmlChar *) a)
-#define STR(a) ((char *) a)
+#define XMLSTR(a) ((const xmlChar *) (a))
+#define STR(a) ((const char *) (a))
 
 const char *DAV_XML_NS = "DAV:";
 
 const char *WEBDAV_HEADER_DEPTH = "Depth";
 const char *WEBDAV_HEADER_DESTINATION = "Destination";
+const char *WEBDAV_HEADER_IF = "If";
 const char *WEBDAV_HEADER_OVERWRITE = "Overwrite";
+const char *WEBDAV_HEADER_TIMEOUT = "Timeout";
 
 enum {
   BUF_SIZE=4096,
@@ -51,16 +54,28 @@ typedef enum {
   DEPTH_INVALID,
 } webdav_depth_t;
 
+typedef unsigned webdav_timeout_t;
+
 typedef struct {
   char *element_name;
   char *ns_href;
 } WebdavProperty;
+
+typedef struct {
+  char *path;
+  webdav_depth_t depth;
+  bool is_exclusive;
+  char *owner_xml;
+  char *lock_token;
+  webdav_timeout_t timeout_in_seconds;
+} WebdavLockDescriptor;
 
 struct webdav_server {
   HTTPServer *http;
   FDEventLoop *loop;
   char *base_path;
   size_t base_path_len;
+  linked_list_t locks;
 };
 
 struct handler_context {
@@ -82,6 +97,12 @@ struct handler_context {
       char buf[BUF_SIZE];
       int fd;
     } get;
+    struct {
+      coroutine_position_t pos;
+      char *response_body;
+      size_t response_body_len;
+      linked_list_t headers;
+    } lock;
     struct {
       coroutine_position_t pos;
     } mkcol;
@@ -113,6 +134,7 @@ static EVENT_HANDLER_DECLARE(handle_request);
 static EVENT_HANDLER_DECLARE(handle_copy_request);
 static EVENT_HANDLER_DECLARE(handle_delete_request);
 static EVENT_HANDLER_DECLARE(handle_get_request);
+static EVENT_HANDLER_DECLARE(handle_lock_request);
 static EVENT_HANDLER_DECLARE(handle_mkcol_request);
 static EVENT_HANDLER_DECLARE(handle_options_request);
 static EVENT_HANDLER_DECLARE(handle_propfind_request);
@@ -140,7 +162,6 @@ static bool PURE_FUNCTION
 xml_str_equals(const xmlChar *restrict a, const char *restrict b) {
   return str_equals((const char *) a, b);
 }
-
 
 static char *
 path_from_uri(struct handler_context *hc, const char *uri) {
@@ -202,6 +223,12 @@ path_from_uri(struct handler_context *hc, const char *uri) {
   return toret;
 }
 
+static char *
+uri_from_path(struct handler_context *hc, const char *file_path) {
+  /* this is simple */
+  return strdup(file_path + hc->serv->base_path_len);
+}
+
 static webdav_depth_t
 webdav_get_depth(const HTTPRequestHeaders *rhs) {
   webdav_depth_t depth;
@@ -223,6 +250,44 @@ webdav_get_depth(const HTTPRequestHeaders *rhs) {
   }
 
   return depth;
+}
+
+static webdav_timeout_t
+webdav_get_timeout(const HTTPRequestHeaders *rhs) {
+  UNUSED(rhs);
+  /* just lock for 60 seconds for now,
+     we don't have to honor timeout headers */
+  /* TODO: fix this */
+  return 60;
+}
+
+static void
+ASSERT_NOT_NULL(void *foo) {
+  if (!foo) {
+    log_critical("Illegal null value");
+    abort();
+  }
+}
+
+
+static PURE_FUNCTION bool
+ns_equals(xmlNodePtr elt, const char *href) {
+  return (elt->ns &&
+          str_equals(STR(elt->ns->href), href));
+}
+
+static PURE_FUNCTION bool
+node_is(xmlNodePtr elt, const char *href, const char *tag) {
+  return ((elt->ns ? str_equals(STR(elt->ns->href), href) : !href) &&
+          str_equals(STR(elt->name), tag));
+}
+
+static PURE_FUNCTION bool
+is_parent_path(const char *potential_parent, const char *potential_child) {
+  assert(potential_parent[strlen(potential_parent) - 1] != '/');
+  assert(potential_child[strlen(potential_child) - 1] != '/');
+  return (str_startswith(potential_child, potential_parent) &&
+          potential_child[strlen(potential_parent)] == '/');
 }
 
 static void
@@ -647,6 +712,9 @@ UTHR_DEFINE(request_proc) {
   else if (str_case_equals(hc->rhs.method, "GET")) {
     handler = handle_get_request;
   }
+  else if (str_case_equals(hc->rhs.method, "LOCK")) {
+    handler = handle_lock_request;
+  }
   else if (str_case_equals(hc->rhs.method, "MKCOL")) {
     handler = handle_mkcol_request;
   }
@@ -992,6 +1060,520 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   CREND();
 }
 
+static bool
+parse_lock_request_body(const char *body, size_t body_len,
+                        bool *is_exclusive, char **owner_xml);
+
+static bool
+perform_write_lock(struct webdav_server *ws,
+                   const char *file_path,
+                   webdav_timeout_t timeout_in_seconds,
+                   webdav_depth_t depth,
+                   bool is_exclusive,
+                   const char *owner_xml,
+                   bool *is_locked,
+                   char **lock_token,
+                   bool *created,
+                   char **status_path);
+
+static bool
+generate_failed_lock_response_body(struct handler_context *hc,
+                                   const char *file_path,
+                                   const char *status_path,
+                                   http_status_code_t *status_code,
+                                   char **response_body,
+                                   size_t *response_body_len);
+
+static bool
+generate_success_lock_response_body(struct handler_context *hc,
+                                    const char *file_path,
+                                    webdav_timeout_t timeout_in_seconds,
+                                    webdav_depth_t depth,
+                                    bool is_exclusive,
+                                    const char *owner_xml,
+                                    const char *lock_token,
+                                    bool created,
+                                    http_status_code_t *status_code,
+                                    char **response_body,
+                                    size_t *response_body_len);
+
+static
+EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
+  /* set this variable before coroutine restarts */
+  struct handler_context *hc = ud;
+
+  CRBEGIN(hc->sub.lock.pos);
+
+  /* read body first */
+  CRYIELD(hc->sub.lock.pos,
+          http_request_read_body(hc->rh,
+                                 handle_lock_request,
+                                 ud));
+  assert(ev_type == GENERIC_EVENT);
+
+  http_status_code_t status_code = 0;
+  char *file_path = NULL;
+  char *owner_xml = NULL;
+  char *lock_token = NULL;
+  char *status_path = NULL;
+  hc->sub.lock.response_body = NULL;
+
+  HTTPRequestReadBodyDoneEvent *rbev = ev;
+  if (rbev->error) {
+    log_info("Error while reading body of request");
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  log_debug("Incoming lock request XML:\n%*s", rbev->length, rbev->body);
+
+  /* read "If" header */
+  const char *if_header = http_get_header_value(&hc->rhs, WEBDAV_HEADER_IF);
+  if (if_header) {
+    /* TODO: if header isn't supported right now,
+       maybe there is a better status code to send back? */
+    log_debug("If request header not supported");
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  /* get webdav depth */
+  webdav_depth_t depth = webdav_get_depth(&hc->rhs);
+  if (depth != DEPTH_0 && depth != DEPTH_INF) {
+    log_debug("Invalid depth sent %d", depth);
+    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
+  }
+
+  /* get timeout */
+  webdav_timeout_t timeout_in_seconds = webdav_get_timeout(&hc->rhs);
+
+  /* get path */
+  file_path = path_from_uri(hc, hc->rhs.uri);
+  if (!file_path) {
+    log_debug("Invalid file path %s", hc->rhs.uri);
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  /* parse request body */
+  bool is_exclusive;
+  bool success_parse =
+    parse_lock_request_body(rbev->body, rbev->length,
+                            &is_exclusive, &owner_xml);
+  if (!success_parse) {
+    log_debug("Bad request body");
+    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
+  }
+
+  /* actually attempt to lock the resource */
+  bool is_locked;
+  bool created;
+  bool success_perform =
+    perform_write_lock(hc->serv,
+                       file_path, timeout_in_seconds, depth, is_exclusive, owner_xml,
+                       &is_locked, &lock_token, &created, &status_path);
+  if (!success_perform) {
+    log_debug("Error while performing lock");
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  /* generate lock attempt response */
+  bool success_generate;
+  if (is_locked) {
+    log_debug("Resource is already locked");
+    success_generate =
+      generate_failed_lock_response_body(hc, file_path, status_path,
+                                         &status_code,
+                                         &hc->sub.lock.response_body,
+                                         &hc->sub.lock.response_body_len);
+  }
+  else {
+    success_generate =
+      generate_success_lock_response_body(hc, file_path, timeout_in_seconds,
+                                          depth, is_exclusive, owner_xml,
+                                          lock_token, created,
+                                          &status_code,
+                                          &hc->sub.lock.response_body,
+                                          &hc->sub.lock.response_body_len);
+  }
+
+  if (!success_generate) {
+    log_debug("Error while sending back response");
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+  }
+
+ done:
+  assert(status_code);
+  log_debug("Response with status code: %d", status_code);
+  log_debug("Outgoing lock response XML (%lld bytes):\n%*s",
+            (long long) hc->sub.lock.response_body_len,
+            hc->sub.lock.response_body_len,
+            hc->sub.lock.response_body);
+
+  EASY_ALLOC(HeaderPair, hp);
+  hp->name = "Lock-Token";
+  char lock_token_header_value[256];
+  int len_written = snprintf(lock_token_header_value, sizeof(lock_token_header_value),
+                             "<%s>", lock_token);
+  if (len_written == sizeof(lock_token_header_value) - 1) {
+    /* TODO: Lazy */
+    abort();
+  }
+  hp->value = strdup(lock_token_header_value);
+  hc->sub.lock.headers = linked_list_prepend(hc->sub.lock.headers, hp);
+
+  free(rbev->body);
+  free(file_path);
+  free(owner_xml);
+  free(lock_token);
+  free(status_path);
+
+  CRYIELD(hc->sub.lock.pos,
+          http_request_simple_response(hc->rh,
+                                       status_code,
+                                       hc->sub.lock.response_body,
+                                       hc->sub.lock.response_body_len,
+                                       "application/xml",
+                                       hc->sub.lock.headers,
+                                       handle_lock_request, ud));
+  assert(ev_type == GENERIC_EVENT);
+  /* if there is an error sending, oh well, just let the request end */
+
+  free(hc->sub.lock.response_body);
+  free(((HeaderPair *) hc->sub.lock.headers->elt)->value);
+  free(hc->sub.lock.headers->elt);
+  linked_list_free(hc->sub.lock.headers, NULL);
+
+  CRRETURN(hc->sub.lock.pos,
+           request_proc(GENERIC_EVENT, NULL, hc));
+
+  CREND();
+}
+
+static bool
+parse_lock_request_body(const char *body, size_t body_len,
+                        bool *is_exclusive, char **owner_xml) {
+  UNUSED(body);
+  UNUSED(is_exclusive);
+  UNUSED(owner_xml);
+  bool toret = true;
+  bool saw_lockscope = false;
+  bool saw_locktype = false;
+
+  /* this is an optional request parameter */
+  *owner_xml = NULL;
+
+  xmlDocPtr doc = parse_xml_string(body, body_len);
+  ASSERT_NOT_NULL(doc);
+
+  xmlNodePtr root_element = xmlDocGetRootElement(doc);
+  ASSERT_NOT_NULL(root_element);
+
+  if (!node_is(root_element, DAV_XML_NS, "lockinfo")) {
+    goto error;
+  }
+
+  for (xmlNodePtr child = root_element->children;
+       child; child = child->next) {
+    if (node_is(child, DAV_XML_NS, "lockscope")) {
+      *is_exclusive = (child->children &&
+                       node_is(child->children, DAV_XML_NS, "exclusive"));
+      saw_lockscope = true;
+    }
+    /* we require a proper write lock entity */
+    else if (node_is(child, DAV_XML_NS, "locktype") &&
+             child->children &&
+             node_is(child->children, DAV_XML_NS, "write")) {
+      saw_locktype = true;
+    }
+    else if (node_is(child, DAV_XML_NS, "owner") &&
+             child->children) {
+      xmlBufferPtr buf = xmlBufferCreate();
+      int format_level = 0;
+      int should_format = 0;
+      xmlNodeDump(buf, doc, child->children, format_level, should_format);
+      *owner_xml = strdup(STR(xmlBufferContent(buf)));
+      xmlBufferFree(buf);
+    }
+  }
+
+  if (!saw_lockscope || !saw_locktype) {
+  error:
+    /* in case we found an owner */
+    if (*owner_xml) {
+      free(*owner_xml);
+      *owner_xml = NULL;
+    }
+    toret = false;
+  }
+
+  xmlFreeDoc(doc);
+
+  return toret;
+}
+
+static bool
+perform_write_lock(struct webdav_server *ws,
+                   const char *file_path,
+                   webdav_timeout_t timeout_in_seconds,
+                   webdav_depth_t depth,
+                   bool is_exclusive,
+                   const char *owner_xml,
+                   bool *is_locked,
+                   char **lock_token,
+                   bool *created,
+                   char **status_path) {
+  /* go through lock list and see if this path (or any descendants if depth != 0)
+     have an incompatible lock
+     if so then set that path as the status_path and return *is_locked = true
+   */
+  LINKED_LIST_FOR(WebdavLockDescriptor, elt, ws->locks) {
+    bool parent_locks_us = false;
+    if ((str_equals(elt->path, file_path) ||
+         (depth == DEPTH_INF && is_parent_path(file_path, elt->path)) ||
+         (parent_locks_us = (elt->depth == DEPTH_INF && is_parent_path(elt->path, file_path)))) &&
+        (is_exclusive || elt->is_exclusive)) {
+      *is_locked = true;
+      *status_path = strdup(parent_locks_us ? file_path : elt->path);
+      /* if the strdup failed then we return false */
+      return *status_path;
+    }
+  }
+
+  /* generate a lock token */
+  struct timeval curtime;
+  int ret = gettimeofday(&curtime, NULL);
+  if (ret < 0 ) {
+    return false;
+  }
+
+  char s_lock_token[256];
+  int len = snprintf(s_lock_token, sizeof(s_lock_token), "x-this-lock-token:///%lld.%lld",
+                     (long long) curtime.tv_sec, (long long) curtime.tv_usec);
+  if (len == sizeof(s_lock_token) - 1) {
+    /* lock token string was too long */
+    return false;
+  }
+
+  *lock_token = strdup(s_lock_token);
+  if (!*lock_token) {
+    return false;
+  }
+
+  /* okay we can lock this path, just add it to the lock list */
+  EASY_ALLOC(WebdavLockDescriptor, new_lock);
+
+  *new_lock = (WebdavLockDescriptor) {
+    .path = strdup(file_path),
+    .depth = depth,
+    .is_exclusive = is_exclusive,
+    .owner_xml = strdup(owner_xml),
+    .lock_token = strdup(*lock_token),
+    .timeout_in_seconds = timeout_in_seconds,
+  };
+
+  if (!new_lock->path ||
+      !new_lock->owner_xml ||
+      !new_lock->lock_token) {
+    /* just die on ENOMEM */
+    abort();
+  }
+
+  ws->locks = linked_list_prepend(ws->locks, new_lock);
+
+  *is_locked = false;
+  if ((*created = !file_exists(file_path))) {
+    /* NB: ignoring touch error */
+    touch(file_path);
+  }
+
+  return true;
+}
+
+static bool
+generate_failed_lock_response_body(struct handler_context *hc,
+                                   const char *file_path,
+                                   const char *status_path,
+                                   http_status_code_t *status_code,
+                                   char **response_body,
+                                   size_t *response_body_len) {
+  xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
+  ASSERT_NOT_NULL(xml_response);
+
+  xmlNodePtr multistatus_elt = xmlNewDocNode(xml_response, NULL, XMLSTR("multistatus"), NULL);
+  ASSERT_NOT_NULL(multistatus_elt);
+
+  xmlDocSetRootElement(xml_response, multistatus_elt);
+
+  xmlNsPtr dav_ns = xmlNewNs(multistatus_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
+  ASSERT_NOT_NULL(dav_ns);
+
+  xmlSetNs(multistatus_elt, dav_ns);
+
+  bool same_path = str_equals(file_path, status_path);
+  const char *locked_status = "HTTP/1.1 423 Locked";
+
+  if (!same_path) {
+    xmlNodePtr response_elt = xmlNewChild(multistatus_elt, dav_ns, XMLSTR("response"), NULL);
+    ASSERT_NOT_NULL(response_elt);
+
+    char *status_uri = uri_from_path(hc, status_path);
+    ASSERT_NOT_NULL(status_uri);
+
+    xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("href"), XMLSTR(status_uri));
+    ASSERT_NOT_NULL(href_elt);
+
+    free(status_uri);
+
+    xmlNodePtr status_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("status"),
+                                            XMLSTR(locked_status));
+    ASSERT_NOT_NULL(status_elt);
+  }
+
+  xmlNodePtr response_elt = xmlNewChild(multistatus_elt, dav_ns, XMLSTR("response"), NULL);
+  ASSERT_NOT_NULL(response_elt);
+
+  char *file_uri = uri_from_path(hc, file_path);
+  ASSERT_NOT_NULL(file_uri);
+
+  xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("href"), XMLSTR(file_uri));
+  ASSERT_NOT_NULL(href_elt);
+
+  free(file_uri);
+
+  xmlNodePtr status_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("status"),
+                                          XMLSTR(same_path ? locked_status : "HTTP/1.1 424 Failed Dependency"));
+  ASSERT_NOT_NULL(status_elt);
+
+  xmlChar *out_buf;
+  int out_buf_size;
+  int format_xml = 1;
+  xmlDocDumpFormatMemory(xml_response, &out_buf, &out_buf_size, format_xml);
+  *response_body = (char *) out_buf;
+  assert(out_buf_size >= 0);
+  *response_body_len = out_buf_size;
+
+  xmlFreeDoc(xml_response);
+
+  *status_code = HTTP_STATUS_CODE_MULTI_STATUS;
+
+  return true;
+}
+
+static bool
+generate_success_lock_response_body(struct handler_context *hc,
+                                    const char *file_path,
+                                    webdav_timeout_t timeout_in_seconds,
+                                    webdav_depth_t depth,
+                                    bool is_exclusive,
+                                    const char *owner_xml,
+                                    const char *lock_token,
+                                    bool created,
+                                    http_status_code_t *status_code,
+                                    char **response_body,
+                                    size_t *response_body_len) {
+  xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
+  ASSERT_NOT_NULL(xml_response);
+
+  xmlNodePtr prop_elt = xmlNewDocNode(xml_response, NULL, XMLSTR("prop"), NULL);
+  ASSERT_NOT_NULL(prop_elt);
+
+  xmlDocSetRootElement(xml_response, prop_elt);
+
+  xmlNsPtr dav_ns = xmlNewNs(prop_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
+  ASSERT_NOT_NULL(dav_ns);
+
+  xmlSetNs(prop_elt, dav_ns);
+
+  xmlNodePtr lockdiscovery_elt = xmlNewChild(prop_elt, dav_ns, XMLSTR("lockdiscovery"), NULL);
+  ASSERT_NOT_NULL(lockdiscovery_elt);
+
+  xmlNodePtr activelock_elt = xmlNewChild(lockdiscovery_elt, dav_ns, XMLSTR("activelock"), NULL);
+  ASSERT_NOT_NULL(activelock_elt);
+
+  xmlNodePtr locktype_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("locktype"), NULL);
+  ASSERT_NOT_NULL(locktype_elt);
+
+  xmlNodePtr write_elt = xmlNewChild(locktype_elt, dav_ns, XMLSTR("write"), NULL);
+  ASSERT_NOT_NULL(write_elt);
+
+  xmlNodePtr lockscope_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("lockscope"), NULL);
+  ASSERT_NOT_NULL(lockscope_elt);
+
+  if (is_exclusive) {
+    xmlNodePtr exclusive_elt = xmlNewChild(lockscope_elt, dav_ns, XMLSTR("exclusive"), NULL);
+    ASSERT_NOT_NULL(exclusive_elt);
+  }
+  else {
+    xmlNodePtr shared_elt = xmlNewChild(lockscope_elt, dav_ns, XMLSTR("shared"), NULL);
+    ASSERT_NOT_NULL(shared_elt);
+  }
+
+  assert(depth == DEPTH_0 || depth == DEPTH_INF);
+  xmlNodePtr depth_elt = xmlNewTextChild(activelock_elt, dav_ns, XMLSTR("depth"),
+                                         XMLSTR(depth == DEPTH_INF ? "infinity" : "0"));
+  ASSERT_NOT_NULL(depth_elt);
+
+  /* TODO: need to make sure owner_xml conforms to XML */
+  xmlNodePtr owner_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("owner"), XMLSTR(owner_xml));
+  ASSERT_NOT_NULL(owner_elt);
+
+  const char *timeout_str;
+  char timeout_buf[256];
+  if (!timeout_in_seconds) {
+    timeout_str = "infinity";
+  }
+  else {
+    int len = snprintf(timeout_buf, sizeof(timeout_buf),
+                       "Second-%u", (unsigned) timeout_in_seconds);
+    if (len == sizeof(timeout_buf) - 1) {
+      /* TODO: lazy */
+      abort();
+    }
+    timeout_str = timeout_buf;
+  }
+
+  xmlNodePtr timeout_elt = xmlNewTextChild(activelock_elt, dav_ns, XMLSTR("timeout"),
+                                           XMLSTR(timeout_str));
+  ASSERT_NOT_NULL(timeout_elt);
+
+  xmlNodePtr locktoken_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("locktoken"), NULL);
+  ASSERT_NOT_NULL(locktoken_elt);
+
+  xmlNodePtr href_elt = xmlNewTextChild(locktoken_elt, dav_ns, XMLSTR("href"),
+                                        XMLSTR(lock_token));
+  ASSERT_NOT_NULL(href_elt);
+
+  xmlNodePtr lockroot_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("lockroot"), NULL);
+  ASSERT_NOT_NULL(lockroot_elt);
+
+  char *lockroot_uri = uri_from_path(hc, file_path);
+  ASSERT_NOT_NULL(lockroot_uri);
+
+  xmlNodePtr lockroot_href_elt = xmlNewTextChild(lockroot_elt, dav_ns, XMLSTR("href"),
+                                                 XMLSTR(file_path));
+  ASSERT_NOT_NULL(lockroot_href_elt);
+
+  free(lockroot_uri);
+
+  xmlChar *out_buf;
+  int out_buf_size;
+  int format_xml = 1;
+  xmlDocDumpFormatMemory(xml_response, &out_buf, &out_buf_size, format_xml);
+  *response_body = (char *) out_buf;
+  assert(out_buf_size >= 0);
+  *response_body_len = out_buf_size;
+
+  xmlFreeDoc(xml_response);
+
+  *status_code = created ? HTTP_STATUS_CODE_CREATED : HTTP_STATUS_CODE_OK;
+
+  return true;
+}
+
 static
 EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
   UNUSED(ev_type);
@@ -1155,6 +1737,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
                                        hc->sub.propfind.out_buf,
                                        hc->sub.propfind.out_buf_size,
                                        "application/xml",
+                                       LINKED_LIST_INITIALIZER,
                                        handle_propfind_request, hc));
 
   if (hc->sub.propfind.out_buf) {
@@ -1211,6 +1794,7 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
                                        hc->sub.proppatch.response_body,
                                        hc->sub.proppatch.response_body_size,
                                        "application/xml",
+                                       LINKED_LIST_INITIALIZER,
                                        handle_proppatch_request, hc));
 
   if (hc->sub.proppatch.response_body) {
@@ -1221,12 +1805,6 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
   CRRETURN(hc->sub.proppatch.pos, request_proc(GENERIC_EVENT, NULL, hc));
 
   CREND();
-}
-
-static PURE_FUNCTION bool
-ns_equals(xmlNodePtr elt, const char *href) {
-  return (elt->ns &&
-          str_equals(STR(elt->ns->href), href));
 }
 
 static void
@@ -1481,6 +2059,7 @@ main(int argc, char *argv[]) {
     .http = &http,
     .loop = &loop,
     .base_path = getcwd(NULL, 0),
+    .locks = LINKED_LIST_INITIALIZER,
   };
   assert(serv.base_path);
   serv.base_path_len = strlen(serv.base_path);

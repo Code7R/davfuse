@@ -3,6 +3,7 @@
 #include "http_server.h"
 #include "logging.h"
 #include "uthread.h"
+#include "util.h"
 
 #include "http_helpers.h"
 
@@ -14,6 +15,7 @@ typedef struct {
   const char *body;
   size_t body_len;
   const char *content_type;
+  linked_list_t extra_headers;
   event_handler_t cb;
   void *ud;
   /* ctx */
@@ -37,6 +39,11 @@ UTHR_DEFINE(_simple_response_uthr) {
   if (ctx->body_len) {
     ret = http_response_add_header(&ctx->resp, HTTP_HEADER_CONTENT_TYPE,
                                    "%s", ctx->content_type);
+    assert(ret);
+  }
+
+  LINKED_LIST_FOR(HeaderPair, elt, ctx->extra_headers) {
+    ret = http_response_add_header(&ctx->resp, elt->name, "%s", elt->value);
     assert(ret);
   }
 
@@ -83,11 +90,12 @@ UTHR_DEFINE(_simple_response_uthr) {
 }
 
 
-NON_NULL_ARGS4(1, 3, 5, 6) void
+NON_NULL_ARGS4(1, 3, 5, 7) void
 http_request_simple_response(http_request_handle_t rh,
 			     http_status_code_t code,
                              const char *body, size_t body_len,
                              const char *content_type,
+                             linked_list_t extra_headers,
 			     event_handler_t cb, void *ud) {
   UTHR_CALL7(_simple_response_uthr, SimpleResponseCtx,
              .request_handle = rh,
@@ -95,6 +103,7 @@ http_request_simple_response(http_request_handle_t rh,
              .body = body,
              .body_len = body_len,
              .content_type = content_type,
+             .extra_headers = extra_headers,
              .cb = cb,
              .ud = ud,
              );
@@ -105,7 +114,8 @@ http_request_string_response(http_request_handle_t rh,
                              http_status_code_t code,
                              const char *body,
                              event_handler_t cb, void *cb_ud) {
-  http_request_simple_response(rh, code, body, strlen(body), "text/plain", cb, cb_ud);
+  http_request_simple_response(rh, code, body, strlen(body), "text/plain",
+                               LINKED_LIST_INITIALIZER, cb, cb_ud);
 }
 
 typedef struct {
