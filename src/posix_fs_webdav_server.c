@@ -339,7 +339,7 @@ add_propstat_response_for_path(const char *uri,
                                                   XMLSTR("HTTP/1.1 500 Internal Server Error"));
   assert(status_failure_elt);
 
-  LINKED_LIST_FOR(WebdavProperty, elt, props_to_get) {
+  LINKED_LIST_FOR (WebdavProperty, elt, props_to_get) {
     xmlNodePtr correct_prop_elt = prop_not_found_elt;
     if (statret < 0) {
       if (!(my_errno == ENOENT ||
@@ -1061,6 +1061,13 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
 }
 
 static bool
+refresh_lock(struct webdav_server *ws,
+             const char *file_path, const char *lock_token,
+             webdav_timeout_t timeout,
+             char **owner_xml, bool *is_exclusive,
+             webdav_depth_t *depth);
+
+static bool
 parse_lock_request_body(const char *body, size_t body_len,
                         bool *is_exclusive, char **owner_xml);
 
@@ -1072,9 +1079,9 @@ perform_write_lock(struct webdav_server *ws,
                    bool is_exclusive,
                    const char *owner_xml,
                    bool *is_locked,
-                   char **lock_token,
+                   const char **lock_token,
                    bool *created,
-                   char **status_path);
+                   const char **status_path);
 
 static bool
 generate_failed_lock_response_body(struct handler_context *hc,
@@ -1097,6 +1104,26 @@ generate_success_lock_response_body(struct handler_context *hc,
                                     char **response_body,
                                     size_t *response_body_len);
 
+enum {
+  ASCII_SPACE = 32,
+  ASCII_HT = 9,
+  ASCII_LEFT_PAREN = 40,
+  ASCII_RIGHT_PAREN = 41,
+  ASCII_LEFT_BRACKET = 60,
+  ASCII_RIGHT_BRACKET = 62,
+};
+
+static bool
+is_bnf_lws(int c) {
+  return (c == ASCII_SPACE || c == ASCII_HT);
+}
+
+static int
+skip_bnf_lws(const char *str, int i) {
+  while (is_bnf_lws(str[i])) { ++i; }
+  return i;
+}
+
 static
 EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   /* set this variable before coroutine restarts */
@@ -1114,9 +1141,10 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   http_status_code_t status_code = 0;
   char *file_path = NULL;
   char *owner_xml = NULL;
-  char *lock_token = NULL;
-  char *status_path = NULL;
+  char *refresh_uri = NULL;
+
   hc->sub.lock.response_body = NULL;
+  hc->sub.lock.response_body_len = 0;
 
   HTTPRequestReadBodyDoneEvent *rbev = ev;
   if (rbev->error) {
@@ -1126,24 +1154,6 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   }
 
   log_debug("Incoming lock request XML:\n%*s", rbev->length, rbev->body);
-
-  /* read "If" header */
-  const char *if_header = http_get_header_value(&hc->rhs, WEBDAV_HEADER_IF);
-  if (if_header) {
-    /* TODO: if header isn't supported right now,
-       maybe there is a better status code to send back? */
-    log_debug("If request header not supported");
-    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    goto done;
-  }
-
-  /* get webdav depth */
-  webdav_depth_t depth = webdav_get_depth(&hc->rhs);
-  if (depth != DEPTH_0 && depth != DEPTH_INF) {
-    log_debug("Invalid depth sent %d", depth);
-    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
-    goto done;
-  }
 
   /* get timeout */
   webdav_timeout_t timeout_in_seconds = webdav_get_timeout(&hc->rhs);
@@ -1156,11 +1166,79 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
     goto done;
   }
 
+  /* read "If" header */
+  const char *if_header = http_get_header_value(&hc->rhs, WEBDAV_HEADER_IF);
+  if (if_header && !rbev->body) {
+    /* we do the simplest if header parsing right now,
+       if it doesn't conform, then 500 */
+    int i = 0;
+
+    i = skip_bnf_lws(if_header, i);
+
+    /* get left paren */
+    if (if_header[i++] != ASCII_LEFT_PAREN) {
+      status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+      goto done;
+    }
+
+    i = skip_bnf_lws(if_header, i);
+
+    /* get left bracket */
+    if (if_header[i++] != ASCII_LEFT_BRACKET) {
+      status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+      goto done;
+    }
+
+    /* read uri */
+    const char *end_of_uri = strchr(if_header + i, ASCII_RIGHT_BRACKET);
+    size_t len_of_uri = end_of_uri - (if_header + i);
+    refresh_uri = malloc(len_of_uri + i);
+    memcpy(refresh_uri, if_header + i, len_of_uri);
+    refresh_uri[len_of_uri] = '\0';
+
+    char *owner_xml_not_owned;
+    bool is_exclusive;
+    webdav_depth_t depth;
+    bool success_refresh = refresh_lock(hc->serv, file_path, refresh_uri,
+                                        timeout_in_seconds,
+                                        &owner_xml_not_owned,
+                                        &is_exclusive,
+                                        &depth);
+    if (!success_refresh) {
+      status_code = HTTP_STATUS_CODE_PRECONDITION_FAILED;
+      goto done;
+    }
+
+    bool was_created = false;
+    bool success_generate =
+      generate_success_lock_response_body(hc, file_path, timeout_in_seconds,
+                                          depth, is_exclusive, owner_xml_not_owned,
+                                          refresh_uri, was_created,
+                                          &status_code,
+                                          &hc->sub.lock.response_body,
+                                          &hc->sub.lock.response_body_len);
+
+    if (!success_generate) {
+      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    }
+
+    goto done;
+  }
+
+  /* get webdav depth */
+  webdav_depth_t depth = webdav_get_depth(&hc->rhs);
+  if (depth != DEPTH_0 && depth != DEPTH_INF) {
+    log_debug("Invalid depth sent %d", depth);
+    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
+  }
+
   /* parse request body */
   bool is_exclusive;
-  bool success_parse =
-    parse_lock_request_body(rbev->body, rbev->length,
-                            &is_exclusive, &owner_xml);
+  bool success_parse = rbev->body
+    ? parse_lock_request_body(rbev->body, rbev->length,
+                              &is_exclusive, &owner_xml)
+    : false;
   if (!success_parse) {
     log_debug("Bad request body");
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
@@ -1170,6 +1248,8 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   /* actually attempt to lock the resource */
   bool is_locked;
   bool created;
+  const char *lock_token;
+  const char *status_path;
   bool success_perform =
     perform_write_lock(hc->serv,
                        file_path, timeout_in_seconds, depth, is_exclusive, owner_xml,
@@ -1228,8 +1308,6 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   free(rbev->body);
   free(file_path);
   free(owner_xml);
-  free(lock_token);
-  free(status_path);
 
   CRYIELD(hc->sub.lock.pos,
           http_request_simple_response(hc->rh,
@@ -1251,6 +1329,27 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
            request_proc(GENERIC_EVENT, NULL, hc));
 
   CREND();
+}
+
+static bool
+refresh_lock(struct webdav_server *ws,
+             const char *file_path, const char *lock_token,
+             webdav_timeout_t new_timeout,
+             char **owner_xml, bool *is_exclusive,
+             webdav_depth_t *depth) {
+  LINKED_LIST_FOR (WebdavLockDescriptor, elt, ws->locks) {
+    if (str_equals(elt->path, file_path) &&
+        str_equals(elt->lock_token, lock_token)) {
+      /* we don't necessarily have to do this, but just do it for now */
+      elt->timeout_in_seconds = new_timeout;
+      *owner_xml = elt->owner_xml;
+      *is_exclusive = elt->is_exclusive;
+      *depth = elt->depth;
+      return true;
+    }
+  }
+
+  return false;
 }
 
 static bool
@@ -1323,21 +1422,21 @@ perform_write_lock(struct webdav_server *ws,
                    bool is_exclusive,
                    const char *owner_xml,
                    bool *is_locked,
-                   char **lock_token,
+                   const char **lock_token,
                    bool *created,
-                   char **status_path) {
+                   const char **status_path) {
   /* go through lock list and see if this path (or any descendants if depth != 0)
      have an incompatible lock
      if so then set that path as the status_path and return *is_locked = true
    */
-  LINKED_LIST_FOR(WebdavLockDescriptor, elt, ws->locks) {
+  LINKED_LIST_FOR (WebdavLockDescriptor, elt, ws->locks) {
     bool parent_locks_us = false;
     if ((str_equals(elt->path, file_path) ||
          (depth == DEPTH_INF && is_parent_path(file_path, elt->path)) ||
          (parent_locks_us = (elt->depth == DEPTH_INF && is_parent_path(elt->path, file_path)))) &&
         (is_exclusive || elt->is_exclusive)) {
       *is_locked = true;
-      *status_path = strdup(parent_locks_us ? file_path : elt->path);
+      *status_path = parent_locks_us ? file_path : elt->path;
       /* if the strdup failed then we return false */
       return *status_path;
     }
@@ -1358,11 +1457,6 @@ perform_write_lock(struct webdav_server *ws,
     return false;
   }
 
-  *lock_token = strdup(s_lock_token);
-  if (!*lock_token) {
-    return false;
-  }
-
   /* okay we can lock this path, just add it to the lock list */
   EASY_ALLOC(WebdavLockDescriptor, new_lock);
 
@@ -1371,7 +1465,7 @@ perform_write_lock(struct webdav_server *ws,
     .depth = depth,
     .is_exclusive = is_exclusive,
     .owner_xml = strdup(owner_xml),
-    .lock_token = strdup(*lock_token),
+    .lock_token = strdup(s_lock_token),
     .timeout_in_seconds = timeout_in_seconds,
   };
 
@@ -1381,6 +1475,8 @@ perform_write_lock(struct webdav_server *ws,
     /* just die on ENOMEM */
     abort();
   }
+
+  *lock_token = new_lock->lock_token;
 
   ws->locks = linked_list_prepend(ws->locks, new_lock);
 
@@ -1517,9 +1613,11 @@ generate_success_lock_response_body(struct handler_context *hc,
                                          XMLSTR(depth == DEPTH_INF ? "infinity" : "0"));
   ASSERT_NOT_NULL(depth_elt);
 
-  /* TODO: need to make sure owner_xml conforms to XML */
-  xmlNodePtr owner_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("owner"), XMLSTR(owner_xml));
-  ASSERT_NOT_NULL(owner_elt);
+  if (owner_xml) {
+    /* TODO: need to make sure owner_xml conforms to XML */
+    xmlNodePtr owner_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("owner"), XMLSTR(owner_xml));
+    ASSERT_NOT_NULL(owner_elt);
+  }
 
   const char *timeout_str;
   char timeout_buf[256];

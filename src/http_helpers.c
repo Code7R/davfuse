@@ -136,6 +136,10 @@ static
 UTHR_DEFINE(_read_request_body) {
   UTHR_HEADER(ReadRequestBody, ctx);
 
+  ctx->buf = NULL;
+  ctx->buf_size = 0;
+  ctx->buf_used = 0;
+
   while (true) {
     UTHR_YIELD(ctx,
                http_request_read(ctx->request_handle,
