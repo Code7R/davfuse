@@ -88,9 +88,13 @@ struct handler_context {
     struct {
       coroutine_position_t pos;
       bool is_move;
+      char *response_body;
+      size_t response_body_len;
     } copy;
     struct {
       coroutine_position_t pos;
+      char *response_body;
+      size_t response_body_len;
     } delete;
     struct {
       coroutine_position_t pos;
@@ -126,6 +130,8 @@ struct handler_context {
       char read_buf[BUF_SIZE];
       http_status_code_t success_status_code;
       int fd;
+      char *response_body;
+      size_t response_body_len;
     } put;
   } sub;
 };
@@ -437,12 +443,20 @@ is_resource_locked(struct webdav_server *ws,
                    bool *is_locked,
                    const char **locked_path,
                    const char **locked_lock_token) {
-  UNUSED(ws);
-  UNUSED(file_path);
-  UNUSED(is_locked);
-  UNUSED(locked_path);
-  UNUSED(locked_lock_token);
-  return false;
+  *is_locked = false;
+
+  LINKED_LIST_FOR (WebdavLockDescriptor, elt, ws->locks) {
+    if (str_equals(elt->path, file_path) ||
+	(elt->depth == DEPTH_INF &&
+	 is_parent_path(elt->path, file_path))) {
+      *is_locked = true;
+      *locked_path = elt->path;
+      *locked_lock_token = elt->lock_token;
+      break;
+    }
+  }
+
+  return true;
 }
 
 static bool
@@ -450,11 +464,17 @@ are_any_descendants_locked(struct webdav_server *ws,
                            const char *file_path,
                            bool *is_descendant_locked,
                            const char **locked_descendant) {
-  UNUSED(ws);
-  UNUSED(file_path);
-  UNUSED(is_descendant_locked);
-  UNUSED(locked_descendant);
-  return false;
+  *is_descendant_locked = false;
+
+  LINKED_LIST_FOR (WebdavLockDescriptor, elt, ws->locks) {
+    if (is_parent_path(file_path, elt->path)) {
+      *is_descendant_locked = true;
+      *locked_descendant = elt->path;
+      break;
+    }
+  }
+
+  return true;
 }
 
 static void
@@ -867,6 +887,252 @@ run_propfind(struct handler_context *hc,
   free(file_path);
 }
 
+static bool
+generate_locked_response(struct handler_context *hc,
+			 const char *locked_path,
+			 http_status_code_t *status_code,
+			 char **response_body,
+			 size_t *response_body_len);
+
+static bool
+generate_locked_descendant_response(struct handler_context *hc,
+				    const char *locked_descendant,
+				    http_status_code_t *status_code,
+				    char **response_body,
+				    size_t *response_body_len);
+
+static void
+_can_modify_path(struct handler_context *hc,
+		 if_lock_token_err_t if_lock_token_err,
+		 const char *lock_token,
+		 const char *fpath,
+		 http_status_code_t *status_code,
+		 char **response_body,
+		 size_t *response_body_len) {
+  *status_code = HTTP_STATUS_CODE___INVALID;
+
+  /* check if the path is locked or is a descendant of a locked path
+     (directly or indirectly locked) */
+  const char *locked_path;
+  const char *locked_lock_token;
+  bool is_locked;
+  bool success_locked =
+    is_resource_locked(hc->serv, fpath, &is_locked, &locked_path, &locked_lock_token);
+  if (!success_locked) {
+    *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    return;
+  }
+
+  if (is_locked &&
+      (if_lock_token_err != IF_LOCK_TOKEN_ERR_SUCCESS ||
+       !str_equals(locked_lock_token, lock_token))) {
+    /* this is locked, fail */
+    bool success_generate =
+      generate_locked_response(hc, locked_path,
+			       status_code,
+			       response_body,
+			       response_body_len);
+    if (!success_generate) {
+      *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    }
+  }
+}
+
+static void
+can_modify_path(struct handler_context *hc,
+		const char *fpath,
+		http_status_code_t *status_code,
+		char **response_body,
+		size_t *response_body_len) {
+  char *lock_token = NULL;
+
+  *status_code = HTTP_STATUS_CODE___INVALID;
+
+  /* parse if header */
+  /* TODO: associate each lock token with a resource URL */
+  if_lock_token_err_t if_lock_token_err =
+    webdav_get_if_lock_token(&hc->rhs, &lock_token);
+
+  if (if_lock_token_err == IF_LOCK_TOKEN_ERR_INTERNAL) {
+    *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  if (if_lock_token_err == IF_LOCK_TOKEN_ERR_BAD_PARSE) {
+    *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
+  }
+
+  _can_modify_path(hc, if_lock_token_err, lock_token,
+		   fpath,
+		   status_code,
+		   response_body, response_body_len);
+
+ done:
+  free(lock_token);
+}
+
+static void
+can_unlink_path(struct handler_context *hc,
+		const char *fpath,
+		http_status_code_t *status_code,
+		char **response_body,
+		size_t *response_body_len) {
+  char *lock_token = NULL;
+
+  *status_code = HTTP_STATUS_CODE___INVALID;
+
+  /* parse if header */
+  /* TODO: associate each lock token with a resource URL */
+  if_lock_token_err_t if_lock_token_err =
+    webdav_get_if_lock_token(&hc->rhs, &lock_token);
+
+  if (if_lock_token_err == IF_LOCK_TOKEN_ERR_INTERNAL) {
+    *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  if (if_lock_token_err == IF_LOCK_TOKEN_ERR_BAD_PARSE) {
+    *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
+  }
+
+  _can_modify_path(hc, if_lock_token_err, lock_token,
+		   fpath,
+		   status_code,
+		   response_body, response_body_len);
+
+  if (!status_code) {
+    /* check if any descendant is locked */
+    bool is_descendant_locked;
+    const char *locked_descendant;
+    bool success_child_locked =
+      are_any_descendants_locked(hc->serv, fpath,
+				 &is_descendant_locked, &locked_descendant);
+    if (!success_child_locked) {
+      *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      goto done;
+    }
+    
+    if (is_descendant_locked) {
+      bool success_generate =
+	generate_locked_descendant_response(hc, locked_descendant,
+					    status_code,
+					    response_body,
+					    response_body_len);
+      if (!success_generate) {
+	*status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      }
+    }
+  }
+
+ done:
+  free(lock_token);
+}
+
+static bool
+generate_locked_response(struct handler_context *hc,
+			 const char *locked_path,
+			 http_status_code_t *status_code,
+			 char **response_body,
+			 size_t *response_body_len) {
+  xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
+  ASSERT_NOT_NULL(xml_response);
+
+  xmlNodePtr error_elt = xmlNewDocNode(xml_response, NULL, XMLSTR("error"), NULL);
+  ASSERT_NOT_NULL(error_elt);
+
+  xmlDocSetRootElement(xml_response, error_elt);
+
+  xmlNsPtr dav_ns = xmlNewNs(error_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
+  ASSERT_NOT_NULL(dav_ns);
+
+  xmlSetNs(error_elt, dav_ns);
+
+  xmlNodePtr lock_token_submitted_elt =
+    xmlNewChild(error_elt, dav_ns, XMLSTR("lock-token-submitted"), NULL);
+  ASSERT_NOT_NULL(lock_token_submitted_elt);
+
+  char *uri = uri_from_path(hc, locked_path);
+  ASSERT_NOT_NULL(uri);
+
+  xmlNodePtr href_elt =
+    xmlNewChild(error_elt, dav_ns, XMLSTR("href"), XMLSTR(uri));
+  ASSERT_NOT_NULL(href_elt);
+
+  free(uri);
+
+  xmlChar *out_buf;
+  int out_buf_size;
+  int format_xml = 1;
+  xmlDocDumpFormatMemory(xml_response, &out_buf, &out_buf_size, format_xml);
+  *response_body = (char *) out_buf;
+  assert(out_buf_size >= 0);
+  *response_body_len = out_buf_size;
+
+  xmlFreeDoc(xml_response);
+
+  *status_code = HTTP_STATUS_CODE_LOCKED;
+
+  return true;
+}
+
+static bool
+generate_locked_descendant_response(struct handler_context *hc,
+				    const char *locked_descendant,
+				    http_status_code_t *status_code,
+				    char **response_body,
+				    size_t *response_body_len) {
+  xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
+  ASSERT_NOT_NULL(xml_response);
+
+  xmlNodePtr multistatus_elt = xmlNewDocNode(xml_response, NULL, XMLSTR("multistatus"), NULL);
+  ASSERT_NOT_NULL(multistatus_elt);
+
+  xmlDocSetRootElement(xml_response, multistatus_elt);
+
+  xmlNsPtr dav_ns = xmlNewNs(multistatus_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
+  ASSERT_NOT_NULL(dav_ns);
+
+  xmlSetNs(multistatus_elt, dav_ns);
+
+  xmlNodePtr response_elt = xmlNewChild(multistatus_elt, dav_ns, XMLSTR("response"), NULL);
+  ASSERT_NOT_NULL(response_elt);
+
+  char *uri = uri_from_path(hc, locked_descendant);
+  ASSERT_NOT_NULL(uri);
+
+  xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("href"), XMLSTR(uri));
+  ASSERT_NOT_NULL(href_elt);
+
+  free(uri);
+
+  xmlNodePtr status_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("status"),
+					  XMLSTR("HTTP/1.1 423 Locked"));
+  ASSERT_NOT_NULL(status_elt);
+
+  xmlNodePtr error_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("error"), NULL);
+  ASSERT_NOT_NULL(error_elt);
+
+  xmlNodePtr lock_token_submitted_elt =
+    xmlNewChild(error_elt, dav_ns, XMLSTR("lock-token-submitted"), NULL);
+  ASSERT_NOT_NULL(lock_token_submitted_elt);
+
+  xmlChar *out_buf;
+  int out_buf_size;
+  int format_xml = 1;
+  xmlDocDumpFormatMemory(xml_response, &out_buf, &out_buf_size, format_xml);
+  *response_body = (char *) out_buf;
+  assert(out_buf_size >= 0);
+  *response_body_len = out_buf_size;
+
+  xmlFreeDoc(xml_response);
+
+  *status_code = HTTP_STATUS_CODE_MULTI_STATUS;
+
+  return true;
+}
+
 static
 UTHR_DEFINE(request_proc) {
   UTHR_HEADER(struct handler_context, hc);
@@ -969,11 +1235,25 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   }                                                  \
   while (false)
 
+  hc->sub.copy.response_body = NULL;
+  hc->sub.copy.response_body_len = 0;
+
   const char *destination_url = NULL;
   char *destination_path = NULL;
   char *file_path = path_from_uri(hc, hc->rhs.uri);
   HANDLE_ERROR(!file_path, HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
                "couldn't get source path");
+
+  if (hc->sub.copy.is_move) {
+    /* check if the path we're moving is locked */
+    can_unlink_path(hc, file_path,
+		    &status_code,
+		    &hc->sub.copy.response_body,
+		    &hc->sub.copy.response_body_len);
+    if (status_code) {
+      goto done;
+    }
+  }
 
   /* destination */
   destination_url = http_get_header_value(&hc->rhs, WEBDAV_HEADER_DESTINATION);
@@ -984,6 +1264,15 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   destination_path = path_from_uri(hc, destination_url);
   HANDLE_ERROR(!destination_path, HTTP_STATUS_CODE_BAD_REQUEST,
                "couldn't get path from destination URI");
+
+  /* check if we can copy/move to the destination due to a lock */
+  can_unlink_path(hc, destination_path,
+		  &status_code,
+		  &hc->sub.copy.response_body,
+		  &hc->sub.copy.response_body_len);
+  if (status_code) {
+    goto done;
+  }
 
   /* check if destination path parent exists, otherwise 409 */
   char *destination_path_copy = strdup(destination_path);
@@ -1063,8 +1352,12 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   free(destination_path);
 
   CRYIELD(hc->sub.copy.pos,
-          http_request_string_response(hc->rh,
-                                       status_code, "",
+          http_request_simple_response(hc->rh,
+                                       status_code,
+				       hc->sub.copy.response_body,
+				       hc->sub.copy.response_body_len,
+				       "application/xml",
+				       LINKED_LIST_INITIALIZER,
                                        handle_copy_request, hc));
 
   CRRETURN(hc->sub.copy.pos,
@@ -1084,8 +1377,9 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
 
   CRBEGIN(hc->sub.delete.pos);
 
+  hc->sub.delete.response_body = NULL;
+  hc->sub.delete.response_body_len = 0;
   http_status_code_t status_code = HTTP_STATUS_CODE_OK;
-  char *lock_token = NULL;
 
   char *fpath = path_from_uri(hc, hc->rhs.uri);
   if (!fpath) {
@@ -1102,55 +1396,16 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
   }
   else if (ret) {
-    /* parse if header */
-    if_lock_token_err_t if_lock_token_err =
-      webdav_get_if_lock_token(&hc->rhs, &lock_token);
-
-
-    if (if_lock_token_err == IF_LOCK_TOKEN_ERR_BAD_PARSE) {
-      status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    /* check that we can "unlink" this path */
+    can_unlink_path(hc, fpath,
+		    &status_code,
+		    &hc->sub.delete.response_body,
+		    &hc->sub.delete.response_body_len);
+    if (status_code) {
       goto done;
     }
 
-    if (if_lock_token_err == IF_LOCK_TOKEN_ERR_INTERNAL) {
-      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-      goto done;
-    }
-
-    /* check if descendant is locked either
-       directly or indirectly (via a parent) */
-    const char *locked_path;
-    const char *locked_lock_token;
-    bool is_locked;
-    bool success_locked =
-      is_resource_locked(hc->serv, fpath, &is_locked, &locked_path, &locked_lock_token);
-    if (!success_locked) {
-      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-      goto done;
-    }
-
-    if (is_locked) {
-      if (if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS &&
-          str_equals(locked_lock_token, lock_token)) {
-        /* TODO: handle this */
-      }
-      else {
-        /* this is locked, fail */
-        status_code = HTTP_STATUS_CODE_LOCKED;
-        goto done;
-      }
-    }
-
-    /* check if any descendant is locked */
-    bool is_descendant_locked;
-    const char *locked_descendant;
-    bool success_child_locked =
-      are_any_descendants_locked(hc->serv, fpath,
-                                 &is_descendant_locked, &locked_descendant);
-    if (!success_child_locked) {
-      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-      goto done;
-    }
+    status_code = HTTP_STATUS_CODE_OK;
 
     linked_list_t failed_to_delete = rmtree(fpath);
 
@@ -1167,12 +1422,17 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
 
  done:
   free(fpath);
-  free(lock_token);
 
   CRYIELD(hc->sub.delete.pos,
-          http_request_string_response(hc->rh,
-                                       status_code, "",
+          http_request_simple_response(hc->rh,
+                                       status_code,
+				       hc->sub.delete.response_body,
+				       hc->sub.delete.response_body_len,
+				       "application/xml",
+				       LINKED_LIST_INITIALIZER,
                                        handle_delete_request, hc));
+
+  free(hc->sub.delete.response_body);
 
   CRRETURN(hc->sub.delete.pos,
            request_proc(GENERIC_EVENT, NULL, hc));
@@ -1434,8 +1694,8 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   /* actually attempt to lock the resource */
   bool is_locked;
   bool created;
-  const char *lock_token;
-  const char *status_path;
+  const char *lock_token = NULL;
+  const char *status_path = NULL;
   bool success_perform =
     perform_write_lock(hc->serv,
                        file_path, timeout_in_seconds, depth, is_exclusive, owner_xml,
@@ -1446,15 +1706,26 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
     goto done;
   }
 
+  hc->sub.lock.headers = LINKED_LIST_INITIALIZER;
+
   /* generate lock attempt response */
   bool success_generate;
   if (is_locked) {
     log_debug("Resource is already locked");
-    success_generate =
-      generate_failed_lock_response_body(hc, file_path, status_path,
-                                         &status_code,
-                                         &hc->sub.lock.response_body,
-                                         &hc->sub.lock.response_body_len);
+    if (str_equals(status_path, file_path)) {
+      success_generate =
+	generate_locked_response(hc, status_path,
+				 &status_code,
+				 &hc->sub.lock.response_body,
+				 &hc->sub.lock.response_body_len);
+    }
+    else {
+      success_generate =
+	generate_failed_lock_response_body(hc, file_path, status_path,
+					   &status_code,
+					   &hc->sub.lock.response_body,
+					   &hc->sub.lock.response_body_len);
+    }
   }
   else {
     success_generate =
@@ -1464,6 +1735,21 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
                                           &status_code,
                                           &hc->sub.lock.response_body,
                                           &hc->sub.lock.response_body_len);
+
+    if (success_generate) {
+      /* add lock token header if we were locked */
+      EASY_ALLOC(HeaderPair, hp);
+      hp->name = "Lock-Token";
+      char lock_token_header_value[256];
+      int len_written = snprintf(lock_token_header_value, sizeof(lock_token_header_value),
+				 "<%s>", lock_token);
+      if (len_written == sizeof(lock_token_header_value) - 1) {
+	/* TODO: Lazy */
+	abort();
+      }
+      hp->value = strdup(lock_token_header_value);
+      hc->sub.lock.headers = linked_list_prepend(hc->sub.lock.headers, hp);
+    }
   }
 
   if (!success_generate) {
@@ -1478,18 +1764,6 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
             (long long) hc->sub.lock.response_body_len,
             hc->sub.lock.response_body_len,
             hc->sub.lock.response_body);
-
-  EASY_ALLOC(HeaderPair, hp);
-  hp->name = "Lock-Token";
-  char lock_token_header_value[256];
-  int len_written = snprintf(lock_token_header_value, sizeof(lock_token_header_value),
-                             "<%s>", lock_token);
-  if (len_written == sizeof(lock_token_header_value) - 1) {
-    /* TODO: Lazy */
-    abort();
-  }
-  hp->value = strdup(lock_token_header_value);
-  hc->sub.lock.headers = linked_list_prepend(hc->sub.lock.headers, hp);
 
   free(rbev->body);
   free(file_path);
@@ -1507,9 +1781,11 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   /* if there is an error sending, oh well, just let the request end */
 
   free(hc->sub.lock.response_body);
-  free(((HeaderPair *) hc->sub.lock.headers->elt)->value);
-  free(hc->sub.lock.headers->elt);
-  linked_list_free(hc->sub.lock.headers, NULL);
+  if (hc->sub.lock.headers) {
+    free(((HeaderPair *) hc->sub.lock.headers->elt)->value);
+    free(hc->sub.lock.headers->elt);
+    linked_list_free(hc->sub.lock.headers, NULL);
+  }
 
   CRRETURN(hc->sub.lock.pos,
            request_proc(GENERIC_EVENT, NULL, hc));
@@ -2002,11 +2278,28 @@ run_proppatch(struct handler_context *hc, const char *uri,
 	      http_status_code_t *status_code) {
   UNUSED(hc);
 
-  /* first parse the xml */
+  xmlDocPtr doc = NULL;
+
+  char *file_path = path_from_uri(hc, uri);
+  if (!file_path) {
+    log_warning("Couldn't make file path from %s", uri);
+    *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  /* check if uri is locked */
+  can_modify_path(hc, file_path,
+		  status_code,
+		  output, output_size);
+  if (*status_code) {
+    goto done;
+  }
+
+  /* now parse the xml */
   assert(input_size <= INT_MAX);
   log_debug("XML request:\n%.*s", (int) input_size, input);
 
-  xmlDocPtr doc = parse_xml_string(input, input_size);
+  doc = parse_xml_string(input, input_size);
   if (!doc) {
     *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
@@ -2102,6 +2395,8 @@ run_proppatch(struct handler_context *hc, const char *uri,
   *status_code = HTTP_STATUS_CODE_MULTI_STATUS;
 
  done:
+  free(file_path);
+
   if (doc) {
     xmlFreeDoc(doc);
   }
@@ -2117,6 +2412,8 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
 
   CRBEGIN(hc->sub.put.pos);
 
+  hc->sub.put.response_body = NULL;
+  hc->sub.put.response_body_len = 0;
   hc->sub.put.fd = -1;
 
   const char *uri = hc->rhs.uri;
@@ -2124,6 +2421,15 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
   if (!file_path) {
     log_warning("Couldn't make file path from %s", uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  /* check if path is locked */
+  can_modify_path(hc, file_path,
+		  &status_code,
+		  &hc->sub.put.response_body,
+		  &hc->sub.put.response_body_len);
+  if (status_code) {
     goto done;
   }
 
@@ -2183,9 +2489,15 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
   }
 
   CRYIELD(hc->sub.put.pos,
-          http_request_string_response(hc->rh,
-                                       status_code, "",
+          http_request_simple_response(hc->rh,
+                                       status_code,
+				       hc->sub.put.response_body,
+				       hc->sub.put.response_body_len,
+				       "application/xml",
+				       LINKED_LIST_INITIALIZER,
                                        handle_put_request, hc));
+
+  free(hc->sub.put.response_body);
 
  error:
   CRRETURN(hc->sub.put.pos,

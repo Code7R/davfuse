@@ -56,6 +56,7 @@ typedef enum {
 } http_error_code_t;
 
 typedef enum {
+  HTTP_STATUS_CODE___INVALID,
   HTTP_STATUS_CODE_OK=200,
   HTTP_STATUS_CODE_CREATED=201,
   HTTP_STATUS_CODE_NO_CONTENT=204,
