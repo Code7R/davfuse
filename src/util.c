@@ -84,6 +84,20 @@ linked_list_peekleft(linked_list_t ll) {
   return ll->elt;
 }
 
+void *
+linked_list_pop_link(linked_list_t *llp) {
+  linked_list_t cur_link = *llp;
+
+  *llp = cur_link->next;
+
+  void *elt = cur_link->elt;
+
+  free(cur_link);
+
+  return elt;
+}
+
+
 bool PURE_FUNCTION
 str_startswith(const char *a, const char *b) {
   size_t len_a = strlen(a);

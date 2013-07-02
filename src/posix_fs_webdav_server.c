@@ -35,13 +35,14 @@
 #define XMLSTR(a) ((const xmlChar *) (a))
 #define STR(a) ((const char *) (a))
 
-const char *DAV_XML_NS = "DAV:";
+static const char *DAV_XML_NS = "DAV:";
 
-const char *WEBDAV_HEADER_DEPTH = "Depth";
-const char *WEBDAV_HEADER_DESTINATION = "Destination";
-const char *WEBDAV_HEADER_IF = "If";
-const char *WEBDAV_HEADER_OVERWRITE = "Overwrite";
-const char *WEBDAV_HEADER_TIMEOUT = "Timeout";
+static const char *WEBDAV_HEADER_DEPTH = "Depth";
+static const char *WEBDAV_HEADER_DESTINATION = "Destination";
+static const char *WEBDAV_HEADER_IF = "If";
+static const char *WEBDAV_HEADER_LOCK_TOKEN = "Lock-Token";
+static const char *WEBDAV_HEADER_OVERWRITE = "Overwrite";
+static const char *WEBDAV_HEADER_TIMEOUT = "Timeout";
 
 enum {
   BUF_SIZE=4096,
@@ -133,6 +134,11 @@ struct handler_context {
       char *response_body;
       size_t response_body_len;
     } put;
+    struct {
+      coroutine_position_t pos;
+      char *response_body;
+      size_t response_body_len;
+    } unlock;
   } sub;
 };
 
@@ -146,6 +152,7 @@ static EVENT_HANDLER_DECLARE(handle_options_request);
 static EVENT_HANDLER_DECLARE(handle_propfind_request);
 static EVENT_HANDLER_DECLARE(handle_proppatch_request);
 static EVENT_HANDLER_DECLARE(handle_put_request);
+static EVENT_HANDLER_DECLARE(handle_unlock_request);
 
 static WebdavProperty *
 create_webdav_property(const char *element_name, const char *ns_href) {
@@ -261,6 +268,7 @@ webdav_get_depth(const HTTPRequestHeaders *rhs) {
 static webdav_timeout_t
 webdav_get_timeout(const HTTPRequestHeaders *rhs) {
   UNUSED(rhs);
+  UNUSED(WEBDAV_HEADER_TIMEOUT);
   /* just lock for 60 seconds for now,
      we don't have to honor timeout headers */
   /* TODO: fix this */
@@ -283,7 +291,7 @@ is_bnf_lws(int c) {
 
 static int
 skip_bnf_lws(const char *str, int i) {
-  while (is_bnf_lws(str[i])) { ++i; }
+  for (; is_bnf_lws(str[i]); ++i);
   return i;
 }
 
@@ -294,8 +302,21 @@ typedef enum {
   IF_LOCK_TOKEN_ERR_INTERNAL,
 } if_lock_token_err_t;
 
+static char *
+create_str_copy(const char *in, size_t len) {
+  assert(strlen(in) >= len);
+  char *out = malloc(len + 1);
+  if (!out) {
+    return NULL;
+  }
+
+  memcpy(out, in, len);
+  out[len] = '\0';
+  return out;
+}
+
 static if_lock_token_err_t
-webdav_get_if_lock_token(const HTTPRequestHeaders *rhs, char **lock_token) {
+webdav_get_if_lock_token(const HTTPRequestHeaders *rhs, char **resource_tag, char **lock_token) {
   const char *if_header = http_get_header_value(rhs, WEBDAV_HEADER_IF);
   if (!if_header) {
     return IF_LOCK_TOKEN_ERR_DOESNT_EXIST;
@@ -307,8 +328,34 @@ webdav_get_if_lock_token(const HTTPRequestHeaders *rhs, char **lock_token) {
 
   i = skip_bnf_lws(if_header, i);
 
+  /* attempt to parse out resource tag */
+  if (if_header[i] == ASCII_LEFT_BRACKET) {
+    i++;
+    const char *end_of_uri = strchr(if_header + i, ASCII_RIGHT_BRACKET);
+    if (!end_of_uri) {
+      return IF_LOCK_TOKEN_ERR_BAD_PARSE;
+    }
+
+    size_t len_of_uri = end_of_uri - (if_header + i);
+    *resource_tag =
+      create_str_copy(if_header + i, len_of_uri);
+
+    if (!*resource_tag) {
+      return IF_LOCK_TOKEN_ERR_INTERNAL;
+    }
+
+    /* skip resource tag */
+    i += len_of_uri + 1;
+    i = skip_bnf_lws(if_header, i);
+  }
+  else {
+    /* no resource tag passed in, this lock token is related to the method uri */
+    *resource_tag = strdup(rhs->uri);
+  }
+
   /* get left paren */
   if (if_header[i++] != ASCII_LEFT_PAREN) {
+    free(*resource_tag);
     return IF_LOCK_TOKEN_ERR_BAD_PARSE;
   }
 
@@ -316,19 +363,22 @@ webdav_get_if_lock_token(const HTTPRequestHeaders *rhs, char **lock_token) {
 
   /* get left bracket */
   if (if_header[i++] != ASCII_LEFT_BRACKET) {
+    free(*resource_tag);
     return IF_LOCK_TOKEN_ERR_BAD_PARSE;
   }
 
   /* read uri */
   const char *end_of_uri = strchr(if_header + i, ASCII_RIGHT_BRACKET);
-  size_t len_of_uri = end_of_uri - (if_header + i);
-  *lock_token = malloc(len_of_uri + i);
+  if (!end_of_uri) {
+    free(*resource_tag);
+    return IF_LOCK_TOKEN_ERR_BAD_PARSE;
+  }
+  *lock_token =
+    create_str_copy(if_header + i, end_of_uri - (if_header + i));
   if (!*lock_token) {
+    free(*resource_tag);
     return IF_LOCK_TOKEN_ERR_INTERNAL;
   }
-
-  memcpy(*lock_token, if_header + i, len_of_uri);
-  (*lock_token)[len_of_uri] = '\0';
 
   return IF_LOCK_TOKEN_ERR_SUCCESS;
 }
@@ -406,6 +456,9 @@ perform_write_lock(struct webdav_server *ws,
   *lock_token = new_lock->lock_token;
 
   ws->locks = linked_list_prepend(ws->locks, new_lock);
+  if (!ws->locks) {
+    abort();
+  }
 
   *is_locked = false;
   if ((*created = !file_exists(file_path))) {
@@ -417,24 +470,50 @@ perform_write_lock(struct webdav_server *ws,
 }
 
 static bool
-refresh_lock(struct webdav_server *ws,
-             const char *file_path, const char *lock_token,
-             webdav_timeout_t new_timeout,
-             char **owner_xml, bool *is_exclusive,
-             webdav_depth_t *depth) {
-  LINKED_LIST_FOR (WebdavLockDescriptor, elt, ws->locks) {
+unlock_resource(struct webdav_server *ws,
+		const char *file_path,
+		const char *lock_token,
+		bool *unlocked) {
+  *unlocked = false;
+
+  for (linked_list_t *llp = &ws->locks; *llp; llp = &(*llp)->next) {
+    WebdavLockDescriptor *elt = (*llp)->elt;
     if (str_equals(elt->path, file_path) &&
-        str_equals(elt->lock_token, lock_token)) {
-      /* we don't necessarily have to do this, but just do it for now */
-      elt->timeout_in_seconds = new_timeout;
-      *owner_xml = elt->owner_xml;
-      *is_exclusive = elt->is_exclusive;
-      *depth = elt->depth;
-      return true;
+	str_equals(elt->lock_token, lock_token)) {
+      WebdavLockDescriptor *popped_elt = linked_list_pop_link(llp);
+      free(popped_elt);
+      *unlocked = true;
+      break;
     }
   }
 
-  return false;
+  return true;
+}
+
+static bool
+refresh_lock(struct webdav_server *ws,
+             const char *file_path, const char *lock_token,
+             webdav_timeout_t new_timeout,
+	     bool *refreshed,
+             char **owner_xml, bool *is_exclusive,
+             webdav_depth_t *depth) {
+  *refreshed = false;
+
+  LINKED_LIST_FOR (WebdavLockDescriptor, elt, ws->locks) {
+    if (str_equals(elt->lock_token, lock_token) &&
+	(str_equals(elt->path, file_path) ||
+	 is_parent_path(elt->path, file_path))) {
+      /* we don't necessarily have to do this, but just do it for now */
+      elt->timeout_in_seconds = new_timeout;
+      *refreshed = true;
+      *owner_xml = elt->owner_xml;
+      *is_exclusive = elt->is_exclusive;
+      *depth = elt->depth;
+      break;
+    }
+  }
+
+  return true;
 }
 
 static bool
@@ -904,12 +983,20 @@ generate_locked_descendant_response(struct handler_context *hc,
 static void
 _can_modify_path(struct handler_context *hc,
 		 if_lock_token_err_t if_lock_token_err,
+		 const char *lock_resource_tag,
 		 const char *lock_token,
 		 const char *fpath,
 		 http_status_code_t *status_code,
 		 char **response_body,
 		 size_t *response_body_len) {
   *status_code = HTTP_STATUS_CODE___INVALID;
+
+  /* TODO: this logic is kind of weird,
+     we should check if we were passed if tokens first
+     i.e:
+       WHEN NOT IF HEADER: check if path is locked
+       WHEN IF HEADER: check if all tokens exist and are locked and path names match
+  */
 
   /* check if the path is locked or is a descendant of a locked path
      (directly or indirectly locked) */
@@ -923,8 +1010,14 @@ _can_modify_path(struct handler_context *hc,
     return;
   }
 
+  char *lock_token_fpath = NULL;
+  if (if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS) {
+    lock_token_fpath = path_from_uri(hc, lock_resource_tag);
+  }
+
   if (is_locked &&
       (if_lock_token_err != IF_LOCK_TOKEN_ERR_SUCCESS ||
+       !str_equals(lock_token_fpath, locked_path) ||
        !str_equals(locked_lock_token, lock_token))) {
     /* this is locked, fail */
     bool success_generate =
@@ -936,6 +1029,15 @@ _can_modify_path(struct handler_context *hc,
       *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     }
   }
+  /* if the file wasn't locked but we were given a lock token */
+  else if (!is_locked &&
+	   if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS) {
+    *response_body = NULL;
+    *response_body_len = 0;
+    *status_code = HTTP_STATUS_CODE_PRECONDITION_FAILED;
+  }
+
+  free(lock_token_fpath);
 }
 
 static void
@@ -944,6 +1046,7 @@ can_modify_path(struct handler_context *hc,
 		http_status_code_t *status_code,
 		char **response_body,
 		size_t *response_body_len) {
+  char *lock_resource = NULL;
   char *lock_token = NULL;
 
   *status_code = HTTP_STATUS_CODE___INVALID;
@@ -951,7 +1054,7 @@ can_modify_path(struct handler_context *hc,
   /* parse if header */
   /* TODO: associate each lock token with a resource URL */
   if_lock_token_err_t if_lock_token_err =
-    webdav_get_if_lock_token(&hc->rhs, &lock_token);
+    webdav_get_if_lock_token(&hc->rhs, &lock_resource, &lock_token);
 
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_INTERNAL) {
     *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -963,12 +1066,15 @@ can_modify_path(struct handler_context *hc,
     goto done;
   }
 
-  _can_modify_path(hc, if_lock_token_err, lock_token,
+  _can_modify_path(hc, if_lock_token_err,
+		   lock_resource,
+		   lock_token,
 		   fpath,
 		   status_code,
 		   response_body, response_body_len);
 
  done:
+  free(lock_resource);
   free(lock_token);
 }
 
@@ -978,6 +1084,7 @@ can_unlink_path(struct handler_context *hc,
 		http_status_code_t *status_code,
 		char **response_body,
 		size_t *response_body_len) {
+  char *lock_resource = NULL;
   char *lock_token = NULL;
 
   *status_code = HTTP_STATUS_CODE___INVALID;
@@ -985,7 +1092,7 @@ can_unlink_path(struct handler_context *hc,
   /* parse if header */
   /* TODO: associate each lock token with a resource URL */
   if_lock_token_err_t if_lock_token_err =
-    webdav_get_if_lock_token(&hc->rhs, &lock_token);
+    webdav_get_if_lock_token(&hc->rhs, &lock_resource, &lock_token);
 
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_INTERNAL) {
     *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -997,7 +1104,9 @@ can_unlink_path(struct handler_context *hc,
     goto done;
   }
 
-  _can_modify_path(hc, if_lock_token_err, lock_token,
+  _can_modify_path(hc, if_lock_token_err,
+		   lock_resource,
+		   lock_token,
 		   fpath,
 		   status_code,
 		   response_body, response_body_len);
@@ -1027,6 +1136,7 @@ can_unlink_path(struct handler_context *hc,
   }
 
  done:
+  free(lock_resource);
   free(lock_token);
 }
 
@@ -1189,6 +1299,9 @@ UTHR_DEFINE(request_proc) {
   }
   else if (str_case_equals(hc->rhs.method, "PUT")) {
     handler = handle_put_request;
+  }
+  else if (str_case_equals(hc->rhs.method, "UNLOCK")) {
+    handler = handle_unlock_request;
   }
   else {
     handler = NULL;
@@ -1603,6 +1716,8 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   char *file_path = NULL;
   char *owner_xml = NULL;
   char *refresh_uri = NULL;
+  char *resource_tag = NULL;
+  char *resource_tag_path = NULL;
 
   hc->sub.lock.response_body = NULL;
   hc->sub.lock.response_body_len = 0;
@@ -1629,7 +1744,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
 
   /* read "If" header */
   if_lock_token_err_t if_lock_token_err =
-    webdav_get_if_lock_token(&hc->rhs, &refresh_uri);
+    webdav_get_if_lock_token(&hc->rhs, &resource_tag, &refresh_uri);
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_BAD_PARSE) {
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
@@ -1640,17 +1755,33 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
     goto done;
   }
 
+  if (if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS) {
+    resource_tag_path = path_from_uri(hc, resource_tag);
+    if (!resource_tag_path) {
+      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      goto done;
+    }
+  }
+
   if (!rbev->body &&
-      if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS) {
+      if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS &&
+      str_equals(resource_tag_path, file_path)) {
     char *owner_xml_not_owned;
     bool is_exclusive;
     webdav_depth_t depth;
+    bool refreshed;
     bool success_refresh = refresh_lock(hc->serv, file_path, refresh_uri,
                                         timeout_in_seconds,
+					&refreshed,
                                         &owner_xml_not_owned,
                                         &is_exclusive,
                                         &depth);
     if (!success_refresh) {
+      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      goto done;
+    }
+
+    if (!refreshed) {
       status_code = HTTP_STATUS_CODE_PRECONDITION_FAILED;
       goto done;
     }
@@ -1768,6 +1899,9 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   free(rbev->body);
   free(file_path);
   free(owner_xml);
+  free(resource_tag);
+  free(resource_tag_path);
+  free(refresh_uri);
 
   CRYIELD(hc->sub.lock.pos,
           http_request_simple_response(hc->rh,
@@ -2280,6 +2414,8 @@ run_proppatch(struct handler_context *hc, const char *uri,
 
   xmlDocPtr doc = NULL;
 
+  /* NB: litmus "lock" tests fail because we don't support
+     setting arbitrary properties */
   char *file_path = path_from_uri(hc, uri);
   if (!file_path) {
     log_warning("Couldn't make file path from %s", uri);
@@ -2341,7 +2477,7 @@ run_proppatch(struct handler_context *hc, const char *uri,
                                         XMLSTR("prop"), NULL);
   xmlNodePtr new_status_elt = xmlNewTextChild(propstat_elt, dav_ns,
                                               XMLSTR("status"),
-                                              XMLSTR("HTTP/1.1 409 Conflict"));
+                                              XMLSTR("HTTP/1.1 403 Forbidden"));
   assert(new_status_elt);
 
   /* now iterate over every propertyupdate directive */
@@ -2506,6 +2642,95 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
   CREND();
 }
 
+static if_lock_token_err_t
+parse_lock_token_header(const char *lock_token_header,
+			char **lock_token) {
+  int i = 0;
+
+  i = skip_bnf_lws(lock_token_header, i);
+
+  if (lock_token_header[i++] != ASCII_LEFT_BRACKET) {
+    return IF_LOCK_TOKEN_ERR_BAD_PARSE;
+  }
+
+  char *right_bracket_location =
+    strchr(lock_token_header + i, ASCII_RIGHT_BRACKET);
+
+  *lock_token =
+    create_str_copy(lock_token_header + i,
+		    right_bracket_location - (lock_token_header + i));
+  if (!*lock_token) {
+    return IF_LOCK_TOKEN_ERR_INTERNAL;
+  }
+
+  return IF_LOCK_TOKEN_ERR_SUCCESS;
+}
+
+static
+EVENT_HANDLER_DEFINE(handle_unlock_request, ev_type, ev, ud) {
+  UNUSED(ev);
+  UNUSED(ev_type);
+
+  /* set this variable before coroutine restarts */
+  struct handler_context *hc = ud;
+
+  CRBEGIN(hc->sub.lock.pos);
+
+  http_status_code_t status_code = HTTP_STATUS_CODE___INVALID;
+  char *lock_token = NULL;
+
+  const char *lock_token_header = http_get_header_value(&hc->rhs, WEBDAV_HEADER_LOCK_TOKEN);
+  if (!lock_token_header) {
+    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
+  }
+
+  if_lock_token_err_t success_parse =
+    parse_lock_token_header(lock_token_header, &lock_token);
+
+  if (success_parse == IF_LOCK_TOKEN_ERR_BAD_PARSE) {
+    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
+  }
+
+  if (success_parse == IF_LOCK_TOKEN_ERR_INTERNAL) {
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  /* unlock based on token */
+  char *file_path = path_from_uri(hc, hc->rhs.uri);
+  bool unlocked;
+  bool success_unlock =
+    unlock_resource(hc->serv, file_path, lock_token, &unlocked);
+  if (!success_unlock) {
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  if (unlocked) {
+    status_code = HTTP_STATUS_CODE_NO_CONTENT;
+  }
+  else {
+    /* unlocking could fail if the passed-in file path was wrong
+       or the lock token simply wasn't locked */
+    status_code = HTTP_STATUS_CODE_CONFLICT;
+  }
+
+ done:
+  free(lock_token);
+  assert(status_code != HTTP_STATUS_CODE___INVALID);
+
+  CRYIELD(hc->sub.unlock.pos,
+	  http_request_string_response(hc->rh,
+				       status_code, "",
+				       handle_unlock_request, hc));
+
+  CRRETURN(hc->sub.unlock.pos,
+	   request_proc(GENERIC_EVENT, NULL, hc));
+
+  CREND();
+}
 
 static
 EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {

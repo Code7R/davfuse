@@ -11,13 +11,15 @@
 
 struct _ll {
   void *elt;
-  void *next;
+  struct _ll *next;
 };
 
 typedef struct _ll *linked_list_t;
 typedef void (*linked_list_elt_handler_t)(void *);
 typedef void (*linked_list_elt_handler_ud_t)(void *, void *);
-#define LINKED_LIST_FOR(type, elt_, ll) for (type *elt_ = ll ? ll->elt : NULL; elt_; ll = ll->next, elt_ = ll ? ll->elt : NULL)
+#define __APP(x, y) x ## y
+#define _APP(x, y) __APP(x, y)
+#define LINKED_LIST_FOR(type, elt_, ll) linked_list_t _APP(__ll2,__LINE__) = (ll); for (type *elt_ = _APP(__ll2,__LINE__) ? _APP(__ll2,__LINE__)->elt : NULL; elt_; _APP(__ll2,__LINE__) = _APP(__ll2,__LINE__)->next, elt_ = _APP(__ll2,__LINE__) ? _APP(__ll2,__LINE__)->elt : NULL)
 #define LINKED_LIST_INITIALIZER NULL
 
 linked_list_t
@@ -35,8 +37,12 @@ linked_list_popleft(linked_list_t, void **elt);
 void *
 linked_list_peekleft(linked_list_t);
 
+void *
+linked_list_pop_link(linked_list_t *llp);
+
 size_t
 strnlen(const char *s, size_t maxlen);
+
 const char *
 skip_ws(const char *str);
 
@@ -52,6 +58,11 @@ HEADER_FUNCTION PURE_FUNCTION bool
 str_case_equals(const char *a, const char *b) {
   return !strcasecmp(a, b);
 }
+
+#define DEFINE_MIN(type) \
+  type min_##type(type a, type b) {		\
+    return a < b ? a : b;			\
+  }
 
 #define EASY_ALLOC(type, name) type *name = malloc(sizeof(*name)); do { if (!name) { abort();} } while (false)
 
