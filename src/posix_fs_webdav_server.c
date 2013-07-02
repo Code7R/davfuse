@@ -637,17 +637,22 @@ add_propstat_response_for_path(const char *uri,
       goto not_found_elt;
     }
 
+    bool is_get_last_modified;
     if (str_equals(elt->ns_href, DAV_XML_NS) &&
-        (str_equals(elt->element_name, "getlastmodified") ||
+        ((is_get_last_modified = str_equals(elt->element_name, "getlastmodified")) ||
          /* TODO: this should be configurable but for now we just
-            set it to the same because that's what apache mod_dav does */
-         /* TODO: this should be an RFC3339 date... */
+            set getlastmodified and creationdate to the same date
+	    because that's what apache mod_dav does */
          str_equals(elt->element_name, "creationdate"))) {
       time_t m_time = (time_t) st.st_mtime;
       struct tm *tm_ = gmtime(&m_time);
       char time_buf[400], *time_str;
-      size_t num_chars = strftime(time_buf, sizeof(time_buf),
-                                  "%a, %d %b %Y %T GMT", tm_);
+
+      char *fmt = is_get_last_modified
+	? "%a, %d %b %Y %T GMT"
+	: "%Y-%m-%dT%H:%M:%S-00:00";
+
+      size_t num_chars = strftime(time_buf, sizeof(time_buf), fmt, tm_);
       xmlNodePtr xml_node;
 
       if (!num_chars) {
