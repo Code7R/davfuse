@@ -8,6 +8,7 @@
 #include <strings.h>
 
 #include "c_util.h"
+#include "logging.h"
 
 struct _ll {
   void *elt;
@@ -65,5 +66,13 @@ str_case_equals(const char *a, const char *b) {
   }
 
 #define EASY_ALLOC(type, name) type *name = malloc(sizeof(*name)); do { if (!name) { abort();} } while (false)
+
+HEADER_FUNCTION void
+ASSERT_NOT_NULL(void *foo) {
+  if (!foo) {
+    log_critical("Illegal null value");
+    abort();
+  }
+}
 
 #endif /* UTIL_H */

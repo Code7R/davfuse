@@ -11,9 +11,9 @@
 #include "uthread.h"
 
 #ifndef _IS_HTTP_SERVER__C
-extern const char *HTTP_HEADER_CONTENT_LENGTH;
-extern const char *HTTP_HEADER_CONTENT_TYPE;
-extern const char *HTTP_HEADER_HOST;
+extern const char *const HTTP_HEADER_CONTENT_LENGTH;
+extern const char *const HTTP_HEADER_CONTENT_TYPE;
+extern const char *const HTTP_HEADER_HOST;
 #endif
 
 enum {

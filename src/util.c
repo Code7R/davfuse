@@ -24,7 +24,7 @@ linked_list_t
 linked_list_prepend(linked_list_t ll, void *elt) {
   linked_list_t new = malloc(sizeof(*new));
   /* this is a very simple interface */
-  if (!new) { abort(); };
+  ASSERT_NOT_NULL(new);
   new->next = ll;
   new->elt = elt;
   return new;
@@ -96,7 +96,6 @@ linked_list_pop_link(linked_list_t *llp) {
 
   return elt;
 }
-
 
 bool PURE_FUNCTION
 str_startswith(const char *a, const char *b) {

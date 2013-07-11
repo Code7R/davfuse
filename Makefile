@@ -25,16 +25,17 @@ CFLAGS += $(shell xml2-config --cflags) ${CPPFLAGS}
 LDFLAGS += $(shell xml2-config --libs)
 
 FDEVENT_MODULE := fdevent_${FDEVENT_SOURCE}
+FSTATAT_MODULE := fstatat_${FSTATAT_SOURCE}
 MAKEFILES := config.mk Makefile
 
 # Files in $SRCROOT
 HTTP_SERVER_SRC_ := ${FDEVENT_MODULE}.c http_server.c logging.c fd_utils.c coroutine_io.c util.c http_helpers.c file_utils.c dfs.c
-TARGET_SRC_ := posix_fs_webdav_server.c test_http_server.c libdavfuse.c
+TARGET_SRC_ := posix_fs_webdav_server.c webdav_server.c test_http_server.c libdavfuse.c ${FSTATAT_MODULE}.c
 ALL_SRC_ := ${TARGET_SRC_} ${HTTP_SERVER_SRC_}
 
 # Object files that should be in $OBJROOT
 HTTP_SERVER_OBJ_ := $(patsubst %.c,%.o,${HTTP_SERVER_SRC_})
-POSIX_FS_WEBDAV_SERVER_OBJ_ := posix_fs_webdav_server.o ${HTTP_SERVER_OBJ_}
+POSIX_FS_WEBDAV_SERVER_OBJ_ := posix_fs_webdav_server.o webdav_server.o ${HTTP_SERVER_OBJ_} ${FSTATAT_MODULE}.o
 TEST_HTTP_SERVER_OBJ_ := test_http_server.o ${HTTP_SERVER_OBJ_}
 LIBFUSE_OBJ_ := libdavfuse.o ${HTTP_SERVER_OBJ_}
 ALL_OBJ_ := $(patsubst %.c,%.o,${ALL_SRC_})
@@ -79,6 +80,12 @@ ${GENHROOT}/fdevent.h: ${SRCROOT}/${FDEVENT_MODULE}.h ${MAKEFILES}
 	@cp ${SRCROOT}/${FDEVENT_MODULE}.h $@
 	@echo ' Done!'
 
+${GENHROOT}/fstatat.h: ${SRCROOT}/${FSTATAT_MODULE}.h ${MAKEFILES}
+	@mkdir -p $(dir $@)
+	@echo -n Generating fstatat.h...
+	@cp ${SRCROOT}/${FSTATAT_MODULE}.h $@
+	@echo ' Done!'
+
 ${DAVFUSE_TARGET}: generate-davfuse.sh ${MAKEFILES}
 	@mkdir -p $(dir $@)
 	@echo Running generate-davfuse.sh...
@@ -92,6 +99,7 @@ ${OBJROOT}/%.o: ${SRCROOT}/%.c
 	@mkdir -p ${GENHROOT}
 	@[ -e ${GENHROOT}/config.h ] || cp config.def.h ${GENHROOT}/config.h
 	@[ -e ${GENHROOT}/fdevent.h ] || cp ${SRCROOT}/${FDEVENT_MODULE}.h ${GENHROOT}/fdevent.h
+	@[ -e ${GENHROOT}/fstatat.h ] || cp ${SRCROOT}/${FSTATAT_MODULE}.h ${GENHROOT}/fstatat.h
 	@${MAKEDEPEND}; \
 		cp ${df}.d ${df}.P; \
 		sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \

@@ -59,4 +59,6 @@
 #define UTHR_CALL8(...) _UTHR_CALL(__VA_ARGS__)
 #define UTHR_CALL9(...) _UTHR_CALL(__VA_ARGS__)
 
+#define UTHR_RECEIVE_EVENT(ev_type, type, name) type *name = (assert(ev_type == UTHR_EVENT_TYPE()), UTHR_EVENT())
+
 #endif /* UTHREAD_H */

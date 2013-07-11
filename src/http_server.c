@@ -29,10 +29,10 @@ enum {
   LISTEN_BACKLOG=5,
 };
 
-const char *HTTP_HEADER_CONNECTION = "Connection";
-const char *HTTP_HEADER_CONTENT_LENGTH = "Content-Length";
-const char *HTTP_HEADER_CONTENT_TYPE = "Content-Type";
-const char *HTTP_HEADER_HOST = "Host";
+const char *const HTTP_HEADER_CONNECTION = "Connection";
+const char *const HTTP_HEADER_CONTENT_LENGTH = "Content-Length";
+const char *const HTTP_HEADER_CONTENT_TYPE = "Content-Type";
+const char *const HTTP_HEADER_HOST = "Host";
 
 /* static forward decls */
 static

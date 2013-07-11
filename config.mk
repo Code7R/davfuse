@@ -1,6 +1,7 @@
 # Customize below to fit your system
 # This example is made for posix/gcc
 FDEVENT_SOURCE = select
+FSTATAT_SOURCE = emu
 
 # paths
 PREFIX = /usr/local
