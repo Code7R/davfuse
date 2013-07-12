@@ -103,14 +103,13 @@ linked_list_t
 rmtree(const char *fpath_) {
   linked_list_t failed_to_delete = LINKED_LIST_INITIALIZER;
 
-  /* TODO: yield after every delete */
-
   char *fpath = strdup(fpath_);
   if (!fpath) {
     abort();
   }
 
-  depth_first_t dfs = dfs_create((void *) fpath, true,
+  bool is_postorder = true;
+  depth_first_t dfs = dfs_create((void *) fpath, is_postorder,
                                  _rm_tree_expand, free);
   char *path;
 

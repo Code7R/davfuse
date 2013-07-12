@@ -158,11 +158,6 @@ webdav_fs_close(webdav_fs_t fs,
 		event_handler_t cb, void *cb_ud);
 
 void
-webdav_fs_delete(webdav_fs_t fs,
-		 const char *relative_uri,
-		 event_handler_t cb, void *cb_ud);
-
-void
 webdav_fs_mkcol(webdav_fs_t fs,
 		const char *relative_uri,
 		event_handler_t cb, void *cb_ud);
@@ -182,6 +177,11 @@ void
 webdav_fs_closecol(webdav_fs_t fs,
 		   void *col_handle,
 		   event_handler_t cb, void *cb_ud);
+
+void
+webdav_fs_delete(webdav_fs_t fs,
+		 const char *relative_uri,
+		 event_handler_t cb, void *cb_ud);
 
 void
 webdav_fs_move(webdav_fs_t fs,
