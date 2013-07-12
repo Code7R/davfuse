@@ -97,7 +97,7 @@ linked_list_pop_link(linked_list_t *llp) {
   return elt;
 }
 
-bool PURE_FUNCTION
+PURE_FUNCTION bool
 str_startswith(const char *a, const char *b) {
   size_t len_a = strlen(a);
   size_t len_b = strlen(b);
@@ -107,3 +107,26 @@ str_startswith(const char *a, const char *b) {
 
   return !memcmp(a, b, len_b);
 }
+
+PURE_FUNCTION char *
+strdup_x(const char *s) {
+  size_t len = strlen(s);
+  char *toret = malloc(len + 1);
+  if (!toret) {
+    return NULL;
+  }
+  return memcpy(toret, s, len + 1);
+}
+
+PURE_FUNCTION char *
+strndup_x(const char *s, size_t n) {
+  size_t len = min_size_t(strlen(s), n);
+  char *toret = malloc(len + 1);
+  if (!toret) {
+    return NULL;
+  }
+  memcpy(toret, s, len);
+  toret[len] = '\0';
+  return toret;
+}
+

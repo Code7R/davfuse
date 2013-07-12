@@ -8,15 +8,18 @@
 #define _ISOC99_SOURCE
 #define _BSD_SOURCE
 
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/types.h>
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <libgen.h>
-#include <sys/stat.h>
-#include <sys/time.h>
 #include <unistd.h>
 
 #include <assert.h>
 #include <errno.h>
+#include <signal.h>
 
 #include "c_util.h"
 #include "file_utils.h"
@@ -101,7 +104,7 @@ posix_open(void *fs_handle, const char *relative_uri, bool create,
   void *file_handle = NULL;
 
   while (!file_handle) {
-    int fd = open(file_path, O_RDWR | (create ? O_CREAT : 0) | O_CLOEXEC, 0666);
+    int fd = open(file_path, O_RDWR | (create ? O_CREAT : 0) /* | O_CLOEXEC */, 0666);
     if (fd >= 0) {
       file_handle = fd_to_file_handle(fd);
     }

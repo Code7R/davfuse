@@ -1,15 +1,13 @@
 /*
   A webdav compatible http file server out of the current directory
- */
+*/
 #define _ISOC99_SOURCE
 
 /* replace this by something that is X-platform */
 #include <sys/time.h>
 
 #include <assert.h>
-#include <libgen.h>
 #include <limits.h>
-#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -201,13 +199,13 @@ UTHR_DEFINE(webdav_fs_stat_uthr) {
 
   bool should_create = false;
   UTHR_YIELD(ctx,
-	     webdav_fs_open(ctx->fs, ctx->relative_uri, should_create,
-			    webdav_fs_stat_uthr, ctx));
+             webdav_fs_open(ctx->fs, ctx->relative_uri, should_create,
+                            webdav_fs_stat_uthr, ctx));
   UTHR_RECEIVE_EVENT(WEBDAV_OPEN_DONE_EVENT, WebdavOpenDoneEvent, open_done_ev);
   if (open_done_ev->error) {
     log_info("Couldn't open file (%s): %d",
-	     ctx->relative_uri,
-	     open_done_ev->error);
+             ctx->relative_uri,
+             open_done_ev->error);
     ctx->ev.error = open_done_ev->error;
     goto done;
   }
@@ -215,13 +213,13 @@ UTHR_DEFINE(webdav_fs_stat_uthr) {
   ctx->file_handle = open_done_ev->file_handle;
 
   UTHR_YIELD(ctx,
-	     webdav_fs_fstat(ctx->fs, ctx->file_handle,
-			     webdav_fs_stat_uthr, ctx));
+             webdav_fs_fstat(ctx->fs, ctx->file_handle,
+                             webdav_fs_stat_uthr, ctx));
   UTHR_RECEIVE_EVENT(WEBDAV_FSTAT_DONE_EVENT, WebdavFstatDoneEvent, fstat_done_ev);
   if (fstat_done_ev->error) {
     log_info("Couldn't fstat file (%s): %d",
-	     ctx->relative_uri,
-	     fstat_done_ev->error);
+             ctx->relative_uri,
+             fstat_done_ev->error);
     ctx->ev.error = fstat_done_ev->error;
     goto done;
   }
@@ -233,33 +231,33 @@ UTHR_DEFINE(webdav_fs_stat_uthr) {
  done:
   if (ctx->file_handle) {
     UTHR_YIELD(ctx,
-	       webdav_fs_close(ctx->fs, ctx->file_handle,
-			       webdav_fs_stat_uthr, ctx));
+               webdav_fs_close(ctx->fs, ctx->file_handle,
+                               webdav_fs_stat_uthr, ctx));
     UTHR_RECEIVE_EVENT(WEBDAV_CLOSE_DONE_EVENT, WebdavCloseDoneEvent, close_done_ev);
     if (close_done_ev->error) {
       /* this kind of error is intolerable */
       log_critical("Couldn't close webdav file (%s): %d",
-		   close_done_ev->error,
-		   ctx->relative_uri);
+                   close_done_ev->error,
+                   ctx->relative_uri);
       abort();
     }
   }
 
   UTHR_RETURN(ctx,
-	      ctx->cb(WEBDAV_STAT_DONE_EVENT, &ctx->ev, ctx->cb_ud));
+              ctx->cb(WEBDAV_STAT_DONE_EVENT, &ctx->ev, ctx->cb_ud));
 
   UTHR_FOOTER();
 }
 
 static void
 webdav_fs_stat(webdav_fs_t fs,
-	       const char *relative_uri,
-	       event_handler_t cb, void *cb_ud) {
+               const char *relative_uri,
+               event_handler_t cb, void *cb_ud) {
   UTHR_CALL4(webdav_fs_stat_uthr, WebdavFsStatCtx,
-	     .fs = fs,
-	     .relative_uri = relative_uri,
-	     .cb = cb,
-	     .cb_ud = cb_ud);
+             .fs = fs,
+             .relative_uri = relative_uri,
+             .cb = cb,
+             .cb_ud = cb_ud);
 }
 
 typedef struct {
@@ -283,14 +281,14 @@ UTHR_DEFINE(webdav_fs_touch_uthr) {
 
   bool create_file = true;
   UTHR_YIELD(ctx,
-	     webdav_fs_open(ctx->fs, ctx->relative_uri, create_file,
-			    webdav_fs_touch_uthr, ctx));
+             webdav_fs_open(ctx->fs, ctx->relative_uri, create_file,
+                            webdav_fs_touch_uthr, ctx));
   UTHR_RECEIVE_EVENT(WEBDAV_OPEN_DONE_EVENT, WebdavOpenDoneEvent, open_done_ev);
   ctx->ev.error = open_done_ev->error;
 
   UTHR_YIELD(ctx,
-	     webdav_fs_close(ctx->fs, open_done_ev->file_handle,
-			     webdav_fs_touch_uthr, ctx));
+             webdav_fs_close(ctx->fs, open_done_ev->file_handle,
+                             webdav_fs_touch_uthr, ctx));
   UTHR_RECEIVE_EVENT(WEBDAV_CLOSE_DONE_EVENT, WebdavCloseDoneEvent, close_done_ev);
 
   if (close_done_ev->error) {
@@ -299,20 +297,20 @@ UTHR_DEFINE(webdav_fs_touch_uthr) {
   }
 
   UTHR_RETURN(ctx,
-	      ctx->cb(WEBDAV_TOUCH_DONE_EVENT, &ctx->ev, ctx->cb_ud));
+              ctx->cb(WEBDAV_TOUCH_DONE_EVENT, &ctx->ev, ctx->cb_ud));
 
   UTHR_FOOTER();
 }
 
 static void
 webdav_fs_touch(webdav_fs_t fs,
-		const char *relative_uri,
-		event_handler_t cb, void *cb_ud) {
+                const char *relative_uri,
+                event_handler_t cb, void *cb_ud) {
   UTHR_CALL4(webdav_fs_touch_uthr, WebdavFsTouchCtx,
-	     .fs = fs,
-	     .relative_uri = relative_uri,
-	     .cb = cb,
-	     .cb_ud = cb_ud);
+             .fs = fs,
+             .relative_uri = relative_uri,
+             .cb = cb,
+             .cb_ud = cb_ud);
 }
 
 static EVENT_HANDLER_DECLARE(handle_request);
@@ -331,8 +329,8 @@ static WebdavProperty *
 create_webdav_property(const char *element_name, const char *ns_href) {
   EASY_ALLOC(WebdavProperty, elt);
 
-  elt->element_name = strdup(element_name);
-  elt->ns_href = strdup(ns_href);
+  elt->element_name = strdup_x(element_name);
+  elt->ns_href = strdup_x(ns_href);
 
   return elt;
 }
@@ -371,7 +369,7 @@ path_from_uri(struct handler_context *hc, const char *uri) {
   }
 
   /* TODO: de-urlencode `real_uri` */
-  return strndup(real_uri, len);
+  return strndup_x(real_uri, len);
 }
 
 static char *
@@ -379,11 +377,19 @@ uri_from_path(struct handler_context *hc, const char *path) {
   /* TODO: urlencode `path` */
   assert(path[0] == '/');
 
-  char *real_uri;
-  int ret = asprintf(&real_uri, "%s%s", hc->serv->public_prefix, &path[1]);
-  if (ret < 0) {
+  /* NB: we intentionally do not use `asprintf()` */
+
+  size_t public_prefix_len = strlen(hc->serv->public_prefix);
+  size_t path_len = strlen(path) - 1;
+
+  char *real_uri = malloc(public_prefix_len + path_len + 1);
+  if (!real_uri) {
     return NULL;
   }
+
+  memcpy(real_uri, hc->serv->public_prefix, public_prefix_len);
+  memcpy(real_uri + public_prefix_len, path, path_len);
+  real_uri[public_prefix_len + path_len] = '\0';
 
   return real_uri;
 }
@@ -496,7 +502,7 @@ webdav_get_if_lock_token(const HTTPRequestHeaders *rhs, char **resource_tag, cha
   }
   else {
     /* no resource tag passed in, this lock token is related to the method uri */
-    *resource_tag = strdup(rhs->uri);
+    *resource_tag = strdup_x(rhs->uri);
   }
 
   /* get left paren */
@@ -550,7 +556,7 @@ perform_write_lock(struct webdav_server *ws,
   /* go through lock list and see if this path (or any descendants if depth != 0)
      have an incompatible lock
      if so then set that path as the status_path and return *is_locked = true
-   */
+  */
   LINKED_LIST_FOR (WebdavLockDescriptor, elt, ws->locks) {
     bool parent_locks_us = false;
     if ((str_equals(elt->path, file_path) ||
@@ -559,7 +565,7 @@ perform_write_lock(struct webdav_server *ws,
         (is_exclusive || elt->is_exclusive)) {
       *is_locked = true;
       *status_path = parent_locks_us ? file_path : elt->path;
-      /* if the strdup failed then we return false */
+      /* if the strdup_x failed then we return false */
       return *status_path;
     }
   }
@@ -583,11 +589,11 @@ perform_write_lock(struct webdav_server *ws,
   EASY_ALLOC(WebdavLockDescriptor, new_lock);
 
   *new_lock = (WebdavLockDescriptor) {
-    .path = strdup(file_path),
+    .path = strdup_x(file_path),
     .depth = depth,
     .is_exclusive = is_exclusive,
-    .owner_xml = strdup(owner_xml),
-    .lock_token = strdup(s_lock_token),
+    .owner_xml = strdup_x(owner_xml),
+    .lock_token = strdup_x(s_lock_token),
     .timeout_in_seconds = timeout_in_seconds,
   };
 
@@ -612,15 +618,15 @@ perform_write_lock(struct webdav_server *ws,
 
 static bool
 unlock_resource(struct webdav_server *ws,
-		const char *file_path,
-		const char *lock_token,
-		bool *unlocked) {
+                const char *file_path,
+                const char *lock_token,
+                bool *unlocked) {
   *unlocked = false;
 
   for (linked_list_t *llp = &ws->locks; *llp; llp = &(*llp)->next) {
     WebdavLockDescriptor *elt = (*llp)->elt;
     if (str_equals(elt->path, file_path) &&
-	str_equals(elt->lock_token, lock_token)) {
+        str_equals(elt->lock_token, lock_token)) {
       WebdavLockDescriptor *popped_elt = linked_list_pop_link(llp);
       free(popped_elt);
       *unlocked = true;
@@ -635,15 +641,15 @@ static bool
 refresh_lock(struct webdav_server *ws,
              const char *file_path, const char *lock_token,
              webdav_timeout_t new_timeout,
-	     bool *refreshed,
+             bool *refreshed,
              char **owner_xml, bool *is_exclusive,
              webdav_depth_t *depth) {
   *refreshed = false;
 
   LINKED_LIST_FOR (WebdavLockDescriptor, elt, ws->locks) {
     if (str_equals(elt->lock_token, lock_token) &&
-	(str_equals(elt->path, file_path) ||
-	 is_parent_path(elt->path, file_path))) {
+        (str_equals(elt->path, file_path) ||
+         is_parent_path(elt->path, file_path))) {
       /* we don't necessarily have to do this, but just do it for now */
       elt->timeout_in_seconds = new_timeout;
       *refreshed = true;
@@ -667,8 +673,8 @@ is_resource_locked(struct webdav_server *ws,
 
   LINKED_LIST_FOR (WebdavLockDescriptor, elt, ws->locks) {
     if (str_equals(elt->path, file_path) ||
-	(elt->depth == DEPTH_INF &&
-	 is_parent_path(elt->path, file_path))) {
+        (elt->depth == DEPTH_INF &&
+         is_parent_path(elt->path, file_path))) {
       *is_locked = true;
       *locked_path = elt->path;
       *locked_lock_token = elt->lock_token;
@@ -736,9 +742,9 @@ parse_xml_string(const char *req_data, size_t req_data_length) {
 
 static xml_parse_code_t
 parse_propfind_request(const char *req_data,
-		       size_t req_data_length,
-		       propfind_req_type_t *out_propfind_req_type,
-		       linked_list_t *out_props_to_get) {
+                       size_t req_data_length,
+                       propfind_req_type_t *out_propfind_req_type,
+                       linked_list_t *out_props_to_get) {
   xml_parse_code_t toret;
   xmlDocPtr doc = NULL;
   *out_props_to_get = LINKED_LIST_INITIALIZER;
@@ -778,10 +784,10 @@ parse_propfind_request(const char *req_data,
     else if (node_is(first_child, DAV_XML_NS, "prop")) {
       *out_propfind_req_type = PROPFIND_PROP;
       for (xmlNodePtr prop_elt = first_child->children;
-	   prop_elt; prop_elt = prop_elt->next) {
+           prop_elt; prop_elt = prop_elt->next) {
         *out_props_to_get = linked_list_prepend(*out_props_to_get,
-						create_webdav_property((const char *) prop_elt->name,
-								       (const char *) prop_elt->ns->href));
+                                                create_webdav_property((const char *) prop_elt->name,
+                                                                       (const char *) prop_elt->ns->href));
       }
     }
     else {
@@ -853,9 +859,9 @@ UTHR_DEFINE(run_propfind_uthr) {
   /* open the resource */
   bool create_resource = false;
   UTHR_YIELD(ctx,
-	     webdav_fs_open(ctx->hc->serv->fs,
-			    ctx->relative_uri, create_resource,
-			    run_propfind_uthr, ctx));
+             webdav_fs_open(ctx->hc->serv->fs,
+                            ctx->relative_uri, create_resource,
+                            run_propfind_uthr, ctx));
   UTHR_RECEIVE_EVENT(WEBDAV_OPEN_DONE_EVENT, WebdavOpenDoneEvent, open_done_ev);
   if (open_done_ev->error) {
     ctx->ev.error = open_done_ev->error != WEBDAV_ERROR_DOES_NOT_EXIST;
@@ -867,8 +873,8 @@ UTHR_DEFINE(run_propfind_uthr) {
 
   /* first get info for root element */
   UTHR_YIELD(ctx,
-	     webdav_fs_fstat(ctx->hc->serv->fs, ctx->handle,
-			     run_propfind_uthr, ctx));
+             webdav_fs_fstat(ctx->hc->serv->fs, ctx->handle,
+                             run_propfind_uthr, ctx));
   UTHR_RECEIVE_EVENT(WEBDAV_FSTAT_DONE_EVENT, WebdavFstatDoneEvent, fstat_done_ev);
   if (fstat_done_ev->error) {
     ctx->ev.error = true;
@@ -878,7 +884,7 @@ UTHR_DEFINE(run_propfind_uthr) {
   WebdavPropfindEntry *pfe = malloc(sizeof(*pfe));
   ASSERT_NOT_NULL(pfe);
   pfe->file_info = fstat_done_ev->file_info;
-  pfe->path = strdup(ctx->relative_uri);
+  pfe->path = strdup_x(ctx->relative_uri);
 
   ctx->ev.entries = linked_list_prepend(ctx->ev.entries, pfe);
 
@@ -886,21 +892,34 @@ UTHR_DEFINE(run_propfind_uthr) {
       fstat_done_ev->file_info.is_collection) {
     while (true) {
       UTHR_YIELD(ctx,
-		 webdav_fs_readcol(ctx->hc->serv->fs, ctx->handle, ctx->ce, NELEMS(ctx->ce),
-				   run_propfind_uthr, ctx));
+                 webdav_fs_readcol(ctx->hc->serv->fs, ctx->handle, ctx->ce, NELEMS(ctx->ce),
+                                   run_propfind_uthr, ctx));
       UTHR_RECEIVE_EVENT(WEBDAV_READCOL_DONE_EVENT, WebdavReadcolDoneEvent, readcol_done_ev);
       if (readcol_done_ev->error) {
-	ctx->ev.error = true;
-	goto done;
+        ctx->ev.error = true;
+        goto done;
       }
 
       for (ctx->i = 0; ctx->i < (int) NELEMS(ctx->ce); ++ctx->i) {
-	WebdavPropfindEntry *pfe = malloc(sizeof(*pfe));
-	ASSERT_NOT_NULL(pfe);
-	pfe->file_info = ctx->ce->file_info;
-	int ret = asprintf(&pfe->path, "%s/%s", ctx->relative_uri, ctx->ce->name);
-	if (ret < 0) { abort(); }
-	ctx->ev.entries = linked_list_prepend(ctx->ev.entries, pfe);
+        WebdavCollectionEntry *ce = &ctx->ce[ctx->i];
+        WebdavPropfindEntry *pfe = malloc(sizeof(*pfe));
+        ASSERT_NOT_NULL(pfe);
+        pfe->file_info = ce->file_info;
+
+        /* TODO: move this out of the loop if it matters,
+           although optimization should be smart enough */
+        size_t relative_uri_len = strlen(ctx->relative_uri);
+        size_t name_len = strlen(ce->name);
+
+        /* NB: intentionally don't use `asprintf()` */
+        pfe->path = malloc(relative_uri_len + 1 + name_len + 1);
+        if (!pfe->path) { abort(); }
+        memcpy(pfe->path, ctx->relative_uri, relative_uri_len);
+        pfe->path[relative_uri_len] = '/';
+        memcpy(pfe->path + relative_uri_len + 1, ce->name, name_len);
+        pfe->path[relative_uri_len + 1 + name_len] = '\0';
+
+        ctx->ev.entries = linked_list_prepend(ctx->ev.entries, pfe);
       }
     }
   }
@@ -910,13 +929,13 @@ UTHR_DEFINE(run_propfind_uthr) {
  done:
   if (ctx->ev.error) {
     linked_list_free(ctx->ev.entries,
-		     (linked_list_elt_handler_t) free_webdav_propfind_entry);
+                     (linked_list_elt_handler_t) free_webdav_propfind_entry);
   }
 
   if (ctx->handle) {
     UTHR_YIELD(ctx,
-	       webdav_fs_close(ctx->hc->serv->fs, ctx->handle,
-			       run_propfind_uthr, ctx));
+               webdav_fs_close(ctx->hc->serv->fs, ctx->handle,
+                               run_propfind_uthr, ctx));
     UTHR_RECEIVE_EVENT(WEBDAV_CLOSE_DONE_EVENT, WebdavCloseDoneEvent, close_done_ev);
     if (close_done_ev->error) {
       abort();
@@ -926,7 +945,7 @@ UTHR_DEFINE(run_propfind_uthr) {
   free(ctx->relative_uri);
 
   UTHR_RETURN(ctx,
-	      ctx->cb(RUN_PROPFIND_DONE_EVENT, &ctx->ev, ctx->cb_ud));
+              ctx->cb(RUN_PROPFIND_DONE_EVENT, &ctx->ev, ctx->cb_ud));
 
   UTHR_FOOTER();
 }
@@ -934,26 +953,26 @@ UTHR_DEFINE(run_propfind_uthr) {
 static void
 run_propfind(struct handler_context *hc,
              const char *uri, webdav_depth_t depth,
-	     propfind_req_type_t propfind_req_type,
+             propfind_req_type_t propfind_req_type,
              linked_list_t props_to_get,
-	     event_handler_t cb, void *cb_ud) {
+             event_handler_t cb, void *cb_ud) {
   UTHR_CALL7(run_propfind_uthr, RunPropfindCtx,
-	     .hc = hc,
-	     .uri = uri,
-	     .depth = depth,
-	     .propfind_req_type = propfind_req_type,
-	     .props_to_get = props_to_get,
-	     .cb = cb,
-	     .cb_ud = cb_ud);
+             .hc = hc,
+             .uri = uri,
+             .depth = depth,
+             .propfind_req_type = propfind_req_type,
+             .props_to_get = props_to_get,
+             .cb = cb,
+             .cb_ud = cb_ud);
 }
 
 static bool
 generate_propfind_response(struct handler_context *hc,
-			   linked_list_t props_to_get,
-			   linked_list_t entries,
-			   char **out_data,
-			   size_t *out_size,
-			   http_status_code_t *out_status_code) {
+                           linked_list_t props_to_get,
+                           linked_list_t entries,
+                           char **out_data,
+                           size_t *out_size,
+                           http_status_code_t *out_status_code) {
   xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
   ASSERT_NOT_NULL(xml_response);
   xmlNodePtr multistatus_elt = xmlNewDocNode(xml_response, NULL, XMLSTR("multistatus"), NULL);
@@ -972,7 +991,7 @@ generate_propfind_response(struct handler_context *hc,
     char *uri = uri_from_path(hc, propfind_entry->path);
     ASSERT_NOT_NULL(uri);
     xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns,
-					  XMLSTR("href"), XMLSTR(uri));
+                                          XMLSTR("href"), XMLSTR(uri));
     assert(href_elt);
     free(uri);
 
@@ -981,8 +1000,8 @@ generate_propfind_response(struct handler_context *hc,
     xmlNodePtr prop_not_found_elt = xmlNewChild(propstat_not_found_elt, dav_ns, XMLSTR("prop"), NULL);
     assert(prop_not_found_elt);
     xmlNodePtr status_not_found_elt = xmlNewTextChild(propstat_not_found_elt, dav_ns,
-						      XMLSTR("status"),
-						      XMLSTR("HTTP/1.1 404 Not Found"));
+                                                      XMLSTR("status"),
+                                                      XMLSTR("HTTP/1.1 404 Not Found"));
     assert(status_not_found_elt);
 
     xmlNodePtr propstat_success_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
@@ -990,8 +1009,8 @@ generate_propfind_response(struct handler_context *hc,
     xmlNodePtr prop_success_elt = xmlNewChild(propstat_success_elt, dav_ns, XMLSTR("prop"), NULL);
     assert(propstat_success_elt);
     xmlNodePtr status_success_elt = xmlNewTextChild(propstat_success_elt, dav_ns,
-						    XMLSTR("status"),
-						    XMLSTR("HTTP/1.1 200 OK"));
+                                                    XMLSTR("status"),
+                                                    XMLSTR("HTTP/1.1 200 OK"));
     assert(status_success_elt);
 
     xmlNodePtr propstat_failure_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
@@ -999,71 +1018,71 @@ generate_propfind_response(struct handler_context *hc,
     xmlNodePtr prop_failure_elt = xmlNewChild(propstat_failure_elt, dav_ns, XMLSTR("prop"), NULL);
     assert(prop_failure_elt);
     xmlNodePtr status_failure_elt = xmlNewTextChild(propstat_failure_elt, dav_ns,
-						    XMLSTR("status"),
-						    XMLSTR("HTTP/1.1 500 Internal Server Error"));
+                                                    XMLSTR("status"),
+                                                    XMLSTR("HTTP/1.1 500 Internal Server Error"));
     assert(status_failure_elt);
 
     LINKED_LIST_FOR (WebdavProperty, elt, props_to_get) {
       bool is_get_last_modified;
       if (str_equals(elt->ns_href, DAV_XML_NS) &&
-	  ((is_get_last_modified = str_equals(elt->element_name, "getlastmodified")) ||
-	   /* TODO: this should be configurable but for now we just
-	      set getlastmodified and creationdate to the same date
-	      because that's what apache mod_dav does */
-	   str_equals(elt->element_name, "creationdate"))) {
-	time_t m_time = (time_t) propfind_entry->file_info.modified_time;
-	struct tm *tm_ = gmtime(&m_time);
-	char time_buf[400], *time_str;
+          ((is_get_last_modified = str_equals(elt->element_name, "getlastmodified")) ||
+           /* TODO: this should be configurable but for now we just
+              set getlastmodified and creationdate to the same date
+              because that's what apache mod_dav does */
+           str_equals(elt->element_name, "creationdate"))) {
+        time_t m_time = (time_t) propfind_entry->file_info.modified_time;
+        struct tm *tm_ = gmtime(&m_time);
+        char time_buf[400], *time_str;
 
-	char *fmt = is_get_last_modified
-	  ? "%a, %d %b %Y %T GMT"
-	  : "%Y-%m-%dT%H:%M:%S-00:00";
+        char *fmt = is_get_last_modified
+          ? "%a, %d %b %Y %T GMT"
+          : "%Y-%m-%dT%H:%M:%S-00:00";
 
-	size_t num_chars = strftime(time_buf, sizeof(time_buf), fmt, tm_);
-	xmlNodePtr xml_node;
+        size_t num_chars = strftime(time_buf, sizeof(time_buf), fmt, tm_);
+        xmlNodePtr xml_node;
 
-	if (!num_chars) {
-	  log_error("strftime failed!");
-	  time_str = NULL;
-	  xml_node = prop_failure_elt;
-	}
-	else {
-	  time_str = time_buf;
-	  xml_node = prop_success_elt;
-	}
+        if (!num_chars) {
+          log_error("strftime failed!");
+          time_str = NULL;
+          xml_node = prop_failure_elt;
+        }
+        else {
+          time_str = time_buf;
+          xml_node = prop_success_elt;
+        }
 
-	xmlNodePtr getlastmodified_elt = xmlNewTextChild(xml_node, dav_ns,
-							 XMLSTR(elt->element_name), XMLSTR(time_str));
-	assert(getlastmodified_elt);
+        xmlNodePtr getlastmodified_elt = xmlNewTextChild(xml_node, dav_ns,
+                                                         XMLSTR(elt->element_name), XMLSTR(time_str));
+        assert(getlastmodified_elt);
       }
       else if (str_equals(elt->element_name, "getcontentlength") &&
-	       str_equals(elt->ns_href, DAV_XML_NS) &&
-	       !propfind_entry->file_info.is_collection) {
-	char length_str[400];
-	snprintf(length_str, sizeof(length_str), "%lld",
-		 (long long) propfind_entry->file_info.length);
-	xmlNodePtr getcontentlength_elt = xmlNewTextChild(prop_success_elt, dav_ns,
-							  XMLSTR("getcontentlength"), XMLSTR(length_str));
-	assert(getcontentlength_elt);
+               str_equals(elt->ns_href, DAV_XML_NS) &&
+               !propfind_entry->file_info.is_collection) {
+        char length_str[400];
+        snprintf(length_str, sizeof(length_str), "%lld",
+                 (long long) propfind_entry->file_info.length);
+        xmlNodePtr getcontentlength_elt = xmlNewTextChild(prop_success_elt, dav_ns,
+                                                          XMLSTR("getcontentlength"), XMLSTR(length_str));
+        assert(getcontentlength_elt);
       }
       else if (str_equals(elt->element_name, "resourcetype") &&
-	       str_equals(elt->ns_href, DAV_XML_NS)) {
-	xmlNodePtr resourcetype_elt = xmlNewChild(prop_success_elt, dav_ns,
-						  XMLSTR("resourcetype"), NULL);
-	assert(resourcetype_elt);
+               str_equals(elt->ns_href, DAV_XML_NS)) {
+        xmlNodePtr resourcetype_elt = xmlNewChild(prop_success_elt, dav_ns,
+                                                  XMLSTR("resourcetype"), NULL);
+        assert(resourcetype_elt);
 
-	if (propfind_entry->file_info.is_collection) {
-	  xmlNodePtr collection_elt = xmlNewChild(resourcetype_elt, dav_ns,
-						  XMLSTR("collection"), NULL);
-	  assert(collection_elt);
-	}
+        if (propfind_entry->file_info.is_collection) {
+          xmlNodePtr collection_elt = xmlNewChild(resourcetype_elt, dav_ns,
+                                                  XMLSTR("collection"), NULL);
+          assert(collection_elt);
+        }
       }
       else {
-	xmlNodePtr random_elt = xmlNewChild(prop_not_found_elt, NULL,
-					    XMLSTR(elt->element_name), NULL);
-	ASSERT_NOT_NULL(random_elt);
-	xmlNsPtr new_ns = xmlNewNs(random_elt, XMLSTR(elt->ns_href), NULL);
-	xmlSetNs(random_elt, new_ns);
+        xmlNodePtr random_elt = xmlNewChild(prop_not_found_elt, NULL,
+                                            XMLSTR(elt->element_name), NULL);
+        ASSERT_NOT_NULL(random_elt);
+        xmlNsPtr new_ns = xmlNewNs(random_elt, XMLSTR(elt->ns_href), NULL);
+        xmlSetNs(random_elt, new_ns);
       }
     }
 
@@ -1102,34 +1121,34 @@ generate_propfind_response(struct handler_context *hc,
 
 static bool
 generate_locked_response(struct handler_context *hc,
-			 const char *locked_path,
-			 http_status_code_t *status_code,
-			 char **response_body,
-			 size_t *response_body_len);
+                         const char *locked_path,
+                         http_status_code_t *status_code,
+                         char **response_body,
+                         size_t *response_body_len);
 
 static bool
 generate_locked_descendant_response(struct handler_context *hc,
-				    const char *locked_descendant,
-				    http_status_code_t *status_code,
-				    char **response_body,
-				    size_t *response_body_len);
+                                    const char *locked_descendant,
+                                    http_status_code_t *status_code,
+                                    char **response_body,
+                                    size_t *response_body_len);
 
 static void
 _can_modify_path(struct handler_context *hc,
-		 if_lock_token_err_t if_lock_token_err,
-		 const char *lock_resource_tag,
-		 const char *lock_token,
-		 const char *fpath,
-		 http_status_code_t *status_code,
-		 char **response_body,
-		 size_t *response_body_len) {
+                 if_lock_token_err_t if_lock_token_err,
+                 const char *lock_resource_tag,
+                 const char *lock_token,
+                 const char *fpath,
+                 http_status_code_t *status_code,
+                 char **response_body,
+                 size_t *response_body_len) {
   *status_code = HTTP_STATUS_CODE___INVALID;
 
   /* TODO: this logic is kind of weird,
      we should check if we were passed if tokens first
      i.e:
-       WHEN NOT IF HEADER: check if path is locked
-       WHEN IF HEADER: check if all tokens exist and are locked and path names match
+     WHEN NOT IF HEADER: check if path is locked
+     WHEN IF HEADER: check if all tokens exist and are locked and path names match
   */
 
   /* check if the path is locked or is a descendant of a locked path
@@ -1156,16 +1175,16 @@ _can_modify_path(struct handler_context *hc,
     /* this is locked, fail */
     bool success_generate =
       generate_locked_response(hc, locked_path,
-			       status_code,
-			       response_body,
-			       response_body_len);
+                               status_code,
+                               response_body,
+                               response_body_len);
     if (!success_generate) {
       *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     }
   }
   /* if the file wasn't locked but we were given a lock token */
   else if (!is_locked &&
-	   if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS) {
+           if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS) {
     *response_body = NULL;
     *response_body_len = 0;
     *status_code = HTTP_STATUS_CODE_PRECONDITION_FAILED;
@@ -1176,10 +1195,10 @@ _can_modify_path(struct handler_context *hc,
 
 static void
 can_modify_path(struct handler_context *hc,
-		const char *fpath,
-		http_status_code_t *status_code,
-		char **response_body,
-		size_t *response_body_len) {
+                const char *fpath,
+                http_status_code_t *status_code,
+                char **response_body,
+                size_t *response_body_len) {
   char *lock_resource = NULL;
   char *lock_token = NULL;
 
@@ -1201,11 +1220,11 @@ can_modify_path(struct handler_context *hc,
   }
 
   _can_modify_path(hc, if_lock_token_err,
-		   lock_resource,
-		   lock_token,
-		   fpath,
-		   status_code,
-		   response_body, response_body_len);
+                   lock_resource,
+                   lock_token,
+                   fpath,
+                   status_code,
+                   response_body, response_body_len);
 
  done:
   free(lock_resource);
@@ -1214,10 +1233,10 @@ can_modify_path(struct handler_context *hc,
 
 static void
 can_unlink_path(struct handler_context *hc,
-		const char *fpath,
-		http_status_code_t *status_code,
-		char **response_body,
-		size_t *response_body_len) {
+                const char *fpath,
+                http_status_code_t *status_code,
+                char **response_body,
+                size_t *response_body_len) {
   char *lock_resource = NULL;
   char *lock_token = NULL;
 
@@ -1239,11 +1258,11 @@ can_unlink_path(struct handler_context *hc,
   }
 
   _can_modify_path(hc, if_lock_token_err,
-		   lock_resource,
-		   lock_token,
-		   fpath,
-		   status_code,
-		   response_body, response_body_len);
+                   lock_resource,
+                   lock_token,
+                   fpath,
+                   status_code,
+                   response_body, response_body_len);
 
   if (!status_code) {
     /* check if any descendant is locked */
@@ -1251,7 +1270,7 @@ can_unlink_path(struct handler_context *hc,
     const char *locked_descendant;
     bool success_child_locked =
       are_any_descendants_locked(hc->serv, fpath,
-				 &is_descendant_locked, &locked_descendant);
+                                 &is_descendant_locked, &locked_descendant);
     if (!success_child_locked) {
       *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
       goto done;
@@ -1259,12 +1278,12 @@ can_unlink_path(struct handler_context *hc,
 
     if (is_descendant_locked) {
       bool success_generate =
-	generate_locked_descendant_response(hc, locked_descendant,
-					    status_code,
-					    response_body,
-					    response_body_len);
+        generate_locked_descendant_response(hc, locked_descendant,
+                                            status_code,
+                                            response_body,
+                                            response_body_len);
       if (!success_generate) {
-	*status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+        *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
       }
     }
   }
@@ -1276,10 +1295,10 @@ can_unlink_path(struct handler_context *hc,
 
 static bool
 generate_locked_response(struct handler_context *hc,
-			 const char *locked_path,
-			 http_status_code_t *status_code,
-			 char **response_body,
-			 size_t *response_body_len) {
+                         const char *locked_path,
+                         http_status_code_t *status_code,
+                         char **response_body,
+                         size_t *response_body_len) {
   xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
   ASSERT_NOT_NULL(xml_response);
 
@@ -1323,10 +1342,10 @@ generate_locked_response(struct handler_context *hc,
 
 static bool
 generate_locked_descendant_response(struct handler_context *hc,
-				    const char *locked_descendant,
-				    http_status_code_t *status_code,
-				    char **response_body,
-				    size_t *response_body_len) {
+                                    const char *locked_descendant,
+                                    http_status_code_t *status_code,
+                                    char **response_body,
+                                    size_t *response_body_len) {
   xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
   ASSERT_NOT_NULL(xml_response);
 
@@ -1352,7 +1371,7 @@ generate_locked_descendant_response(struct handler_context *hc,
   free(uri);
 
   xmlNodePtr status_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("status"),
-					  XMLSTR("HTTP/1.1 423 Locked"));
+                                          XMLSTR("HTTP/1.1 423 Locked"));
   ASSERT_NOT_NULL(status_elt);
 
   xmlNodePtr error_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("error"), NULL);
@@ -1398,7 +1417,7 @@ UTHR_DEFINE(request_proc) {
 
   /* TODO: move to hash-based dispatch where each method
      maps to a different bucket
-   */
+  */
   event_handler_t handler;
   if (str_case_equals(hc->rhs.method, "COPY")) {
     handler = handle_copy_request;
@@ -1474,13 +1493,13 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   CRBEGIN(ctx->pos);
 
 #define HANDLE_ERROR(if_err, status_code_, ...) \
-  do {                                               \
-    if (if_err) {                                    \
-      log_debug("copy failed: " __VA_ARGS__);        \
-      status_code = status_code_;                    \
-      goto done;                                     \
-    }                                                \
-  }                                                  \
+  do {                                          \
+    if (if_err) {                               \
+      log_debug("copy failed: " __VA_ARGS__);   \
+      status_code = status_code_;               \
+      goto done;                                \
+    }                                           \
+  }                                             \
   while (false)
 
   ctx->response_body = NULL;
@@ -1489,15 +1508,15 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
 
   ctx->src_relative_uri = path_from_uri(hc, hc->rhs.uri);
   HANDLE_ERROR(!ctx->src_relative_uri,
-	       HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
+               HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
                "couldn't get source path");
 
   if (ctx->is_move) {
     /* check if the path we're moving is locked */
     can_unlink_path(hc, ctx->src_relative_uri,
-		    &status_code,
-		    &ctx->response_body,
-		    &ctx->response_body_len);
+                    &status_code,
+                    &ctx->response_body,
+                    &ctx->response_body_len);
     if (status_code) {
       goto done;
     }
@@ -1515,9 +1534,9 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
 
   /* check if we can copy/move to the destination due to a lock */
   can_unlink_path(hc, ctx->dst_relative_uri,
-		  &status_code,
-		  &ctx->response_body,
-		  &ctx->response_body_len);
+                  &status_code,
+                  &ctx->response_body,
+                  &ctx->response_body_len);
   if (status_code) {
     goto done;
   }
@@ -1525,14 +1544,14 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   /* depth */
   ctx->depth = webdav_get_depth(&hc->rhs);
   HANDLE_ERROR(!(ctx->depth == DEPTH_INF ||
-		 (ctx->depth == DEPTH_0 && !ctx->is_move)),
-	       HTTP_STATUS_CODE_BAD_REQUEST,
+                 (ctx->depth == DEPTH_0 && !ctx->is_move)),
+               HTTP_STATUS_CODE_BAD_REQUEST,
                "bad depth header");
 
   CRYIELD(ctx->pos,
-	  webdav_fs_stat(hc->serv->fs,
-			 ctx->dst_relative_uri,
-			 handle_copy_request, ud));
+          webdav_fs_stat(hc->serv->fs,
+                         ctx->dst_relative_uri,
+                         handle_copy_request, ud));
   assert(WEBDAV_STAT_DONE_EVENT == ev_type);
   WebdavStatDoneEvent *stat_done_ev = ev;
   ctx->dst_existed = stat_done_ev->error == WEBDAV_ERROR_NONE;
@@ -1546,10 +1565,10 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
     /* TODO: XXX: destroy all locks held for the source resource */
 
     CRYIELD(ctx->pos,
-	    webdav_fs_move(hc->serv->fs,
-			   ctx->src_relative_uri, ctx->dst_relative_uri,
-			   overwrite,
-			   handle_copy_request, ud));
+            webdav_fs_move(hc->serv->fs,
+                           ctx->src_relative_uri, ctx->dst_relative_uri,
+                           overwrite,
+                           handle_copy_request, ud));
     assert(WEBDAV_MOVE_DONE_EVENT == ev_type);
     WebdavMoveDoneEvent *move_done_ev = ev;
     err = move_done_ev->error;
@@ -1557,10 +1576,10 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   }
   else {
     CRYIELD(ctx->pos,
-	    webdav_fs_copy(hc->serv->fs,
-			   ctx->src_relative_uri, ctx->dst_relative_uri,
-			   overwrite, ctx->depth,
-			   handle_copy_request, ud));
+            webdav_fs_copy(hc->serv->fs,
+                           ctx->src_relative_uri, ctx->dst_relative_uri,
+                           overwrite, ctx->depth,
+                           handle_copy_request, ud));
     assert(WEBDAV_COPY_DONE_EVENT == ev_type);
     WebdavCopyDoneEvent *copy_done_ev = ev;
     err = copy_done_ev->error;
@@ -1586,10 +1605,10 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
     break;
   default:
     log_info("Error while %s \"%s\" to \"%s\": %d",
-	     ctx->is_move ? "moving" : "copying",
-	     ctx->src_relative_uri,
-	     ctx->dst_relative_uri,
-	     err);
+             ctx->is_move ? "moving" : "copying",
+             ctx->src_relative_uri,
+             ctx->dst_relative_uri,
+             err);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     break;
   }
@@ -1601,10 +1620,10 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   CRYIELD(ctx->pos,
           http_request_simple_response(hc->rh,
                                        status_code,
-				       ctx->response_body,
-				       ctx->response_body_len,
-				       "application/xml",
-				       LINKED_LIST_INITIALIZER,
+                                       ctx->response_body,
+                                       ctx->response_body_len,
+                                       "application/xml",
+                                       LINKED_LIST_INITIALIZER,
                                        handle_copy_request, hc));
 
   CRRETURN(ctx->pos,
@@ -1637,25 +1656,25 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   }
 
   CRYIELD(ctx->pos,
-	  webdav_fs_stat(hc->serv->fs,
-			 ctx->request_relative_uri,
-			 handle_delete_request, ud));
+          webdav_fs_stat(hc->serv->fs,
+                         ctx->request_relative_uri,
+                         handle_delete_request, ud));
   assert(WEBDAV_STAT_DONE_EVENT == ev_type);
   WebdavStatDoneEvent *stat_done_ev = ev;
   if (stat_done_ev->error == WEBDAV_ERROR_NONE) {
     /* check that we can "unlink" this path */
     can_unlink_path(hc, ctx->request_relative_uri,
-		    &status_code,
-		    &ctx->response_body,
-		    &ctx->response_body_len);
+                    &status_code,
+                    &ctx->response_body,
+                    &ctx->response_body_len);
     if (status_code) {
       goto done;
     }
 
     CRYIELD(ctx->pos,
-	    webdav_fs_delete(hc->serv->fs,
-			     ctx->request_relative_uri,
-			     handle_delete_request, ud));
+            webdav_fs_delete(hc->serv->fs,
+                             ctx->request_relative_uri,
+                             handle_delete_request, ud));
     assert(WEBDAV_DELETE_DONE_EVENT == ev_type);
     WebdavDeleteDoneEvent *delete_done_ev = ev;
 
@@ -1679,8 +1698,8 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   }
   else {
     log_info("Couldn't check (%d) if path %s existed",
-	     stat_done_ev->error,
-	     ctx->request_relative_uri);
+             stat_done_ev->error,
+             ctx->request_relative_uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
   }
 
@@ -1691,10 +1710,10 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   CRYIELD(ctx->pos,
           http_request_simple_response(hc->rh,
                                        status_code,
-				       ctx->response_body,
-				       ctx->response_body_len,
-				       "application/xml",
-				       LINKED_LIST_INITIALIZER,
+                                       ctx->response_body,
+                                       ctx->response_body_len,
+                                       "application/xml",
+                                       LINKED_LIST_INITIALIZER,
                                        handle_delete_request, hc));
 
   free(ctx->response_body);
@@ -1723,9 +1742,9 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   /* open file */
   bool create_file = false;
   CRYIELD(ctx->pos,
-	  webdav_fs_open(hc->serv->fs,
-			 ctx->resource_uri, create_file,
-			 handle_get_request, ud));
+          webdav_fs_open(hc->serv->fs,
+                         ctx->resource_uri, create_file,
+                         handle_get_request, ud));
   assert(WEBDAV_OPEN_DONE_EVENT == ev_type);
   WebdavOpenDoneEvent *open_done_ev = ev;
   if (open_done_ev->error) {
@@ -1738,8 +1757,8 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   ctx->file_handle = open_done_ev->file_handle;
 
   CRYIELD(ctx->pos,
-	  webdav_fs_fstat(hc->serv->fs, ctx->file_handle,
-			  handle_get_request, ud));
+          webdav_fs_fstat(hc->serv->fs, ctx->file_handle,
+                          handle_get_request, ud));
   assert(WEBDAV_FSTAT_DONE_EVENT == ev_type);
   WebdavFstatDoneEvent *fstat_done_ev = ev;
   if (fstat_done_ev->error) {
@@ -1771,9 +1790,9 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   /* TODO: must send up to the content-length we sent */
   while (true) {
     CRYIELD(ctx->pos,
-	    webdav_fs_read(hc->serv->fs, ctx->file_handle,
-			   ctx->buf, sizeof(ctx->buf),
-			   handle_get_request, ud));
+            webdav_fs_read(hc->serv->fs, ctx->file_handle,
+                           ctx->buf, sizeof(ctx->buf),
+                           handle_get_request, ud));
     assert(WEBDAV_READ_DONE_EVENT == ev_type);
     WebdavReadDoneEvent *read_done_ev = ev;
     if (read_done_ev->error) {
@@ -1792,8 +1811,8 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
 
     /* now write to socket */
     CRYIELD(ctx->pos,
-	    http_request_write(hc->rh, ctx->buf, amt_read,
-			       handle_get_request, hc));
+            http_request_write(hc->rh, ctx->buf, amt_read,
+                               handle_get_request, hc));
     assert(ev_type == HTTP_REQUEST_WRITE_DONE_EVENT);
     HTTPRequestWriteDoneEvent *write_ev = ev;
     assert(write_ev->request_handle == hc->rh);
@@ -1805,12 +1824,12 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   if (false) {
   error_response:
     CRYIELD(ctx->pos,
-	    http_request_simple_response(hc->rh,
-					 code,
-					 "", 0,
-					 "application/xml",
-					 LINKED_LIST_INITIALIZER,
-					 handle_get_request, ud));
+            http_request_simple_response(hc->rh,
+                                         code,
+                                         "", 0,
+                                         "application/xml",
+                                         LINKED_LIST_INITIALIZER,
+                                         handle_get_request, ud));
   }
 
  done:
@@ -1818,8 +1837,8 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
 
   if (ctx->file_handle) {
     CRYIELD(ctx->pos,
-	    webdav_fs_close(hc->serv->fs, ctx->file_handle,
-			    handle_get_request, ud));
+            webdav_fs_close(hc->serv->fs, ctx->file_handle,
+                            handle_get_request, ud));
     assert(ev_type == WEBDAV_CLOSE_DONE_EVENT);
     WebdavCloseDoneEvent *close_done_ev = ev;
     if (close_done_ev->error) {
@@ -1895,7 +1914,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   ctx->request_body_len = rbev->length;
 
   log_debug("Incoming lock request XML:\n%*s",
-	    ctx->request_body_len, ctx->request_body);
+            ctx->request_body_len, ctx->request_body);
 
   /* get timeout */
   ctx->timeout_in_seconds = webdav_get_timeout(&hc->rhs);
@@ -1938,7 +1957,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
     bool refreshed;
     bool success_refresh = refresh_lock(hc->serv, ctx->file_path, ctx->refresh_uri,
                                         ctx->timeout_in_seconds,
-					&refreshed,
+                                        &refreshed,
                                         &owner_xml_not_owned,
                                         &is_exclusive,
                                         &depth);
@@ -2003,16 +2022,16 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   ctx->created = false;
   if (!ctx->is_locked) {
     CRYIELD(ctx->pos,
-	    webdav_fs_stat(hc->serv->fs,
-			   ctx->file_path,
-			   handle_lock_request, ud));
+            webdav_fs_stat(hc->serv->fs,
+                           ctx->file_path,
+                           handle_lock_request, ud));
     assert(WEBDAV_STAT_DONE_EVENT == ev_type);
     WebdavStatDoneEvent *stat_done_ev = ev;
     if (stat_done_ev->error == WEBDAV_ERROR_DOES_NOT_EXIST) {
       ctx->created = true;
       CRYIELD(ctx->pos,
-	      webdav_fs_touch(hc->serv->fs, ctx->file_path,
-			      handle_lock_request, ud));
+              webdav_fs_touch(hc->serv->fs, ctx->file_path,
+                              handle_lock_request, ud));
       /* NB: ignoring touch error */
       assert(WEBDAV_TOUCH_DONE_EVENT == ev_type);
     }
@@ -2026,17 +2045,17 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
     log_debug("Resource is already locked");
     if (str_equals(ctx->status_path, ctx->file_path)) {
       success_generate =
-	generate_locked_response(hc, ctx->status_path,
-				 &status_code,
-				 &ctx->response_body,
-				 &ctx->response_body_len);
+        generate_locked_response(hc, ctx->status_path,
+                                 &status_code,
+                                 &ctx->response_body,
+                                 &ctx->response_body_len);
     }
     else {
       success_generate =
-	generate_failed_lock_response_body(hc, ctx->file_path, ctx->status_path,
-					   &status_code,
-					   &ctx->response_body,
-					   &ctx->response_body_len);
+        generate_failed_lock_response_body(hc, ctx->file_path, ctx->status_path,
+                                           &status_code,
+                                           &ctx->response_body,
+                                           &ctx->response_body_len);
     }
   }
   else {
@@ -2054,12 +2073,12 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
       hp->name = "Lock-Token";
       char lock_token_header_value[256];
       int len_written = snprintf(lock_token_header_value, sizeof(lock_token_header_value),
-				 "<%s>", ctx->lock_token);
+                                 "<%s>", ctx->lock_token);
       if (len_written == sizeof(lock_token_header_value) - 1) {
-	/* TODO: Lazy */
-	abort();
+        /* TODO: Lazy */
+        abort();
       }
-      hp->value = strdup(lock_token_header_value);
+      hp->value = strdup_x(lock_token_header_value);
       ctx->headers = linked_list_prepend(ctx->headers, hp);
     }
   }
@@ -2150,7 +2169,7 @@ parse_lock_request_body(const char *body, size_t body_len,
       int format_level = 0;
       int should_format = 0;
       xmlNodeDump(buf, doc, child->children, format_level, should_format);
-      *owner_xml = strdup(STR(xmlBufferContent(buf)));
+      *owner_xml = strdup_x(STR(xmlBufferContent(buf)));
       xmlBufferFree(buf);
     }
   }
@@ -2387,9 +2406,9 @@ EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
   }
 
   CRYIELD(ctx->pos,
-	  webdav_fs_mkcol(hc->serv->fs,
-			  ctx->request_relative_uri,
-			  handle_mkcol_request, hc));
+          webdav_fs_mkcol(hc->serv->fs,
+                          ctx->request_relative_uri,
+                          handle_mkcol_request, hc));
   assert(WEBDAV_MKCOL_DONE_EVENT == ev_type);
   WebdavMkcolDoneEvent *mkcol_done_ev = ev;
   switch (mkcol_done_ev->error) {
@@ -2498,14 +2517,14 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
 
   assert(ctx->buf_used <= INT_MAX);
   log_debug("XML request: Depth: %d, %.*s",
-	    depth, (int) ctx->buf_used, ctx->buf);
+            depth, (int) ctx->buf_used, ctx->buf);
 
   /* parse request */
   xml_parse_code_t success_parse =
     parse_propfind_request(ctx->buf,
-			   ctx->buf_used,
-			   &ctx->propfind_req_type,
-			   &ctx->props_to_get);
+                           ctx->buf_used,
+                           &ctx->propfind_req_type,
+                           &ctx->props_to_get);
   if (success_parse == XML_PARSE_ERROR_SYNTAX ||
       success_parse == XML_PARSE_ERROR_STRUCTURE) {
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
@@ -2524,10 +2543,10 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
 
   /* run the request */
   CRYIELD(ctx->pos,
-	  run_propfind(hc, hc->rhs.uri, depth,
-		       ctx->propfind_req_type,
-		       ctx->props_to_get,
-		       handle_propfind_request, hc));
+          run_propfind(hc, hc->rhs.uri, depth,
+                       ctx->propfind_req_type,
+                       ctx->props_to_get,
+                       handle_propfind_request, hc));
   assert(ev_type == RUN_PROPFIND_DONE_EVENT);
   RunPropfindDoneEvent *run_propfind_ev = ev;
   if (run_propfind_ev->error) {
@@ -2538,13 +2557,13 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   /* now generate response */
   bool success_generate =
     generate_propfind_response(hc,
-			       ctx->props_to_get,
-			       run_propfind_ev->entries,
-			       &ctx->out_buf,
-			       &ctx->out_buf_size,
-			       &status_code);
+                               ctx->props_to_get,
+                               run_propfind_ev->entries,
+                               &ctx->out_buf,
+                               &ctx->out_buf_size,
+                               &status_code);
   linked_list_free(run_propfind_ev->entries,
-		   (linked_list_elt_handler_t) free_webdav_propfind_entry);
+                   (linked_list_elt_handler_t) free_webdav_propfind_entry);
 
   if (!success_generate) {
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -2553,13 +2572,13 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
 
  done:
   linked_list_free(ctx->props_to_get,
-		   (linked_list_elt_handler_t) free_webdav_property);
+                   (linked_list_elt_handler_t) free_webdav_property);
 
   assert(status_code);
   log_debug("Responding with status: %d", status_code);
   assert(ctx->out_buf_size <= INT_MAX);
   log_debug("XML response will be: %.*s",
-	    (int) ctx->out_buf_size, ctx->out_buf);
+            (int) ctx->out_buf_size, ctx->out_buf);
 
   CRYIELD(ctx->pos,
           http_request_simple_response(hc->rh,
@@ -2582,9 +2601,9 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
 
 static void
 run_proppatch(struct handler_context *hc, const char *uri,
-	      const char *input, size_t input_size,
-	      char **output, size_t *output_size,
-	      http_status_code_t *status_code);
+              const char *input, size_t input_size,
+              char **output, size_t *output_size,
+              http_status_code_t *status_code);
 
 static
 EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
@@ -2612,9 +2631,9 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
 
   /* run the request */
   run_proppatch(hc, hc->rhs.uri,
-		hc->sub.proppatch.request_body, hc->sub.proppatch.request_body_size,
-		&hc->sub.proppatch.response_body, &hc->sub.proppatch.response_body_size,
-		&status_code);
+                hc->sub.proppatch.request_body, hc->sub.proppatch.request_body_size,
+                &hc->sub.proppatch.response_body, &hc->sub.proppatch.response_body_size,
+                &status_code);
 
  done:
   assert(status_code);
@@ -2639,9 +2658,9 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
 
 static void
 run_proppatch(struct handler_context *hc, const char *uri,
-	      const char *input, size_t input_size,
-	      char **output, size_t *output_size,
-	      http_status_code_t *status_code) {
+              const char *input, size_t input_size,
+              char **output, size_t *output_size,
+              http_status_code_t *status_code) {
   UNUSED(hc);
 
   xmlDocPtr doc = NULL;
@@ -2657,8 +2676,8 @@ run_proppatch(struct handler_context *hc, const char *uri,
 
   /* check if uri is locked */
   can_modify_path(hc, file_path,
-		  status_code,
-		  output, output_size);
+                  status_code,
+                  output, output_size);
   if (*status_code) {
     goto done;
   }
@@ -2792,17 +2811,17 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
 
   /* check if path is locked */
   can_modify_path(hc, ctx->request_relative_uri,
-		  &status_code,
-		  &ctx->response_body,
-		  &ctx->response_body_len);
+                  &status_code,
+                  &ctx->response_body,
+                  &ctx->response_body_len);
   if (status_code) {
     goto done;
   }
 
   CRYIELD(ctx->pos,
-	  webdav_fs_stat(hc->serv->fs,
-			 ctx->request_relative_uri,
-			 handle_put_request, ud));
+          webdav_fs_stat(hc->serv->fs,
+                         ctx->request_relative_uri,
+                         handle_put_request, ud));
   assert(WEBDAV_STAT_DONE_EVENT == ev_type);
   WebdavStatDoneEvent *stat_done_ev = ev;
   if (stat_done_ev->error == WEBDAV_ERROR_DOES_NOT_EXIST) {
@@ -2813,33 +2832,54 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
   }
   else {
     log_error("Couldn't stat resource (%d) at %s",
-	      stat_done_ev->error,
-	      ctx->request_relative_uri);
+              stat_done_ev->error,
+              ctx->request_relative_uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
 
   bool create_file = true;
   CRYIELD(ctx->pos,
-	  webdav_fs_open(hc->serv->fs,
-			 ctx->request_relative_uri, create_file,
-			 handle_put_request, ud));
+          webdav_fs_open(hc->serv->fs,
+                         ctx->request_relative_uri, create_file,
+                         handle_put_request, ud));
   assert(WEBDAV_OPEN_DONE_EVENT == ev_type);
   WebdavOpenDoneEvent *open_done_ev = ev;
   if (open_done_ev->error) {
-    if (open_done_ev->error == HTTP_STATUS_CODE_CONFLICT) {
+    if (open_done_ev->error == WEBDAV_ERROR_DOES_NOT_EXIST ||
+        open_done_ev->error == WEBDAV_ERROR_NOT_COLLECTION) {
       status_code = HTTP_STATUS_CODE_CONFLICT;
     }
     else {
       log_error("Couldn't open resource (%d) at %s",
-		open_done_ev->error,
-		ctx->request_relative_uri);
+                open_done_ev->error,
+                ctx->request_relative_uri);
       status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     }
     goto done;
   }
 
   ctx->file_handle = open_done_ev->file_handle;
+
+  /* check if this is a collection */
+  CRYIELD(ctx->pos,
+          webdav_fs_fstat(hc->serv->fs, ctx->file_handle,
+                          handle_put_request, ud));
+  assert(ev_type == WEBDAV_FSTAT_DONE_EVENT);
+  WebdavFstatDoneEvent *fstat_done_ev = ev;
+  if (fstat_done_ev->error) {
+    log_info("Couldn't fstat file (%s): %d",
+             ctx->request_relative_uri,
+             fstat_done_ev->error);
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  /* can't put on a collection */
+  if (fstat_done_ev->file_info.is_collection) {
+    status_code = HTTP_STATUS_CODE_METHOD_NOT_ALLOWED;
+    goto done;
+  }
 
   while (true) {
     CRYIELD(ctx->pos,
@@ -2860,17 +2900,17 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
     ctx->amount_written = 0;
     while (ctx->amount_written < ctx->amount_read) {
       CRYIELD(ctx->pos,
-	      webdav_fs_write(hc->serv->fs, ctx->file_handle,
-			      ctx->read_buf, read_done_ev->nbyte,
-			      handle_put_request, ud));
+              webdav_fs_write(hc->serv->fs, ctx->file_handle,
+                              ctx->read_buf, read_done_ev->nbyte,
+                              handle_put_request, ud));
       assert(WEBDAV_WRITE_DONE_EVENT == ev_type);
       WebdavWriteDoneEvent *write_done_ev = ev;
       if (write_done_ev->error) {
-	log_error("Couldn't write to resource (%d) at %s",
-		  write_done_ev->error,
-		  ctx->request_relative_uri);
-	status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-	goto done;
+        log_error("Couldn't write to resource (%d) at %s",
+                  write_done_ev->error,
+                  ctx->request_relative_uri);
+        status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+        goto done;
       }
       ctx->amount_written += write_done_ev->nbyte;
     }
@@ -2886,10 +2926,10 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
   CRYIELD(ctx->pos,
           http_request_simple_response(hc->rh,
                                        status_code,
-				       ctx->response_body,
-				       ctx->response_body_len,
-				       "application/xml",
-				       LINKED_LIST_INITIALIZER,
+                                       ctx->response_body,
+                                       ctx->response_body_len,
+                                       "application/xml",
+                                       LINKED_LIST_INITIALIZER,
                                        handle_put_request, ud));
 
  error:
@@ -2898,8 +2938,8 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
 
   if (ctx->file_handle) {
     CRYIELD(ctx->pos,
-	    webdav_fs_close(hc->serv->fs, ctx->file_handle,
-			    handle_put_request, ud));
+            webdav_fs_close(hc->serv->fs, ctx->file_handle,
+                            handle_put_request, ud));
     assert(WEBDAV_CLOSE_DONE_EVENT == ev_type);
     WebdavCloseDoneEvent *close_done_ev = ev;
     if (close_done_ev->error) {
@@ -2917,7 +2957,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
 
 static if_lock_token_err_t
 parse_lock_token_header(const char *lock_token_header,
-			char **lock_token) {
+                        char **lock_token) {
   int i = 0;
 
   i = skip_bnf_lws(lock_token_header, i);
@@ -2931,7 +2971,7 @@ parse_lock_token_header(const char *lock_token_header,
 
   *lock_token =
     create_str_copy(lock_token_header + i,
-		    right_bracket_location - (lock_token_header + i));
+                    right_bracket_location - (lock_token_header + i));
   if (!*lock_token) {
     return IF_LOCK_TOKEN_ERR_INTERNAL;
   }
@@ -2995,12 +3035,12 @@ EVENT_HANDLER_DEFINE(handle_unlock_request, ev_type, ev, ud) {
   assert(status_code != HTTP_STATUS_CODE___INVALID);
 
   CRYIELD(hc->sub.unlock.pos,
-	  http_request_string_response(hc->rh,
-				       status_code, "",
-				       handle_unlock_request, hc));
+          http_request_string_response(hc->rh,
+                                       status_code, "",
+                                       handle_unlock_request, hc));
 
   CRRETURN(hc->sub.unlock.pos,
-	   request_proc(GENERIC_EVENT, NULL, hc));
+           request_proc(GENERIC_EVENT, NULL, hc));
 
   CREND();
 }
@@ -3017,8 +3057,8 @@ EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
 
 webdav_fs_t
 webdav_fs_new(WebdavOperations *op,
-	      size_t op_size,
-	      void *user_data) {
+              size_t op_size,
+              void *user_data) {
   UNUSED(op_size);
 
   struct webdav_fs *toret = malloc(sizeof(*toret));
@@ -3036,99 +3076,99 @@ webdav_fs_new(WebdavOperations *op,
 
 void
 webdav_fs_open(webdav_fs_t fs,
-	       const char *relative_uri,
-	       bool create,
-	       event_handler_t cb, void *cb_ud) {
+               const char *relative_uri,
+               bool create,
+               event_handler_t cb, void *cb_ud) {
   return fs->op->open(fs->user_data,
-		      relative_uri, create,
-		      cb, cb_ud);
+                      relative_uri, create,
+                      cb, cb_ud);
 }
 
 void
 webdav_fs_fstat(webdav_fs_t fs,
-		void *file_handle,
-		event_handler_t cb, void *cb_ud) {
+                void *file_handle,
+                event_handler_t cb, void *cb_ud) {
   return fs->op->fstat(fs->user_data,
-		       file_handle,
-		       cb, cb_ud);
+                       file_handle,
+                       cb, cb_ud);
 }
 
 void
 webdav_fs_read(webdav_fs_t fs, void *file_handle,
-	       void *buf, size_t buf_size,
-	       event_handler_t cb, void *cb_ud) {
+               void *buf, size_t buf_size,
+               event_handler_t cb, void *cb_ud) {
   return fs->op->read(fs->user_data, file_handle,
-		      buf, buf_size,
-		      cb, cb_ud);
+                      buf, buf_size,
+                      cb, cb_ud);
 }
 
 void
 webdav_fs_write(webdav_fs_t fs, void *file_handle,
-		const void *buf, size_t buf_size,
-		event_handler_t cb, void *cb_ud) {
+                const void *buf, size_t buf_size,
+                event_handler_t cb, void *cb_ud) {
   return fs->op->write(fs->user_data, file_handle,
-		       buf, buf_size,
-		       cb, cb_ud);
+                       buf, buf_size,
+                       cb, cb_ud);
 }
 
 void
 webdav_fs_readcol(webdav_fs_t fs,
-		  void *col_handle,
-		  WebdavCollectionEntry *ce, size_t nentries,
-		  event_handler_t cb, void *ud) {
+                  void *col_handle,
+                  WebdavCollectionEntry *ce, size_t nentries,
+                  event_handler_t cb, void *ud) {
   return fs->op->readcol(fs->user_data, col_handle, ce, nentries,
-			 cb, ud);
+                         cb, ud);
 }
 
 void
 webdav_fs_close(webdav_fs_t fs,
-		void *file_handle,
-		event_handler_t cb, void *cb_ud) {
+                void *file_handle,
+                event_handler_t cb, void *cb_ud) {
   return fs->op->close(fs->user_data, file_handle,
-		       cb, cb_ud);
+                       cb, cb_ud);
 }
 
 void
 webdav_fs_mkcol(webdav_fs_t fs,
-		const char *relative_uri,
-		event_handler_t cb, void *cb_ud) {
+                const char *relative_uri,
+                event_handler_t cb, void *cb_ud) {
   return fs->op->mkcol(fs->user_data, relative_uri, cb, cb_ud);
 }
 
 void
 webdav_fs_delete(webdav_fs_t fs,
-		 const char *relative_uri,
-		 event_handler_t cb, void *cb_ud) {
+                 const char *relative_uri,
+                 event_handler_t cb, void *cb_ud) {
   return fs->op->delete(fs->user_data, relative_uri, cb, cb_ud);
 }
 
 void
 webdav_fs_move(webdav_fs_t fs,
-	       const char *src_relative_uri, const char *dst_relative_uri,
-	       bool overwrite,
-	       event_handler_t cb, void *cb_ud) {
+               const char *src_relative_uri, const char *dst_relative_uri,
+               bool overwrite,
+               event_handler_t cb, void *cb_ud) {
   return fs->op->move(fs->user_data,
-		      src_relative_uri, dst_relative_uri,
-		      overwrite,
-		      cb, cb_ud);
+                      src_relative_uri, dst_relative_uri,
+                      overwrite,
+                      cb, cb_ud);
 }
 
 void
 webdav_fs_copy(webdav_fs_t fs,
-	       const char *src_relative_uri, const char *dst_relative_uri,
-	       bool overwrite, webdav_depth_t depth,
-	       event_handler_t cb, void *cb_ud) {
+               const char *src_relative_uri, const char *dst_relative_uri,
+               bool overwrite, webdav_depth_t depth,
+               event_handler_t cb, void *cb_ud) {
   return fs->op->copy(fs->user_data,
-		      src_relative_uri, dst_relative_uri,
-		      overwrite, depth,
-		      cb, cb_ud);
+                      src_relative_uri, dst_relative_uri,
+                      overwrite, depth,
+                      cb, cb_ud);
 }
 
 webdav_server_t
 webdav_server_start(FDEventLoop *loop,
-		    int server_fd,
-		    const char *public_prefix,
-		    webdav_fs_t fs) {
+                    int server_fd,
+                    const char *public_prefix,
+                    webdav_fs_t fs) {
   struct webdav_server *serv = malloc(sizeof(*serv));
   if (!serv) {
     goto error;
@@ -3138,11 +3178,11 @@ webdav_server_start(FDEventLoop *loop,
     .loop = loop,
     .locks = LINKED_LIST_INITIALIZER,
     .fs = fs,
-    .public_prefix = strdup(public_prefix),
+    .public_prefix = strdup_x(public_prefix),
   };
 
   bool ret = http_server_start(&serv->http, loop, server_fd,
-			       handle_request, serv);
+                               handle_request, serv);
   if (!ret) {
     goto error;
   }

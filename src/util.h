@@ -50,6 +50,12 @@ skip_ws(const char *str);
 PURE_FUNCTION bool
 str_startswith(const char *a, const char *b);
 
+PURE_FUNCTION char *
+strdup_x(const char *s);
+
+PURE_FUNCTION char *
+strndup_x(const char *s, size_t n);
+
 HEADER_FUNCTION PURE_FUNCTION bool
 str_equals(const char *a, const char *b) {
   return !strcmp(a, b);
@@ -66,6 +72,8 @@ str_case_equals(const char *a, const char *b) {
   }
 
 #define EASY_ALLOC(type, name) type *name = malloc(sizeof(*name)); do { if (!name) { abort();} } while (false)
+
+HEADER_FUNCTION DEFINE_MIN(size_t);
 
 HEADER_FUNCTION void
 ASSERT_NOT_NULL(void *foo) {
