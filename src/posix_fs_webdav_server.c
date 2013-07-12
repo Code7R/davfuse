@@ -271,7 +271,7 @@ posix_readcol(void *fs_handle,
     strcpy(ce[i].name, result->d_name);
 
     struct stat st;
-    int fstatat_ret = fstatat(dirfd(dirp), result->d_name, &st, 0);
+    int fstatat_ret = fstatat_x(dirfd(dirp), result->d_name, &st, 0);
     if (fstatat_ret) {
       ev.error = WEBDAV_ERROR_GENERAL;
       goto done;

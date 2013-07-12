@@ -6,8 +6,8 @@
 
 #include "c_util.h"
 
-int fstatat(int dirfd, const char *pathname, struct stat *buf,
-	    int flags) {
+int fstatat_x(int dirfd, const char *pathname, struct stat *buf,
+              int flags) {
   UNUSED(dirfd);
   UNUSED(pathname);
   UNUSED(buf);

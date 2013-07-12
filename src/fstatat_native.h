@@ -4,4 +4,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+int fstatat_x(int dirfd, const char *pathname, struct stat *buf,
+              int flags);
+
 #endif

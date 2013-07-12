@@ -1,7 +1,9 @@
 #ifndef FSTATAT_EMU_H
 #define FSTATAT_EMU_H
 
-int fstatat(int dirfd, const char *pathname, struct stat *buf,
-	    int flags);
+#include <sys/stat.h>
+
+int fstatat_x(int dirfd, const char *pathname, struct stat *buf,
+              int flags);
 
 #endif
