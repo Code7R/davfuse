@@ -50,7 +50,7 @@ file_is_dir(const char *file_path) {
 
 bool
 touch(const char *file_path) {
-  int fd = open(file_path, O_WRONLY | O_CREAT);
+  int fd = open(file_path, O_WRONLY | O_CREAT, 0666);
   if (fd >= 0) {
     /* ignore failure here */
     utimes(file_path, NULL);

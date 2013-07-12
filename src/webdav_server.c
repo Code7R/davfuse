@@ -2888,7 +2888,8 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
     while (ctx->amount_written < ctx->amount_read) {
       CRYIELD(ctx->pos,
               webdav_fs_write(hc->serv->fs, ctx->file_handle,
-                              ctx->read_buf, read_done_ev->nbyte,
+                              ctx->read_buf + ctx->amount_written,
+                              ctx->amount_read - ctx->amount_written,
                               handle_put_request, ud));
       assert(WEBDAV_WRITE_DONE_EVENT == ev_type);
       WebdavWriteDoneEvent *write_done_ev = ev;
