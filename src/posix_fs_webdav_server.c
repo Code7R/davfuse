@@ -389,8 +389,11 @@ static void
 _posix_copy_move(void *fs_handle,
 		 bool is_move,
 		 const char *src_relative_uri, const char *dst_relative_uri,
-		 bool overwrite,
+		 bool overwrite, webdav_depth_t depth,
 		 event_handler_t cb, void *ud) {
+  assert(depth == DEPTH_INF ||
+	 (depth == DEPTH_0 && !is_move));
+
   PosixFsCtx *fs_ctx = fs_handle;
   webdav_error_t err;
 
@@ -408,6 +411,11 @@ _posix_copy_move(void *fs_handle,
   struct stat src_st;
   int src_ret = stat(file_path, &src_st);
   if (src_ret < 0) {
+    if (errno != ENOENT) {
+      log_info("Error while calling stat(\"%s\"): %s",
+	       destination_path,
+	       strerror(errno));
+    }
     err = errno == ENOENT
       ? WEBDAV_ERROR_DOES_NOT_EXIST
       : WEBDAV_ERROR_GENERAL;
@@ -417,6 +425,9 @@ _posix_copy_move(void *fs_handle,
   struct stat dst_st;
   int dst_ret = stat(destination_path, &dst_st);
   if (dst_ret && errno != ENOENT) {
+    log_info("Error while calling stat(\"%s\"): %s",
+	     destination_path,
+	     strerror(errno));
     err = WEBDAV_ERROR_GENERAL;
     goto done;
   }
@@ -425,7 +436,7 @@ _posix_copy_move(void *fs_handle,
   /* kill directory if we're overwriting it */
   if (dst_existed) {
     if (!overwrite) {
-      err = WEBDAV_ERROR_EXISTS;
+      err = WEBDAV_ERROR_DESTINATION_EXISTS;
       goto done;
     }
 
@@ -438,6 +449,9 @@ _posix_copy_move(void *fs_handle,
     /* first try moving */
     int ret = rename(file_path, destination_path);
     if (ret < 0 && errno != EXDEV) {
+      log_info("Error while calling rename(\"%s\", \"%s\"): %s",
+	       file_path, destination_path,
+	       strerror(errno));
       err = WEBDAV_ERROR_GENERAL;
       goto done;
     }
@@ -445,10 +459,34 @@ _posix_copy_move(void *fs_handle,
   }
 
   if (copy_failed) {
-    linked_list_t failed_to_copy = copytree(file_path, destination_path,
-                                            is_move);
-    copy_failed = failed_to_copy;
-    linked_list_free(failed_to_copy, free);
+    if (depth == DEPTH_0) {
+      if (file_is_dir(file_path) > 0) {
+	int ret = mkdir(destination_path, 0777);
+	if (ret < 0) {
+	  log_info("Failure to mkdir(\"%s\"): %s",
+		   destination_path, strerror(errno));
+	  err = WEBDAV_ERROR_GENERAL;
+	  goto done;
+	}
+      }
+      else {
+	bool ret = copyfile(file_path, destination_path);
+	if (!ret) {
+	  log_info("Failure to copyfile(\"%s\", \"%s\")",
+		   file_path, destination_path);
+	  err = WEBDAV_ERROR_GENERAL;
+	  goto done;
+	}
+      }
+
+      copy_failed = false;
+    }
+    else {
+      linked_list_t failed_to_copy =
+	copytree(file_path, destination_path, is_move);
+      copy_failed = failed_to_copy;
+      linked_list_free(failed_to_copy, free);
+    }
   }
 
   err = copy_failed
@@ -481,12 +519,12 @@ _posix_copy_move(void *fs_handle,
 static void
 posix_copy(void *fs_handle,
 	   const char *src_relative_uri, const char *dst_relative_uri,
-	   bool overwrite,
+	   bool overwrite, webdav_depth_t depth,
 	   event_handler_t cb, void *ud) {
   bool is_move = false;
   return _posix_copy_move(fs_handle, is_move,
 			  src_relative_uri, dst_relative_uri,
-			  overwrite,
+			  overwrite, depth,
 			  cb, ud);
 }
 
@@ -498,7 +536,7 @@ posix_move(void *fs_handle,
   bool is_move = true;
   return _posix_copy_move(fs_handle, is_move,
 			  src_relative_uri, dst_relative_uri,
-			  overwrite,
+			  overwrite, DEPTH_INF,
 			  cb, ud);
 }
 
@@ -545,9 +583,17 @@ main(int argc, char *argv[]) {
     port = 8080;
   }
 
-  char *base_path;
+  char *public_prefix;
   if (argc > 2) {
-    base_path = strdup(argv[2]);
+    public_prefix = argv[2];
+  }
+  else {
+    public_prefix = "http://localhost:8080/";
+  }
+
+  char *base_path;
+  if (argc > 3) {
+    base_path = strdup(argv[3]);
   }
   else {
     base_path = getcwd(NULL, 0);
@@ -570,7 +616,7 @@ main(int argc, char *argv[]) {
   };
 
   webdav_fs_t fs = webdav_fs_new(&posix_operations, sizeof(posix_operations), &pwds);
-  webdav_server_t ws = webdav_server_start(&loop, server_fd, fs);
+  webdav_server_t ws = webdav_server_start(&loop, server_fd, public_prefix, fs);
 
   assert(ws);
 

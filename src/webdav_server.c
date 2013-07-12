@@ -44,13 +44,6 @@ enum {
 };
 
 typedef enum {
-  DEPTH_0,
-  DEPTH_1,
-  DEPTH_INF,
-  DEPTH_INVALID,
-} webdav_depth_t;
-
-typedef enum {
   PROPFIND_PROP,
   PROPFIND_ALLPROP,
   PROPFIND_PROPNAME,
@@ -102,6 +95,7 @@ struct handler_context {
     struct copy_context {
       coroutine_position_t pos;
       bool is_move;
+      webdav_depth_t depth;
       char *response_body;
       size_t response_body_len;
       WebdavFileInfo src_file_info;
@@ -1605,8 +1599,10 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   }
 
   /* depth */
-  webdav_depth_t depth = webdav_get_depth(&hc->rhs);
-  HANDLE_ERROR(depth != DEPTH_INF, HTTP_STATUS_CODE_BAD_REQUEST,
+  ctx->depth = webdav_get_depth(&hc->rhs);
+  HANDLE_ERROR(!(ctx->depth == DEPTH_INF ||
+		 (ctx->depth == DEPTH_0 && !ctx->is_move)),
+	       HTTP_STATUS_CODE_BAD_REQUEST,
                "bad depth header");
 
   CRYIELD(ctx->pos,
@@ -1639,7 +1635,7 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
     CRYIELD(ctx->pos,
 	    webdav_fs_copy(hc->serv->fs,
 			   ctx->src_relative_uri, ctx->dst_relative_uri,
-			   overwrite,
+			   overwrite, ctx->depth,
 			   handle_copy_request, ud));
     assert(WEBDAV_COPY_DONE_EVENT == ev_type);
     WebdavCopyDoneEvent *copy_done_ev = ev;
@@ -1665,6 +1661,11 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
     status_code = HTTP_STATUS_CODE_PRECONDITION_FAILED;
     break;
   default:
+    log_info("Error while %s \"%s\" to \"%s\": %d",
+	     ctx->is_move ? "moving" : "copying",
+	     ctx->src_relative_uri,
+	     ctx->dst_relative_uri,
+	     err);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     break;
   }
@@ -3195,17 +3196,18 @@ webdav_fs_move(webdav_fs_t fs,
 void
 webdav_fs_copy(webdav_fs_t fs,
 	       const char *src_relative_uri, const char *dst_relative_uri,
-	       bool overwrite,
+	       bool overwrite, webdav_depth_t depth,
 	       event_handler_t cb, void *cb_ud) {
   return fs->op->copy(fs->user_data,
 		      src_relative_uri, dst_relative_uri,
-		      overwrite,
+		      overwrite, depth,
 		      cb, cb_ud);
 }
 
 webdav_server_t
 webdav_server_start(FDEventLoop *loop,
 		    int server_fd,
+		    const char *public_prefix,
 		    webdav_fs_t fs) {
   struct webdav_server *serv = malloc(sizeof(*serv));
   if (!serv) {
@@ -3216,6 +3218,7 @@ webdav_server_start(FDEventLoop *loop,
     .loop = loop,
     .locks = LINKED_LIST_INITIALIZER,
     .fs = fs,
+    .public_prefix = strdup(public_prefix),
   };
 
   bool ret = http_server_start(&serv->http, loop, server_fd,
@@ -3245,4 +3248,3 @@ webdav_server_stop(webdav_server_t ws) {
 
   return true;
 }
-

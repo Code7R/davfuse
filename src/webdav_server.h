@@ -10,6 +10,13 @@ enum {
   MAX_FILE_NAME_LENGTH=256,
 };
 
+typedef enum {
+  DEPTH_0,
+  DEPTH_1,
+  DEPTH_INF,
+  DEPTH_INVALID,
+} webdav_depth_t;
+
 typedef struct {
   webdav_file_time_t modified_time;
   webdav_file_time_t creation_time;
@@ -107,10 +114,13 @@ typedef struct {
   /* for DELETE */
   void (*delete)(void *, const char *relative_uri, event_handler_t, void *);
   /* for COPY  */
-  void (*copy)(void *, const char *src_uri, const char *dst_uri, bool overwrite,
+  void (*copy)(void *,
+	       const char *src_uri, const char *dst_uri,
+	       bool overwrite, webdav_depth_t depth,
 	       event_handler_t, void *);
   /* for MOVE  */
-  void (*move)(void *, const char *src_uri, const char *dst_uri, bool overwrite,
+  void (*move)(void *, const char *src_uri, const char *dst_uri,
+	       bool overwrite,
 	       event_handler_t, void *);
 } WebdavOperations;
 
@@ -123,6 +133,7 @@ typedef struct webdav_server *webdav_server_t;
 webdav_server_t
 webdav_server_start(FDEventLoop *loop,
 		    int server_fd,
+		    const char *public_prefix,
 		    webdav_fs_t fs);
 
 bool
@@ -192,7 +203,7 @@ webdav_fs_move(webdav_fs_t fs,
 void
 webdav_fs_copy(webdav_fs_t fs,
 	       const char *src_relative_uri, const char *dst_relative_uri,
-	       bool overwrite,
+	       bool overwrite, webdav_depth_t depth,
 	       event_handler_t cb, void *cb_ud);
 
 #endif
