@@ -120,6 +120,8 @@ struct handler_context {
       coroutine_position_t pos;
       char *response_body;
       size_t response_body_len;
+      char *request_body;
+      size_t request_body_len;
       linked_list_t headers;
       char *file_path;
       char *owner_xml;
@@ -362,16 +364,23 @@ path_from_uri(struct handler_context *hc, const char *uri) {
     real_uri = uri;
   }
 
+  /* if uri ends with '/' shave it off */
+  size_t len = strlen(real_uri);
+  if (real_uri[len - 1] == '/') {
+    len -= 1;
+  }
+
   /* TODO: de-urlencode `real_uri` */
-  return strdup(real_uri);
+  return strndup(real_uri, len);
 }
 
 static char *
 uri_from_path(struct handler_context *hc, const char *path) {
   /* TODO: urlencode `path` */
+  assert(path[0] == '/');
 
   char *real_uri;
-  int ret = asprintf(&real_uri, "%s%s", hc->serv->public_prefix, path);
+  int ret = asprintf(&real_uri, "%s%s", hc->serv->public_prefix, &path[1]);
   if (ret < 0) {
     return NULL;
   }
@@ -1858,13 +1867,6 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
 
   CRBEGIN(ctx->pos);
 
-  /* read body first */
-  CRYIELD(ctx->pos,
-          http_request_read_body(hc->rh,
-                                 handle_lock_request,
-                                 ud));
-  assert(ev_type == GENERIC_EVENT);
-
   ctx->file_path = NULL;
   ctx->owner_xml = NULL;
   ctx->refresh_uri = NULL;
@@ -1872,6 +1874,15 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   ctx->resource_tag_path = NULL;
   ctx->response_body = NULL;
   ctx->response_body_len = 0;
+  ctx->request_body = NULL;
+  ctx->request_body_len = 0;
+
+  /* read body first */
+  CRYIELD(ctx->pos,
+          http_request_read_body(hc->rh,
+                                 handle_lock_request,
+                                 ud));
+  assert(ev_type == GENERIC_EVENT);
 
   HTTPRequestReadBodyDoneEvent *rbev = ev;
   if (rbev->error) {
@@ -1880,7 +1891,11 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
     goto done;
   }
 
-  log_debug("Incoming lock request XML:\n%*s", rbev->length, rbev->body);
+  ctx->request_body = rbev->body;
+  ctx->request_body_len = rbev->length;
+
+  log_debug("Incoming lock request XML:\n%*s",
+	    ctx->request_body_len, ctx->request_body);
 
   /* get timeout */
   ctx->timeout_in_seconds = webdav_get_timeout(&hc->rhs);
@@ -1914,7 +1929,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
     }
   }
 
-  if (!rbev->body &&
+  if (!ctx->request_body &&
       if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS &&
       str_equals(ctx->resource_tag_path, ctx->file_path)) {
     char *owner_xml_not_owned;
@@ -1962,8 +1977,8 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   }
 
   /* parse request body */
-  bool success_parse = rbev->body
-    ? parse_lock_request_body(rbev->body, rbev->length,
+  bool success_parse = ctx->request_body
+    ? parse_lock_request_body(ctx->request_body, ctx->request_body_len,
                               &ctx->is_exclusive, &ctx->owner_xml)
     : false;
   if (!success_parse) {
@@ -2062,7 +2077,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
             ctx->response_body_len,
             ctx->response_body);
 
-  free(rbev->body);
+  free(ctx->request_body);
   free(ctx->file_path);
   free(ctx->owner_xml);
   free(ctx->resource_tag);
@@ -2486,12 +2501,17 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
 	    depth, (int) ctx->buf_used, ctx->buf);
 
   /* parse request */
-  bool success_parse =
+  xml_parse_code_t success_parse =
     parse_propfind_request(ctx->buf,
 			   ctx->buf_used,
 			   &ctx->propfind_req_type,
 			   &ctx->props_to_get);
-  if (!success_parse) {
+  if (success_parse == XML_PARSE_ERROR_SYNTAX ||
+      success_parse == XML_PARSE_ERROR_STRUCTURE) {
+    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
+  }
+  else if (success_parse == XML_PARSE_ERROR_INTERNAL) {
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
