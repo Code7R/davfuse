@@ -313,101 +313,6 @@ webdav_fs_touch(webdav_fs_t fs,
 	     .cb_ud = cb_ud);
 }
 
-typedef void *(*webdav_collection_entry_handler_t)(void *ud, char *parent_uri, WebdavCollectionEntry *ce);
-
-typedef struct {
-  bool error;
-  linked_list_t new_stack;
-} WebdavFsExpandCollectionDfsCallbackDoneEvent;
-
-typedef struct {
-  webdav_fs_t fs;
-  webdav_collection_entry_handler_t entry_handler;
-  void *entry_handler_ud;
-} WebdavFsExpandCollectionExtraArgs;
-
-typedef struct {
-  UTHR_CTX_BASE;
-  /* args */
-  WebdavFsExpandCollectionExtraArgs *obj;
-  char *relative_uri;
-  linked_list_t ll;
-  event_handler_t cb;
-  void *cb_ud;
-  /* ctx */
-  void *col_handle;
-  WebdavFsExpandCollectionDfsCallbackDoneEvent ev;
-  WebdavCollectionEntry ce[1];
-  int i;
-} WebdavFsExpandCollectionDfsCallbackCtx;
-
-static
-UTHR_DEFINE(webdav_fs_expand_collection_dfs_callback_uthr) {
-  UTHR_HEADER(WebdavFsExpandCollectionDfsCallbackCtx, ctx);
-
-  ctx->ev.new_stack = ctx->ll;
-
-  /* okay, keep expanding ll over the passed-in collection */
-  UTHR_YIELD(ctx,
-	     webdav_fs_opencol(ctx->obj->fs,
-			       ctx->relative_uri,
-			       webdav_fs_expand_collection_dfs_callback_uthr, ctx));
-  UTHR_RECEIVE_EVENT(WEBDAV_OPENCOL_DONE_EVENT, WebdavOpencolDoneEvent, opencol_done_ev);
-  if (opencol_done_ev->error) {
-    ctx->ev.error = true;
-    goto done;
-  }
-
-  ctx->col_handle = opencol_done_ev->col_handle;
-  while (true) {
-    UTHR_YIELD(ctx,
-	       webdav_fs_readcol(ctx->obj->fs, ctx->col_handle, ctx->ce, NELEMS(ctx->ce),
-				 webdav_fs_expand_collection_dfs_callback_uthr, ctx));
-    UTHR_RECEIVE_EVENT(WEBDAV_READCOL_DONE_EVENT, WebdavReadcolDoneEvent, readcol_done_ev);
-    if (readcol_done_ev->error) {
-      ctx->ev.error = true;
-      goto done;
-    }
-
-    for (ctx->i = 0; ctx->i < (int) NELEMS(ctx->ce); ++ctx->i) {
-      void *ent = ctx->obj->entry_handler(ctx->obj->entry_handler_ud, ctx->relative_uri, &ctx->ce[ctx->i]);
-      ASSERT_NOT_NULL(ent);
-      ctx->ev.new_stack = linked_list_prepend(ctx->ev.new_stack, ent);
-    }
-  }
-
-  ctx->ev.error = false;
-
- done:
-  if (ctx->col_handle) {
-    UTHR_YIELD(ctx,
-	       webdav_fs_closecol(ctx->obj->fs, ctx->col_handle,
-				  webdav_fs_expand_collection_dfs_callback_uthr, ctx));
-    UTHR_RECEIVE_EVENT(WEBDAV_CLOSECOL_DONE_EVENT, WebdavClosecolDoneEvent, closecol_done_ev);
-    if (closecol_done_ev->error) {
-      /* this kind of error is intolerable */
-      abort();
-    }
-  }
-
-  UTHR_RETURN(ctx,
-	      ctx->cb(WEBDAV_FS_EXPAND_COLLECTION_DFS_CALLBACK_DONE_EVENT, &ctx->ev, ctx->cb_ud));
-
-  UTHR_FOOTER();
-}
-
-static void
-webdav_fs_expand_collection_dfs_callback(void *ud,
-					 void *curnode, linked_list_t ll,
-					 event_handler_t cb, void *cb_ud) {
-  UTHR_CALL5(webdav_fs_expand_collection_dfs_callback_uthr, WebdavFsExpandCollectionDfsCallbackCtx,
-	     .obj = ud,
-	     .relative_uri = curnode,
-	     .ll = ll,
-	     .cb = cb,
-	     .cb_ud = cb_ud);
-}
-
 static EVENT_HANDLER_DECLARE(handle_request);
 static EVENT_HANDLER_DECLARE(handle_copy_request);
 static EVENT_HANDLER_DECLARE(handle_delete_request);
@@ -902,18 +807,6 @@ free_webdav_propfind_entry(WebdavPropfindEntry *pfe) {
   free(pfe);
 }
 
-static void *
-propfind_collection_entry_handler(void *ud, char *parent_uri, WebdavCollectionEntry *ce) {
-  UNUSED(ud);
-  WebdavPropfindEntry *pfe = malloc(sizeof(*pfe));
-  ASSERT_NOT_NULL(pfe);
-  pfe->file_info = ce->file_info;
-  int ret = asprintf(&pfe->path, "%s/%s", parent_uri, ce->name);
-  /* lazy */
-  if (ret < 0) { abort(); }
-  return pfe;
-}
-
 typedef struct {
   bool error;
   linked_list_t entries;
@@ -932,7 +825,9 @@ typedef struct {
   /* ctx */
   RunPropfindDoneEvent ev;
   char *relative_uri;
-  WebdavFsExpandCollectionExtraArgs *dfs_ud;
+  void *handle;
+  WebdavCollectionEntry ce[1];
+  int i;
 } RunPropfindCtx;
 
 static
@@ -946,48 +841,58 @@ UTHR_DEFINE(run_propfind_uthr) {
     goto done;
   }
 
+  /* open the resource */
+  bool create_resource = false;
+  UTHR_YIELD(ctx,
+	     webdav_fs_open(ctx->hc->serv->fs,
+			    ctx->relative_uri, create_resource,
+			    run_propfind_uthr, ctx));
+  UTHR_RECEIVE_EVENT(WEBDAV_OPEN_DONE_EVENT, WebdavOpenDoneEvent, open_done_ev);
+  if (open_done_ev->error) {
+    ctx->ev.error = open_done_ev->error != WEBDAV_ERROR_DOES_NOT_EXIST;
+    ctx->ev.entries = LINKED_LIST_INITIALIZER;
+    goto done;
+  }
+
+  ctx->handle = open_done_ev->file_handle;
+
   /* first get info for root element */
   UTHR_YIELD(ctx,
-	     webdav_fs_stat(ctx->hc->serv->fs,
-			    ctx->relative_uri,
-			    run_propfind_uthr, ctx));
-  UTHR_RECEIVE_EVENT(WEBDAV_STAT_DONE_EVENT, WebdavStatDoneEvent, stat_done_ev);
-  if (stat_done_ev->error) {
-    ctx->ev.error = stat_done_ev->error != WEBDAV_ERROR_DOES_NOT_EXIST;
-    ctx->ev.entries = LINKED_LIST_INITIALIZER;
+	     webdav_fs_fstat(ctx->hc->serv->fs, ctx->handle,
+			     run_propfind_uthr, ctx));
+  UTHR_RECEIVE_EVENT(WEBDAV_FSTAT_DONE_EVENT, WebdavFstatDoneEvent, fstat_done_ev);
+  if (fstat_done_ev->error) {
+    ctx->ev.error = true;
     goto done;
   }
 
   WebdavPropfindEntry *pfe = malloc(sizeof(*pfe));
   ASSERT_NOT_NULL(pfe);
-  pfe->file_info = stat_done_ev->file_info;
+  pfe->file_info = fstat_done_ev->file_info;
   pfe->path = strdup(ctx->relative_uri);
 
   ctx->ev.entries = linked_list_prepend(ctx->ev.entries, pfe);
 
   if (ctx->depth == DEPTH_1 &&
-      stat_done_ev->file_info.is_collection) {
-    ctx->dfs_ud = malloc(sizeof(*ctx->dfs_ud));
-    if (!ctx->dfs_ud) { abort(); }
-    *ctx->dfs_ud = (WebdavFsExpandCollectionExtraArgs) {
-      .fs = ctx->hc->serv->fs,
-      .entry_handler = propfind_collection_entry_handler,
-    };
+      fstat_done_ev->file_info.is_collection) {
+    while (true) {
+      UTHR_YIELD(ctx,
+		 webdav_fs_readcol(ctx->hc->serv->fs, ctx->handle, ctx->ce, NELEMS(ctx->ce),
+				   run_propfind_uthr, ctx));
+      UTHR_RECEIVE_EVENT(WEBDAV_READCOL_DONE_EVENT, WebdavReadcolDoneEvent, readcol_done_ev);
+      if (readcol_done_ev->error) {
+	ctx->ev.error = true;
+	goto done;
+      }
 
-    UTHR_YIELD(ctx,
-	       webdav_fs_expand_collection_dfs_callback(ctx->dfs_ud,
-							ctx->relative_uri,
-							ctx->ev.entries,
-							run_propfind_uthr,
-							ctx));
-    UTHR_RECEIVE_EVENT(WEBDAV_FS_EXPAND_COLLECTION_DFS_CALLBACK_DONE_EVENT,
-		       WebdavFsExpandCollectionDfsCallbackDoneEvent, expand_done_ev);
-
-    free(ctx->dfs_ud);
-
-    if (expand_done_ev->error) {
-      ctx->ev.error = true;
-      goto done;
+      for (ctx->i = 0; ctx->i < (int) NELEMS(ctx->ce); ++ctx->i) {
+	WebdavPropfindEntry *pfe = malloc(sizeof(*pfe));
+	ASSERT_NOT_NULL(pfe);
+	pfe->file_info = ctx->ce->file_info;
+	int ret = asprintf(&pfe->path, "%s/%s", ctx->relative_uri, ctx->ce->name);
+	if (ret < 0) { abort(); }
+	ctx->ev.entries = linked_list_prepend(ctx->ev.entries, pfe);
+      }
     }
   }
 
@@ -997,6 +902,16 @@ UTHR_DEFINE(run_propfind_uthr) {
   if (ctx->ev.error) {
     linked_list_free(ctx->ev.entries,
 		     (linked_list_elt_handler_t) free_webdav_propfind_entry);
+  }
+
+  if (ctx->handle) {
+    UTHR_YIELD(ctx,
+	       webdav_fs_close(ctx->hc->serv->fs, ctx->handle,
+			       run_propfind_uthr, ctx));
+    UTHR_RECEIVE_EVENT(WEBDAV_CLOSE_DONE_EVENT, WebdavCloseDoneEvent, close_done_ev);
+    if (close_done_ev->error) {
+      abort();
+    }
   }
 
   free(ctx->relative_uri);
@@ -3137,6 +3052,15 @@ webdav_fs_write(webdav_fs_t fs, void *file_handle,
 }
 
 void
+webdav_fs_readcol(webdav_fs_t fs,
+		  void *col_handle,
+		  WebdavCollectionEntry *ce, size_t nentries,
+		  event_handler_t cb, void *ud) {
+  return fs->op->readcol(fs->user_data, col_handle, ce, nentries,
+			 cb, ud);
+}
+
+void
 webdav_fs_close(webdav_fs_t fs,
 		void *file_handle,
 		event_handler_t cb, void *cb_ud) {
@@ -3149,30 +3073,6 @@ webdav_fs_mkcol(webdav_fs_t fs,
 		const char *relative_uri,
 		event_handler_t cb, void *cb_ud) {
   return fs->op->mkcol(fs->user_data, relative_uri, cb, cb_ud);
-}
-
-void
-webdav_fs_opencol(webdav_fs_t fs,
-		  const char *relative_uri,
-		  event_handler_t cb, void *cb_ud) {
-  return fs->op->opencol(fs->user_data, relative_uri, cb, cb_ud);
-}
-
-void
-webdav_fs_readcol(webdav_fs_t fs,
-		  void *col_handle,
-		  WebdavCollectionEntry *ce, size_t nentries,
-		  event_handler_t cb, void *ud) {
-  return fs->op->readcol(fs->user_data, col_handle, ce, nentries,
-			 cb, ud);
-}
-
-void
-webdav_fs_closecol(webdav_fs_t fs,
-		   void *col_handle,
-		   event_handler_t cb, void *cb_ud) {
-  return fs->op->closecol(fs->user_data, col_handle,
-			  cb, cb_ud);
 }
 
 void

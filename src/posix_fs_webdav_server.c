@@ -32,20 +32,20 @@ typedef struct {
   size_t base_path_len;
 } PosixFsCtx;
 
+static bool
+is_fd_handle(void *h) {
+  return ((intptr_t) h) & 1;
+}
+
 static int
 file_handle_to_fd(void *fh) {
-  if (!fh) {
-    return -1;
-  }
-  return (int) (fh - (void *) 1);
+  assert(is_fd_handle(fh));
+  return (int) (((intptr_t) fh) >> 1);
 }
 
 static void *
 fd_to_file_handle(int fd) {
-  if (fd < 0) {
-    return NULL;
-  }
-  return (void *) fd + 1;
+  return (void *)((((intptr_t) fd) << 1) | 0x1);
 }
 
 static void
@@ -98,26 +98,39 @@ posix_open(void *fs_handle, const char *relative_uri, bool create,
 
   /* TODO: perhaps use O_NONBLOCK
      (if that even works for files these days) */
-  int fd = open(file_path, O_RDWR | (create ? O_CREAT : 0) | O_CLOEXEC, 0666);
-  if (fd < 0 && errno == EISDIR) {
-    /* can't open a directory for writing */
-    fd = open(file_path, O_RDONLY | O_CLOEXEC);
-  }
+  void *file_handle = NULL;
 
-  if (fd < 0) {
-    log_info("Couldn't open file (%s): %s", file_path, strerror(errno));
-    if (errno == ENOENT) {
-      ev.error = WEBDAV_ERROR_DOES_NOT_EXIST;
+  while (!file_handle) {
+    int fd = open(file_path, O_RDWR | (create ? O_CREAT : 0) | O_CLOEXEC, 0666);
+    if (fd >= 0) {
+      file_handle = fd_to_file_handle(fd);
     }
-    else {
-      ev.error = WEBDAV_ERROR_GENERAL;
+
+    if (!file_handle && errno == EISDIR) {
+      file_handle = opendir(file_path);
+      assert(!is_fd_handle(file_handle));
     }
-    goto done;
+
+    if (!file_handle) {
+      if (errno == ENOENT && create) {
+	/* we tried opening the directory, but it disappeared,
+	   WEBDAV_ERROR_DOES_NOT_EXIST is not a valid response
+	   when create is true */
+	continue;
+      }
+
+      log_info("Couldn't open resource (%s): %s",
+	       file_path, strerror(errno));
+      ev.error = errno == ENOENT
+	? WEBDAV_ERROR_DOES_NOT_EXIST
+	: WEBDAV_ERROR_GENERAL;
+      goto done;
+    }
   }
 
   ev = (WebdavOpenDoneEvent) {
     .error = WEBDAV_ERROR_NONE,
-    .file_handle = fd_to_file_handle(fd),
+    .file_handle = file_handle,
   };
 
  done:
@@ -133,7 +146,13 @@ posix_fstat(void *fs_handle,
   UNUSED(fs_handle);
 
   WebdavFstatDoneEvent ev;
-  int fd = file_handle_to_fd(file_handle);
+  int fd;
+  if (is_fd_handle(file_handle)) {
+    fd = file_handle_to_fd(file_handle);
+  }
+  else {
+    fd = dirfd(file_handle);
+  }
 
   struct stat st;
   int statret = fstat(fd, &st);
@@ -157,8 +176,13 @@ posix_read(void *fs_handle,
 	   void *buf, size_t nbyte,
 	   event_handler_t cb, void *ud) {
   UNUSED(fs_handle);
-
   WebdavReadDoneEvent ev;
+
+  if (!is_fd_handle(file_handle)) {
+    ev.error = WEBDAV_ERROR_IS_COL;
+    goto done;
+  }
+
   int fd = file_handle_to_fd(file_handle);
 
   int ret = read(fd, buf, nbyte);
@@ -184,6 +208,12 @@ posix_write(void *fs_handle,
   UNUSED(fs_handle);
 
   WebdavWriteDoneEvent ev;
+
+  if (!is_fd_handle(file_handle)) {
+    ev.error = WEBDAV_ERROR_IS_COL;
+    goto done;
+  }
+
   int fd = file_handle_to_fd(file_handle);
 
   int ret = write(fd, buf, nbyte);
@@ -202,13 +232,74 @@ posix_write(void *fs_handle,
 }
 
 static void
+posix_readcol(void *fs_handle,
+	      void *col_handle,
+	      WebdavCollectionEntry *ce, size_t nentries,
+	      event_handler_t cb, void *ud) {
+  UNUSED(fs_handle);
+
+  WebdavReadcolDoneEvent ev;
+  if (is_fd_handle(col_handle)) {
+    ev.error = WEBDAV_ERROR_NOT_COLLECTION;
+    goto done;
+  }
+
+  DIR *dirp = col_handle;
+
+  struct dirent entry, *result;
+  size_t i;
+  for (i = 0; i < nentries; ++i) {
+    int ret = readdir_r(dirp, &entry, &result);
+    if (ret) {
+      ev.error = WEBDAV_ERROR_GENERAL;
+      goto done;
+    }
+
+    if (!result) {
+      break;
+    }
+
+    /* TODO: handle this error more gracefully */
+    if (strlen(result->d_name) > sizeof(ce->name) - 1) {
+      ev.error = WEBDAV_ERROR_GENERAL;
+      goto done;
+    }
+
+    strcpy(ce[i].name, result->d_name);
+
+    struct stat st;
+    int fstatat_ret = fstatat(dirfd(dirp), result->d_name, &st, 0);
+    if (fstatat_ret) {
+      ev.error = WEBDAV_ERROR_GENERAL;
+      goto done;
+    }
+
+    fill_file_info(&ce[i].file_info, &st);
+  }
+
+  ev = (WebdavReadcolDoneEvent) {
+    .error = WEBDAV_ERROR_NONE,
+    .nread = i,
+  };
+
+ done:
+  return cb(WEBDAV_READCOL_DONE_EVENT, &ev, ud);
+}
+
+static void
 posix_close(void *fs_handle,
 	    void *file_handle,
 	    event_handler_t cb, void *ud) {
   UNUSED(fs_handle);
 
-  int fd = file_handle_to_fd(file_handle);
-  int ret = close(fd);
+  int ret;
+  if (is_fd_handle(file_handle)) {
+    int fd = file_handle_to_fd(file_handle);
+    ret = close(fd);
+  }
+  else {
+    ret = closedir(file_handle);
+  }
 
   WebdavFstatDoneEvent ev = {
     .error = ret ? WEBDAV_ERROR_GENERAL : WEBDAV_ERROR_NONE,
@@ -271,100 +362,6 @@ posix_mkcol(void *fs_handle, const char *relative_uri,
  done:
   free(file_path);
   return cb(WEBDAV_MKCOL_DONE_EVENT, &ev, ud);
-}
-
-static void
-posix_opencol(void *fs_handle, const char *relative_uri,
-	      event_handler_t cb, void *ud) {
-  WebdavOpencolDoneEvent ev;
-
-  char *file_path = path_from_uri(fs_handle, relative_uri);
-  if (!file_path) {
-    ev.error = WEBDAV_ERROR_NO_MEM;
-    goto done;
-  }
-
-  DIR *dirp = opendir(file_path);
-  if (!dirp) {
-    /* TODO: return more specific error if server requires */
-    ev.error = WEBDAV_ERROR_GENERAL;
-    goto done;
-  }
-
-  ev = (WebdavOpencolDoneEvent) {
-    .error = WEBDAV_ERROR_NONE,
-    .col_handle = dirp,
-  };
-
- done:
-  free(file_path);
-  return cb(WEBDAV_OPENCOL_DONE_EVENT, &ev, ud);
-}
-
-static void
-posix_readcol(void *fs_handle,
-	      void *col_handle,
-	      WebdavCollectionEntry *ce, size_t nentries,
-	      event_handler_t cb, void *ud) {
-  UNUSED(fs_handle);
-
-  WebdavReadcolDoneEvent ev;
-  DIR *dirp = col_handle;
-
-  struct dirent entry, *result;
-  size_t i;
-  for (i = 0; i < nentries; ++i) {
-    int ret = readdir_r(dirp, &entry, &result);
-    if (ret) {
-      ev.error = WEBDAV_ERROR_GENERAL;
-      goto done;
-    }
-
-    if (!result) {
-      break;
-    }
-
-    /* TODO: handle this error more gracefully */
-    if (strlen(result->d_name) > sizeof(ce->name) - 1) {
-      ev.error = WEBDAV_ERROR_GENERAL;
-      goto done;
-    }
-
-    strcpy(ce[i].name, result->d_name);
-
-    struct stat st;
-    int fstatat_ret = fstatat(dirfd(dirp), result->d_name, &st, 0);
-    if (fstatat_ret) {
-      ev.error = WEBDAV_ERROR_GENERAL;
-      goto done;
-    }
-
-    fill_file_info(&ce[i].file_info, &st);
-  }
-
-  ev = (WebdavReadcolDoneEvent) {
-    .error = WEBDAV_ERROR_NONE,
-    .nread = i,
-  };
-
- done:
-  return cb(WEBDAV_READCOL_DONE_EVENT, &ev, ud);
-}
-
-static void
-posix_closecol(void *fs_handle,
-	       void *col_handle,
-	       event_handler_t cb, void *ud) {
-  UNUSED(fs_handle);
-
-  DIR *dirp = col_handle;
-  int ret = closedir(dirp);
-
-  WebdavReadcolDoneEvent ev = {
-    .error = ret ? WEBDAV_ERROR_GENERAL : WEBDAV_ERROR_NONE,
-  };
-
-  return cb(WEBDAV_CLOSECOL_DONE_EVENT, &ev, ud);
 }
 
 static void
@@ -546,11 +543,9 @@ posix_operations = {
   .fstat = posix_fstat,
   .read = posix_read,
   .write = posix_write,
+  .readcol = posix_readcol,
   .close = posix_close,
   .mkcol = posix_mkcol,
-  .opencol = posix_opencol,
-  .readcol = posix_readcol,
-  .closecol = posix_closecol,
   .delete = posix_delete,
   .copy = posix_copy,
   .move = posix_move,

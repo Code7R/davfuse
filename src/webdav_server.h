@@ -71,11 +71,6 @@ typedef struct {
 
 typedef struct {
   webdav_error_t error;
-  void *col_handle;
-} WebdavOpencolDoneEvent;
-
-typedef struct {
-  webdav_error_t error;
   linked_list_t failed_to_delete;
 } WebdavDeleteDoneEvent;
 
@@ -95,7 +90,6 @@ typedef struct {
 
 typedef _WebdavGenericDoneEvent WebdavMkcolDoneEvent;
 typedef _WebdavGenericDoneEvent WebdavCloseDoneEvent;
-typedef _WebdavGenericDoneEvent WebdavClosecolDoneEvent;
 typedef _WebdavGenericDoneEvent WebdavRemoveDoneEvent;
 
 typedef struct {
@@ -104,13 +98,11 @@ typedef struct {
   void (*fstat)(void *, void *, event_handler_t, void *);
   void (*read)(void *, void *, void *, size_t, event_handler_t, void *);
   void (*write)(void *, void *, const void *, size_t, event_handler_t, void *);
+  /* for PROPFIND */
+  void (*readcol)(void *, void *, WebdavCollectionEntry *, size_t, event_handler_t, void *);
   void (*close)(void *, void *, event_handler_t, void *);
   /* for MKCOL */
   void (*mkcol)(void *, const char *relative_uri, event_handler_t, void *);
-  /* for PROPFIND */
-  void (*opencol)(void *, const char *relative_uri, event_handler_t, void *);
-  void (*readcol)(void *, void *, WebdavCollectionEntry *, size_t, event_handler_t, void *);
-  void (*closecol)(void *, void *, event_handler_t cb, void *ud);
   /* for DELETE */
   void (*delete)(void *, const char *relative_uri, event_handler_t, void *);
   /* for COPY  */
@@ -164,6 +156,12 @@ webdav_fs_write(webdav_fs_t fs, void *file_handle,
 		event_handler_t cb, void *cb_ud);
 
 void
+webdav_fs_readcol(webdav_fs_t fs,
+		  void *col_handle,
+		  WebdavCollectionEntry *ce, size_t nentries,
+		  event_handler_t cb, void *ud);
+
+void
 webdav_fs_close(webdav_fs_t fs,
 		void *file_handle,
 		event_handler_t cb, void *cb_ud);
@@ -172,22 +170,6 @@ void
 webdav_fs_mkcol(webdav_fs_t fs,
 		const char *relative_uri,
 		event_handler_t cb, void *cb_ud);
-
-void
-webdav_fs_opencol(webdav_fs_t fs,
-		  const char *relative_uri,
-		  event_handler_t cb, void *cb_ud);
-
-void
-webdav_fs_readcol(webdav_fs_t fs,
-		  void *col_handle,
-		  WebdavCollectionEntry *ce, size_t nentries,
-		  event_handler_t cb, void *ud);
-
-void
-webdav_fs_closecol(webdav_fs_t fs,
-		   void *col_handle,
-		   event_handler_t cb, void *cb_ud);
 
 void
 webdav_fs_delete(webdav_fs_t fs,
