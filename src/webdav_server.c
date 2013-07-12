@@ -454,19 +454,6 @@ typedef enum {
   IF_LOCK_TOKEN_ERR_INTERNAL,
 } if_lock_token_err_t;
 
-static char *
-create_str_copy(const char *in, size_t len) {
-  assert(strlen(in) >= len);
-  char *out = malloc(len + 1);
-  if (!out) {
-    return NULL;
-  }
-
-  memcpy(out, in, len);
-  out[len] = '\0';
-  return out;
-}
-
 static if_lock_token_err_t
 webdav_get_if_lock_token(const HTTPRequestHeaders *rhs, char **resource_tag, char **lock_token) {
   const char *if_header = http_get_header_value(rhs, WEBDAV_HEADER_IF);
@@ -490,7 +477,7 @@ webdav_get_if_lock_token(const HTTPRequestHeaders *rhs, char **resource_tag, cha
 
     size_t len_of_uri = end_of_uri - (if_header + i);
     *resource_tag =
-      create_str_copy(if_header + i, len_of_uri);
+      strndup_x(if_header + i, len_of_uri);
 
     if (!*resource_tag) {
       return IF_LOCK_TOKEN_ERR_INTERNAL;
@@ -526,7 +513,7 @@ webdav_get_if_lock_token(const HTTPRequestHeaders *rhs, char **resource_tag, cha
     return IF_LOCK_TOKEN_ERR_BAD_PARSE;
   }
   *lock_token =
-    create_str_copy(if_header + i, end_of_uri - (if_header + i));
+    strndup_x(if_header + i, end_of_uri - (if_header + i));
   if (!*lock_token) {
     free(*resource_tag);
     return IF_LOCK_TOKEN_ERR_INTERNAL;
@@ -2970,8 +2957,8 @@ parse_lock_token_header(const char *lock_token_header,
     strchr(lock_token_header + i, ASCII_RIGHT_BRACKET);
 
   *lock_token =
-    create_str_copy(lock_token_header + i,
-                    right_bracket_location - (lock_token_header + i));
+    strndup_x(lock_token_header + i,
+              right_bracket_location - (lock_token_header + i));
   if (!*lock_token) {
     return IF_LOCK_TOKEN_ERR_INTERNAL;
   }
