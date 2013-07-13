@@ -364,7 +364,7 @@ path_from_uri(struct handler_context *hc, const char *uri) {
 
   /* if uri ends with '/' shave it off */
   size_t len = strlen(real_uri);
-  if (real_uri[len - 1] == '/') {
+  if (real_uri[len - 1] == '/' && len != 1) {
     len -= 1;
   }
 
@@ -376,11 +376,15 @@ static char *
 uri_from_path(struct handler_context *hc, const char *path) {
   /* TODO: urlencode `path` */
   assert(path[0] == '/');
+  assert(path[1] == '\0' || path[strlen(path) - 1] != '/');
 
   /* NB: we intentionally do not use `asprintf()` */
+  if (str_equals(path, "/")) {
+    return strdup_x(hc->serv->public_prefix);
+  }
 
-  size_t public_prefix_len = strlen(hc->serv->public_prefix);
-  size_t path_len = strlen(path) - 1;
+  size_t public_prefix_len = strlen(hc->serv->public_prefix) - 1;
+  size_t path_len = strlen(path);
 
   char *real_uri = malloc(public_prefix_len + path_len + 1);
   if (!real_uri) {
@@ -887,24 +891,34 @@ UTHR_DEFINE(run_propfind_uthr) {
         goto done;
       }
 
-      for (ctx->i = 0; ctx->i < (int) NELEMS(ctx->ce); ++ctx->i) {
+      if (!readcol_done_ev->nread) {
+        break;
+      }
+
+      size_t relative_uri_len = strlen(ctx->relative_uri);
+      for (ctx->i = 0; ctx->i < (int) readcol_done_ev->nread; ++ctx->i) {
         WebdavCollectionEntry *ce = &ctx->ce[ctx->i];
         WebdavPropfindEntry *pfe = malloc(sizeof(*pfe));
         ASSERT_NOT_NULL(pfe);
         pfe->file_info = ce->file_info;
 
-        /* TODO: move this out of the loop if it matters,
-           although optimization should be smart enough */
-        size_t relative_uri_len = strlen(ctx->relative_uri);
         size_t name_len = strlen(ce->name);
-
-        /* NB: intentionally don't use `asprintf()` */
-        pfe->path = malloc(relative_uri_len + 1 + name_len + 1);
-        if (!pfe->path) { abort(); }
-        memcpy(pfe->path, ctx->relative_uri, relative_uri_len);
-        pfe->path[relative_uri_len] = '/';
-        memcpy(pfe->path + relative_uri_len + 1, ce->name, name_len);
-        pfe->path[relative_uri_len + 1 + name_len] = '\0';
+        if (str_equals(ctx->relative_uri, "/")) {
+          pfe->path = malloc(1 + name_len + 1);
+          if (!pfe->path) { abort(); }
+          pfe->path[0] = '/';
+          memcpy(&pfe->path[1], ce->name, name_len);
+          pfe->path[name_len + 1] = '\0';
+        }
+        else {
+          /* NB: intentionally don't use `asprintf()` */
+          pfe->path = malloc(relative_uri_len + 1 + name_len + 1);
+          if (!pfe->path) { abort(); }
+          memcpy(pfe->path, ctx->relative_uri, relative_uri_len);
+          pfe->path[relative_uri_len] = '/';
+          memcpy(pfe->path + relative_uri_len + 1, ce->name, name_len);
+          pfe->path[relative_uri_len + 1 + name_len] = '\0';
+        }
 
         ctx->ev.entries = linked_list_prepend(ctx->ev.entries, pfe);
       }

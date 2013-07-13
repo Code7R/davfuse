@@ -262,6 +262,11 @@ posix_readcol(void *fs_handle,
       break;
     }
 
+    if (str_equals(".", result->d_name) ||
+        str_equals("..", result->d_name)) {
+      continue;
+    }
+
     /* TODO: handle this error more gracefully */
     if (strlen(result->d_name) > sizeof(ce->name) - 1) {
       ev.error = WEBDAV_ERROR_GENERAL;
