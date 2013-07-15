@@ -1,3 +1,14 @@
+/*
+  An async HTTP server
+ */
+#define _ISOC99_SOURCE
+
+/*
+  TODO:
+  * Support transfer encoding chunked
+  * Remove strict dependency on POSIX/file descriptors (accept()/close()/listen())
+ */
+
 #include <errno.h>
 #include <sys/socket.h>
 #include <unistd.h>
