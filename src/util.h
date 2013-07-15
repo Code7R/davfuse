@@ -50,6 +50,9 @@ skip_ws(const char *str);
 PURE_FUNCTION bool
 str_startswith(const char *a, const char *b);
 
+PURE_FUNCTION bool
+str_endswith(const char *a, const char *b);
+
 PURE_FUNCTION char *
 strdup_x(const char *s);
 

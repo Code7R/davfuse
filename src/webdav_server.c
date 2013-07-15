@@ -375,25 +375,45 @@ path_from_uri(struct handler_context *hc, const char *uri) {
 static char *
 uri_from_path(struct handler_context *hc, const char *path) {
   /* TODO: urlencode `path` */
-  assert(path[0] == '/');
-  assert(path[1] == '\0' || path[strlen(path) - 1] != '/');
+  assert(str_startswith(path, "/"));
+  assert(str_equals(path, "/") || !str_endswith(path, "/"));
 
-  /* NB: we intentionally do not use `asprintf()` */
-  if (str_equals(path, "/")) {
-    return strdup_x(hc->serv->public_prefix);
+  const char *request_uri = hc->rhs.uri;
+
+  /* NB: we should always be generating urls for paths
+     that are descendants of the request uri */
+
+  char *prefix = hc->serv->public_prefix;
+  char *real_uri;
+  if (str_startswith(request_uri, "/")) {
+    /* request uri was in relative format, generate a relative uri */
+    char *slashslash = strstr(hc->serv->public_prefix, "//");
+    prefix = strchr(slashslash + 2, '/');
   }
 
-  size_t public_prefix_len = strlen(hc->serv->public_prefix) - 1;
+  size_t prefix_len = strlen(prefix);
   size_t path_len = strlen(path);
 
-  char *real_uri = malloc(public_prefix_len + path_len + 1);
+  /* make extra space for a trailing space */
+  real_uri = malloc(prefix_len - 1 + path_len + 1 + 1);
   if (!real_uri) {
     return NULL;
   }
 
-  memcpy(real_uri, hc->serv->public_prefix, public_prefix_len);
-  memcpy(real_uri + public_prefix_len, path, path_len);
-  real_uri[public_prefix_len + path_len] = '\0';
+  memcpy(real_uri, prefix, prefix_len - 1);
+  memcpy(real_uri + prefix_len - 1, path, path_len);
+  real_uri[prefix_len - 1 + path_len] = '\0';
+
+  if (!str_startswith(real_uri, request_uri)) {
+    /* add trailing slash to catch case where request uri
+       has a trailing slash
+    */
+    real_uri[prefix_len - 1 + path_len] = '/';
+    real_uri[prefix_len - 1 + path_len + 1] = '\0';
+  }
+
+  /* 8.3 URL Handling, RFC 4918 */
+  assert(str_startswith(real_uri, request_uri));
 
   return real_uri;
 }
@@ -436,6 +456,7 @@ enum {
   ASCII_HT = 9,
   ASCII_LEFT_PAREN = 40,
   ASCII_RIGHT_PAREN = 41,
+  ASCII_SLASH = 47,
   ASCII_LEFT_BRACKET = 60,
   ASCII_RIGHT_BRACKET = 62,
 };

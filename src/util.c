@@ -108,6 +108,17 @@ str_startswith(const char *a, const char *b) {
   return !memcmp(a, b, len_b);
 }
 
+PURE_FUNCTION bool
+str_endswith(const char *a, const char *b) {
+  size_t len_a = strlen(a);
+  size_t len_b = strlen(b);
+  if (len_a < len_b) {
+    return false;
+  }
+
+  return !memcmp(a + len_a - len_b, b, len_b);
+}
+
 PURE_FUNCTION char *
 strdup_x(const char *s) {
   size_t len = strlen(s);
