@@ -152,11 +152,27 @@ typedef enum {
   HTTP_REQUEST_WRITE_STATE_DONE,
 } http_request_write_state_t;
 
+typedef struct {
+  /* args */
+  event_handler_t cb;
+  void *cb_ud;
+  void *input_buf;
+  size_t input_nbyte;
+  size_t input_buf_offset;
+  /* ctx */
+  coroutine_position_t pos;
+  char var_buf[4096];
+  size_t chunk_size;
+  size_t chunk_read;
+  size_t amt_parsed;
+} ChunkedCoroCtx;
+
 struct _http_request_context {
   HTTPConnection *conn;
   HTTPRequestHeaders rh;
   http_request_write_state_t write_state;
   http_request_read_state_t read_state;
+  bool is_chunked_request;
   size_t content_length;
   size_t bytes_read;
   size_t out_content_length;
@@ -165,6 +181,7 @@ struct _http_request_context {
   union {
     ReadRequestState rrs;
     WriteResponseState rws;
+    ChunkedCoroCtx chunked_coro_ctx;
   } sub;
 };
 

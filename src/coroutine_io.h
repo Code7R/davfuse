@@ -243,4 +243,11 @@ match_digit(char c) {
   return '0' <= c && c <= '9';
 }
 
+HEADER_FUNCTION CONST_FUNCTION bool
+match_hex_digit(char c) {
+  return (('0' <= c && c <= '9') ||
+          ('a' <= c && c <= 'f') ||
+          ('A' <= c && c <= 'F'));
+}
+
 #endif /* COROUTINE_IO_H */

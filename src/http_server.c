@@ -5,7 +5,6 @@
 
 /*
   TODO:
-  * Support transfer encoding chunked
   * Remove strict dependency on POSIX/file descriptors (accept()/close()/listen())
  */
 
@@ -44,6 +43,7 @@ const char *const HTTP_HEADER_CONNECTION = "Connection";
 const char *const HTTP_HEADER_CONTENT_LENGTH = "Content-Length";
 const char *const HTTP_HEADER_CONTENT_TYPE = "Content-Type";
 const char *const HTTP_HEADER_HOST = "Host";
+const char *const HTTP_HEADER_TRANSFER_ENCODING = "Transfer-Encoding";
 
 /* static forward decls */
 static
@@ -168,11 +168,204 @@ EVENT_HANDLER_DEFINE(_handle_request_read, ev_type, ev, ud) {
   rrs->cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, rrs->cb_ud);
 }
 
+static
+EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
+  HTTPRequestContext *rctx = ud;
+  ChunkedCoroCtx *cctx = &rctx->sub.chunked_coro_ctx;
+
+  /* if this coroutine is running, it should be returning data to
+     someone */
+  assert(cctx->cb);
+
+#define EXPECT(s)                                               \
+  do {                                                          \
+    assert(strlen(s) < sizeof(cctx->var_buf));                  \
+    CRYIELD(cctx->pos,                                          \
+            c_read(rctx->conn->server->loop, &rctx->conn->f,    \
+                   cctx->var_buf, strlen(s),                    \
+                   _chunked_request_coro, ud));                 \
+    assert(ev_type == C_READ_DONE_EVENT);                       \
+    CReadDoneEvent *c_read_done_ev = ev;                        \
+    if (c_read_done_ev->error_number ||                         \
+        c_read_done_ev->nbyte != strlen(s) ||                   \
+        memcmp(s, cctx->var_buf, strlen(s))) {                  \
+      log_info("Was expecting: %s but didn't get it", s);       \
+      goto error;                                               \
+    }                                                           \
+  }                                                             \
+  while (false)
+
+  CRBEGIN(cctx->pos);
+
+  while (true) {
+    /* read out hex digit */
+    CRYIELD(cctx->pos,
+            c_getwhile(rctx->conn->server->loop,
+                       &rctx->conn->f,
+                       cctx->var_buf, sizeof(cctx->var_buf) - 1,
+                       match_hex_digit,
+                       &cctx->amt_parsed,
+                       _chunked_request_coro, ud));
+    assert(C_GETWHILE_DONE_EVENT == ev_type);
+    assert(cctx->amt_parsed <= sizeof(cctx->var_buf) - 1);
+
+    if (!cctx->amt_parsed) {
+      /* nothing was parsed, either EOF or wrong character */
+      log_info("There was no chunk size to be parsed!");
+      goto error;
+    }
+
+    cctx->var_buf[cctx->amt_parsed] = '\0';
+    intmax_t chunk_size  = strtoll(cctx->var_buf, NULL, 16);
+    /* since we used `match_hex_digit`, we couldn't have had
+       an invalid input */
+    assert(!(!chunk_size && errno == EINVAL));
+
+    if (chunk_size < 0 || ((uintmax_t) chunk_size) > SIZE_MAX) {
+      log_info("Chunk size is too large: %jd", chunk_size);
+      goto error;
+    }
+
+    cctx->chunk_size = (size_t) chunk_size;
+
+    /* TODO: read 'chunk-extension' */
+
+    /* read CRLF */
+    EXPECT("\r\n");
+
+    if (!cctx->chunk_size) {
+      /* no more chunks */
+      break;
+    }
+
+    cctx->chunk_read = 0;
+
+    /* read chunk */
+    while (cctx->chunk_read < cctx->chunk_size) {
+      CRYIELD(cctx->pos,
+              c_read(rctx->conn->server->loop, &rctx->conn->f,
+                     cctx->input_buf + cctx->input_buf_offset,
+                     min_size_t(cctx->input_nbyte - cctx->input_buf_offset,
+                                cctx->chunk_size - cctx->chunk_read),
+                     _chunked_request_coro, ud));
+      assert(ev_type == C_READ_DONE_EVENT);
+      CReadDoneEvent *c_read_done_ev = ev;
+      if (c_read_done_ev->error_number) {
+        log_info("Error while reading from buffer");
+        goto error;
+      }
+
+      if (!c_read_done_ev->nbyte) {
+        log_info("Premature EOF");
+        goto error;
+      }
+
+      cctx->chunk_read += c_read_done_ev->nbyte;
+
+      cctx->input_buf_offset += c_read_done_ev->nbyte;
+      if (cctx->input_buf_offset == cctx->input_nbyte) {
+        /* we read enough to satisfy the reader */
+        HTTPRequestReadDoneEvent read_done_ev = {
+          .request_handle = rctx,
+          .err = HTTP_SUCCESS,
+          .nbyte = cctx->input_buf_offset,
+        };
+        /* reset arguments */
+        event_handler_t cb = cctx->cb;
+        cctx->cb = NULL;
+        CRYIELD(cctx->pos,
+                cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, cctx->cb_ud));
+        assert(ev_type == GENERIC_EVENT);
+        /* we're starting new */
+        assert(!cctx->input_buf_offset);
+      }
+    }
+
+    /* read CRLF */
+    EXPECT("\r\n");
+  }
+
+  /* TODO: read trailing headers */
+
+  EXPECT("\r\n");
+
+  if (false) {
+  error:
+    /* there was an error, we are persistently in a bad state */
+    while (true) {
+      HTTPRequestReadDoneEvent read_done_ev = {
+        .request_handle = rctx,
+        .err = HTTP_GENERIC_ERROR,
+        .nbyte = 0,
+      };
+      /* reset arguments */
+      event_handler_t cb = cctx->cb;
+      cctx->cb = NULL;
+
+      rctx->last_error_number = 1;
+      CRYIELD(cctx->pos,
+              cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, cctx->cb_ud));
+      assert(ev_type == GENERIC_EVENT);
+      assert(!cctx->input_buf_offset);
+    }
+  }
+
+  /* no more data, just keep returning EOF */
+  while (true) {
+    /* we read enough to satisfy the reader */
+    HTTPRequestReadDoneEvent read_done_ev = {
+      .request_handle = rctx,
+      .err = HTTP_SUCCESS,
+      .nbyte = cctx->input_buf_offset,
+    };
+    /* reset arguments */
+    event_handler_t cb = cctx->cb;
+    cctx->cb = NULL;
+    CRYIELD(cctx->pos,
+            cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, cctx->cb_ud));
+    assert(ev_type == GENERIC_EVENT);
+    /* we're starting new */
+    assert(!cctx->input_buf_offset);
+  }
+
+  CREND();
+
+#undef EXPECT
+}
+
 void
 http_request_read(http_request_handle_t rh,
                   void *buf, size_t nbyte,
                   event_handler_t cb, void *cb_ud) {
   HTTPRequestContext *rctx = rh;
+
+  if (rctx->read_state != HTTP_REQUEST_READ_STATE_READ_HEADERS) {
+    /* haven't yet read the headers, this was called out of order */
+    HTTPRequestReadDoneEvent read_done_ev = {
+      .request_handle = rh,
+      .err = HTTP_GENERIC_ERROR,
+    };
+    return cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, cb_ud);
+  }
+
+  if (rctx->is_chunked_request) {
+    /* enter chunked request coroutine */
+    ChunkedCoroCtx *cctx = &rctx->sub.chunked_coro_ctx;
+    if (cctx->cb) {
+      /* if already in the coroutine, error out */
+      HTTPRequestReadDoneEvent read_done_ev = {
+        .request_handle = rh,
+        .err = HTTP_GENERIC_ERROR,
+      };
+      return cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, cb_ud);
+    }
+    cctx->cb = cb;
+    cctx->cb_ud = cb_ud;
+    cctx->input_buf = buf;
+    cctx->input_nbyte = nbyte;
+    cctx->input_buf_offset = 0;
+    return _chunked_request_coro(GENERIC_EVENT, NULL, rctx);
+  }
 
   rctx->sub.rrs = (ReadRequestState) {
     .request_context = rh,
@@ -549,8 +742,7 @@ UTHR_DEFINE(client_coroutine) {
     /* read out all data if it was ignored */
     if (!cc->rctx.last_error_number &&
         cc->rctx.read_state == HTTP_REQUEST_READ_STATE_READ_HEADERS) {
-      while (!cc->rctx.last_error_number &&
-             cc->rctx.bytes_read < cc->rctx.content_length) {
+      while (true) {
         UTHR_YIELD(cc,
                    http_request_read(&cc->rctx, cc->spare.buffer,
                                      MIN(cc->rctx.content_length - cc->rctx.bytes_read,
@@ -558,12 +750,9 @@ UTHR_DEFINE(client_coroutine) {
                                      client_coroutine, cc));
         assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_READ_DONE_EVENT);
         HTTPRequestReadDoneEvent *read_done_ev = UTHR_EVENT();
-        if (read_done_ev->nbyte == 0) {
-          /* EOF */
+        if (read_done_ev->err || !read_done_ev->nbyte) {
           break;
         }
-
-        /* cc->rctx.bytes_read is incremented in `http_request_read()` */
       }
     }
 
@@ -579,8 +768,7 @@ UTHR_DEFINE(client_coroutine) {
     /* write out rest of garbage if request ended prematurely */
     if (!cc->rctx.last_error_number &&
         cc->rctx.write_state == HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS) {
-      while (!cc->rctx.last_error_number &&
-             cc->rctx.bytes_written < cc->rctx.out_content_length) {
+      while (cc->rctx.bytes_written < cc->rctx.out_content_length) {
         /* initted to zero because static */
         static char bytes[4096];
         /* just writing bytes */
@@ -588,7 +776,11 @@ UTHR_DEFINE(client_coroutine) {
                    http_request_write(&cc->rctx, bytes, sizeof(bytes),
                                       client_coroutine, cc));
         assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_WRITE_DONE_EVENT);
+        HTTPRequestWriteDoneEvent *write_done_ev = UTHR_EVENT();
         /* bytes_written is incremented in http_request_write */
+        if (write_done_ev->err) {
+          break;
+        }
       }
     }
 
@@ -784,27 +976,39 @@ UTHR_DEFINE(c_get_request) {
   if (!err) {
     /* okay at this point we have the headers, make sure it's something
        we support */
-    /* TODO: support 'chunked' encoding */
-    if (http_get_header_value(state->request_headers, "transfer-encoding")) {
+    const char *transfer_encoding_str = http_get_header_value(state->request_headers, HTTP_HEADER_TRANSFER_ENCODING);
+    const char *content_length_str = http_get_header_value(state->request_headers, HTTP_HEADER_CONTENT_LENGTH);
+    if (transfer_encoding_str && content_length_str) {
+      log_info("Client specified both Transfer-Encoding header and Content-Length header");
       err = HTTP_GENERIC_ERROR;
     }
-    else {
-      /* get the "Content-Length" header */
-      const char *content_length_str = http_get_header_value(state->request_headers, HTTP_HEADER_CONTENT_LENGTH);
-      if (content_length_str) {
-        long converted_content_length = strtol(content_length_str, NULL, 10);
-        if (converted_content_length > 0 ||
-            (converted_content_length == 0 && errno != EINVAL)) {
-          state->rh->content_length = converted_content_length;
-        }
-        else {
-          err = HTTP_GENERIC_ERROR;
-        }
+    else if (transfer_encoding_str) {
+      if (!ascii_strcaseequal(transfer_encoding_str, "chunked")) {
+        log_info("Server does not support \"%s\" encoding", transfer_encoding_str);
+        err = HTTP_GENERIC_ERROR;
       }
       else {
-        /* if there is no data header, treat it as zero-length body */
-        state->rh->content_length = 0;
+        state->rh->is_chunked_request = true;
+        state->rh->sub.chunked_coro_ctx.pos = CORO_POS_INIT;
+        state->rh->sub.chunked_coro_ctx.cb = NULL;
       }
+    }
+    else if (content_length_str) {
+      /* get the "Content-Length" header */
+      long converted_content_length = strtol(content_length_str, NULL, 10);
+      if (converted_content_length > 0 ||
+          (converted_content_length == 0 && errno != EINVAL)) {
+        state->rh->is_chunked_request = false;
+        state->rh->content_length = converted_content_length;
+      }
+      else {
+        err = HTTP_GENERIC_ERROR;
+      }
+    }
+    else {
+      /* if there is no data header, treat it as zero-length body */
+      state->rh->is_chunked_request = false;
+      state->rh->content_length = 0;
     }
   }
 
