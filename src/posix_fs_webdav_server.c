@@ -250,8 +250,8 @@ posix_readcol(void *fs_handle,
   DIR *dirp = col_handle;
 
   struct dirent entry, *result;
-  size_t i;
-  for (i = 0; i < nentries; ++i) {
+  size_t i = 0;
+  while (i < nentries) {
     int ret = readdir_r(dirp, &entry, &result);
     if (ret) {
       ev.error = WEBDAV_ERROR_GENERAL;
@@ -283,6 +283,7 @@ posix_readcol(void *fs_handle,
     }
 
     fill_file_info(&ce[i].file_info, &st);
+    ++i;
   }
 
   ev = (WebdavReadcolDoneEvent) {

@@ -113,6 +113,7 @@ struct handler_context {
       char buf[BUF_SIZE];
       void *file_handle;
       char *resource_uri;
+      size_t total_read;
     } get;
     struct lock_context {
       coroutine_position_t pos;
@@ -165,6 +166,7 @@ struct handler_context {
       size_t response_body_len;
       size_t amount_read;
       size_t amount_written;
+      size_t total_amount_transferred;
     } put;
     struct {
       coroutine_position_t pos;
@@ -924,6 +926,8 @@ UTHR_DEFINE(run_propfind_uthr) {
         pfe->file_info = ce->file_info;
 
         size_t name_len = strlen(ce->name);
+        assert(name_len);
+
         if (str_equals(ctx->relative_uri, "/")) {
           pfe->path = malloc(1 + name_len + 1);
           if (!pfe->path) { abort(); }
@@ -1434,6 +1438,7 @@ UTHR_DEFINE(request_proc) {
   UNUSED(read_headers_ev);
   assert(read_headers_ev->request_handle == hc->rh);
   if (read_headers_ev->err != HTTP_SUCCESS) {
+    log_info("Reading headers failed: %d", (int) read_headers_ev->err);
     goto done;
   }
 
@@ -1810,6 +1815,7 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   log_debug("Sending file %s, length: %s", &hc->rhs.uri[1], hc->resp.headers[0].value);
 
   /* TODO: must send up to the content-length we sent */
+  ctx->total_read = 0;
   while (true) {
     CRYIELD(ctx->pos,
             webdav_fs_read(hc->serv->fs, ctx->file_handle,
@@ -1825,11 +1831,14 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
     ssize_t amt_read = read_done_ev->nbyte;
     if (!amt_read) {
       /* EOF */
-      log_debug("EOF done reading file; %zu", sizeof(ctx->buf));
+      log_debug("EOF done reading file; total read: %zu", ctx->total_read);
       break;
     }
 
     log_debug("Sending %zd bytes", amt_read);
+
+    /* NB: eagerly increment this since the yield will lose the amt_read local */
+    ctx->total_read += amt_read;
 
     /* now write to socket */
     CRYIELD(ctx->pos,
@@ -2576,6 +2585,11 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
     goto done;
   }
 
+  if (!run_propfind_ev->entries) {
+    status_code = HTTP_STATUS_CODE_NOT_FOUND;
+    goto done;
+  }
+
   /* now generate response */
   bool success_generate =
     generate_propfind_response(hc,
@@ -2876,7 +2890,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
       log_error("Couldn't open resource (%d) at %s",
                 open_done_ev->error,
                 ctx->request_relative_uri);
-      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     }
     goto done;
   }
@@ -2903,6 +2917,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
     goto done;
   }
 
+  ctx->total_amount_transferred = 0;
   while (true) {
     CRYIELD(ctx->pos,
             http_request_read(hc->rh,
@@ -2937,7 +2952,13 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
       }
       ctx->amount_written += write_done_ev->nbyte;
     }
+
+    assert(ctx->amount_written == ctx->amount_read);
+    ctx->total_amount_transferred += ctx->amount_written;
   }
+
+  log_info("Resource \"%s\" created with %zu bytes",
+           ctx->request_relative_uri, ctx->total_amount_transferred);
 
   status_code = ctx->resource_existed
     ? HTTP_STATUS_CODE_OK
