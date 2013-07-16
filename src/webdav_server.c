@@ -5,7 +5,6 @@
 
 /*
   TODO:
-  * Fix lock owner XML preservation (perform_write_lock()/refresh_lock())
   * Percent encoding/decoding of URIs (path_from_uri()/uri_from_path())
   * Support 'If-Modified-Since'
  */
@@ -44,6 +43,18 @@ static const char *const WEBDAV_HEADER_LOCK_TOKEN = "Lock-Token";
 static const char *const WEBDAV_HEADER_OVERWRITE = "Overwrite";
 static const char *const WEBDAV_HEADER_TIMEOUT = "Timeout";
 
+typedef xmlNodePtr owner_xml_t;
+
+static void
+owner_xml_free(owner_xml_t a) {
+  xmlFreeNode(a);
+}
+
+static owner_xml_t
+owner_xml_copy(owner_xml_t a) {
+  return xmlCopyNode(a, 1);
+}
+
 enum {
   BUF_SIZE=4096,
 };
@@ -72,7 +83,7 @@ typedef struct {
   char *path;
   webdav_depth_t depth;
   bool is_exclusive;
-  char *owner_xml;
+  owner_xml_t owner_xml;
   char *lock_token;
   webdav_timeout_t timeout_in_seconds;
 } WebdavLockDescriptor;
@@ -132,7 +143,7 @@ struct handler_context {
       size_t request_body_len;
       linked_list_t headers;
       char *file_path;
-      char *owner_xml;
+      owner_xml_t owner_xml;
       char *resource_tag;
       char *resource_tag_path;
       char *refresh_uri;
@@ -567,7 +578,7 @@ static void
 free_webdav_lock_descriptor(void *ld) {
   WebdavLockDescriptor *wdld = ld;
   free(wdld->path);
-  free(wdld->owner_xml);
+  owner_xml_free(wdld->owner_xml);
   free(wdld->lock_token);
   free(ld);
 }
@@ -578,7 +589,7 @@ perform_write_lock(struct webdav_server *ws,
                    webdav_timeout_t timeout_in_seconds,
                    webdav_depth_t depth,
                    bool is_exclusive,
-                   const char *owner_xml,
+                   owner_xml_t owner_xml,
                    bool *is_locked,
                    const char **lock_token,
                    const char **status_path) {
@@ -621,7 +632,7 @@ perform_write_lock(struct webdav_server *ws,
     .path = strdup_x(file_path),
     .depth = depth,
     .is_exclusive = is_exclusive,
-    .owner_xml = strdup_x(owner_xml),
+    .owner_xml = owner_xml_copy(owner_xml),
     .lock_token = strdup_x(s_lock_token),
     .timeout_in_seconds = timeout_in_seconds,
   };
@@ -671,7 +682,7 @@ refresh_lock(struct webdav_server *ws,
              const char *file_path, const char *lock_token,
              webdav_timeout_t new_timeout,
              bool *refreshed,
-             char **owner_xml, bool *is_exclusive,
+             owner_xml_t *owner_xml, bool *is_exclusive,
              webdav_depth_t *depth) {
   *refreshed = false;
 
@@ -1905,7 +1916,7 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
 
 static bool
 parse_lock_request_body(const char *body, size_t body_len,
-                        bool *is_exclusive, char **owner_xml);
+                        bool *is_exclusive, owner_xml_t *owner_xml);
 
 static bool
 generate_failed_lock_response_body(struct handler_context *hc,
@@ -1921,7 +1932,7 @@ generate_success_lock_response_body(struct handler_context *hc,
                                     webdav_timeout_t timeout_in_seconds,
                                     webdav_depth_t depth,
                                     bool is_exclusive,
-                                    const char *owner_xml,
+                                    const owner_xml_t owner_xml,
                                     const char *lock_token,
                                     bool created,
                                     http_status_code_t *status_code,
@@ -2002,7 +2013,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   if (!ctx->request_body &&
       if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS &&
       str_equals(ctx->resource_tag_path, ctx->file_path)) {
-    char *owner_xml_not_owned;
+    owner_xml_t owner_xml_not_owned;
     bool is_exclusive;
     webdav_depth_t depth;
     bool refreshed;
@@ -2149,7 +2160,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
 
   free(ctx->request_body);
   free(ctx->file_path);
-  free(ctx->owner_xml);
+  owner_xml_free(ctx->owner_xml);
   free(ctx->resource_tag);
   free(ctx->resource_tag_path);
   free(ctx->refresh_uri);
@@ -2180,10 +2191,11 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
 
 static bool
 parse_lock_request_body(const char *body, size_t body_len,
-                        bool *is_exclusive, char **owner_xml) {
+                        bool *is_exclusive, owner_xml_t *owner_xml) {
   UNUSED(body);
   UNUSED(is_exclusive);
   UNUSED(owner_xml);
+
   bool toret = true;
   bool saw_lockscope = false;
   bool saw_locktype = false;
@@ -2216,12 +2228,7 @@ parse_lock_request_body(const char *body, size_t body_len,
     }
     else if (node_is(child, DAV_XML_NS, "owner") &&
              child->children) {
-      xmlBufferPtr buf = xmlBufferCreate();
-      int format_level = 0;
-      int should_format = 0;
-      xmlNodeDump(buf, doc, child->children, format_level, should_format);
-      *owner_xml = strdup_x(STR(xmlBufferContent(buf)));
-      xmlBufferFree(buf);
+      *owner_xml = xmlCopyNode(child->children, 1);
     }
   }
 
@@ -2229,7 +2236,7 @@ parse_lock_request_body(const char *body, size_t body_len,
   error:
     /* in case we found an owner */
     if (*owner_xml) {
-      free(*owner_xml);
+      owner_xml_free(*owner_xml);
       *owner_xml = NULL;
     }
     toret = false;
@@ -2316,7 +2323,7 @@ generate_success_lock_response_body(struct handler_context *hc,
                                     webdav_timeout_t timeout_in_seconds,
                                     webdav_depth_t depth,
                                     bool is_exclusive,
-                                    const char *owner_xml,
+                                    const owner_xml_t owner_xml,
                                     const char *lock_token,
                                     bool created,
                                     http_status_code_t *status_code,
@@ -2366,8 +2373,11 @@ generate_success_lock_response_body(struct handler_context *hc,
 
   if (owner_xml) {
     /* TODO: need to make sure owner_xml conforms to XML */
-    xmlNodePtr owner_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("owner"), XMLSTR(owner_xml));
+    xmlNodePtr owner_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("owner"), NULL);
     ASSERT_NOT_NULL(owner_elt);
+    xmlNodePtr owner_xml_2 = xmlCopyNode(owner_xml, 1);
+    xmlAddChild(owner_elt, owner_xml_2);
+    xmlReconciliateNs(xml_response, owner_xml_2);
   }
 
   const char *timeout_str;
