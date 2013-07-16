@@ -177,8 +177,6 @@ struct handler_context {
       size_t amount_written;
       size_t total_amount_transferred;
     } put;
-    struct {
-    } unlock;
   } sub;
 };
 
