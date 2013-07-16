@@ -155,27 +155,32 @@ EVENT_HANDLER_DEFINE(_handle_request_read, ev_type, ev, ud) {
   UNUSED(ev_type);
   assert(ev_type == C_READ_DONE_EVENT);
 
-  ReadRequestState *rrs = ud;
+  HTTPRequestContext *rctx = ud;
   CReadDoneEvent *c_read_done_ev = ev;
 
+  /* update request state */
+  rctx->persist_ctx.content_length_read.bytes_read += c_read_done_ev->nbyte;
+  rctx->last_error_number = c_read_done_ev->error_number;
+  rctx->read_state = HTTP_REQUEST_READ_STATE_READ_HEADERS;
+
   HTTPRequestReadDoneEvent read_done_ev = {
-    .request_handle = rrs->request_context,
+    .request_handle = rctx,
     .err = c_read_done_ev->error_number ? HTTP_GENERIC_ERROR : HTTP_SUCCESS,
     .nbyte = c_read_done_ev->nbyte,
   };
-  rrs->request_context->bytes_read += c_read_done_ev->nbyte;
-  rrs->request_context->last_error_number = c_read_done_ev->error_number;
-  rrs->cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, rrs->cb_ud);
+  rctx->sub.content_length_read_ctx.cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev,
+                                       rctx->sub.content_length_read_ctx.cb_ud);
 }
 
 static
 EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
   HTTPRequestContext *rctx = ud;
-  ChunkedCoroCtx *cctx = &rctx->sub.chunked_coro_ctx;
+  struct chunked_read_persist_ctx *cctx = &rctx->persist_ctx.chunked_coro_ctx;
+  struct chunked_read_temp_ctx *tctx = &rctx->sub.chunked_read_ctx;
 
   /* if this coroutine is running, it should be returning data to
      someone */
-  assert(cctx->cb);
+  assert(tctx->cb);
 
 #define EXPECT(s)                                               \
   do {                                                          \
@@ -242,11 +247,11 @@ EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
 
     /* read chunk */
     while (cctx->chunk_read < cctx->chunk_size) {
-      assert(cctx->input_buf_offset < cctx->input_nbyte);
+      assert(tctx->input_buf_offset < tctx->input_nbyte);
       CRYIELD(cctx->pos,
               c_read(rctx->conn->server->loop, &rctx->conn->f,
-                     cctx->input_buf + cctx->input_buf_offset,
-                     min_size_t(cctx->input_nbyte - cctx->input_buf_offset,
+                     tctx->input_buf + tctx->input_buf_offset,
+                     min_size_t(tctx->input_nbyte - tctx->input_buf_offset,
                                 cctx->chunk_size - cctx->chunk_read),
                      _chunked_request_coro, ud));
       assert(ev_type == C_READ_DONE_EVENT);
@@ -263,22 +268,21 @@ EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
 
       cctx->chunk_read += c_read_done_ev->nbyte;
 
-      cctx->input_buf_offset += c_read_done_ev->nbyte;
-      if (cctx->input_buf_offset == cctx->input_nbyte) {
+      tctx->input_buf_offset += c_read_done_ev->nbyte;
+      if (tctx->input_buf_offset == tctx->input_nbyte) {
         /* we read enough to satisfy the reader */
+        rctx->read_state = HTTP_REQUEST_READ_STATE_READ_HEADERS;
+
         HTTPRequestReadDoneEvent read_done_ev = {
           .request_handle = rctx,
           .err = HTTP_SUCCESS,
-          .nbyte = cctx->input_buf_offset,
+          .nbyte = tctx->input_buf_offset,
         };
-        /* reset arguments */
-        event_handler_t cb = cctx->cb;
-        cctx->cb = NULL;
         CRYIELD(cctx->pos,
-                cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, cctx->cb_ud));
+                tctx->cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, tctx->cb_ud));
         assert(ev_type == GENERIC_EVENT);
         /* we're starting new */
-        assert(!cctx->input_buf_offset);
+        assert(!tctx->input_buf_offset);
       }
     }
 
@@ -294,39 +298,36 @@ EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
   error:
     /* there was an error, we are persistently in a bad state */
     while (true) {
+      rctx->read_state = HTTP_REQUEST_READ_STATE_READ_HEADERS;
+
       HTTPRequestReadDoneEvent read_done_ev = {
         .request_handle = rctx,
         .err = HTTP_GENERIC_ERROR,
         .nbyte = 0,
       };
-      /* reset arguments */
-      event_handler_t cb = cctx->cb;
-      cctx->cb = NULL;
 
       rctx->last_error_number = 1;
       CRYIELD(cctx->pos,
-              cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, cctx->cb_ud));
+              tctx->cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, tctx->cb_ud));
       assert(ev_type == GENERIC_EVENT);
-      assert(!cctx->input_buf_offset);
+      assert(!tctx->input_buf_offset);
     }
   }
 
   /* no more data, just keep returning EOF */
   while (true) {
-    /* we read enough to satisfy the reader */
+    rctx->read_state = HTTP_REQUEST_READ_STATE_READ_HEADERS;
+
     HTTPRequestReadDoneEvent read_done_ev = {
       .request_handle = rctx,
       .err = HTTP_SUCCESS,
-      .nbyte = cctx->input_buf_offset,
+      .nbyte = tctx->input_buf_offset,
     };
-    /* reset arguments */
-    event_handler_t cb = cctx->cb;
-    cctx->cb = NULL;
     CRYIELD(cctx->pos,
-            cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, cctx->cb_ud));
+            tctx->cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, tctx->cb_ud));
     assert(ev_type == GENERIC_EVENT);
     /* we're starting new */
-    assert(!cctx->input_buf_offset);
+    assert(!tctx->input_buf_offset);
   }
 
   CREND();
@@ -349,38 +350,33 @@ http_request_read(http_request_handle_t rh,
     return cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, cb_ud);
   }
 
+  rctx->read_state = HTTP_REQUEST_READ_STATE_READING;
+
   if (rctx->is_chunked_request) {
-    /* enter chunked request coroutine */
-    ChunkedCoroCtx *cctx = &rctx->sub.chunked_coro_ctx;
-    if (cctx->cb) {
-      /* if already in the coroutine, error out */
-      HTTPRequestReadDoneEvent read_done_ev = {
-        .request_handle = rh,
-        .err = HTTP_GENERIC_ERROR,
-      };
-      return cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, cb_ud);
-    }
-    cctx->cb = cb;
-    cctx->cb_ud = cb_ud;
-    cctx->input_buf = buf;
-    cctx->input_nbyte = nbyte;
-    cctx->input_buf_offset = 0;
+    rctx->sub.chunked_read_ctx = (struct chunked_read_temp_ctx) {
+      .cb = cb,
+      .cb_ud = cb_ud,
+      .input_buf = buf,
+      .input_nbyte = nbyte,
+      .input_buf_offset = 0,
+    };
+
     return _chunked_request_coro(GENERIC_EVENT, NULL, rctx);
   }
+  else {
+    struct content_length_read_persist_ctx *cctx = &rctx->persist_ctx.content_length_read;
+    assert(cctx->content_length >= cctx->bytes_read);
+    nbyte = min_size_t(nbyte, cctx->content_length - cctx->bytes_read);
 
-  rctx->sub.rrs = (ReadRequestState) {
-    .request_context = rh,
-    .cb = cb,
-    .cb_ud = cb_ud,
-  };
+    rctx->sub.content_length_read_ctx = (struct content_length_read_temp_ctx) {
+      .cb = cb,
+      .cb_ud = cb_ud,
+    };
 
-  assert(rctx->content_length >= rctx->bytes_read);
-  nbyte = MIN(nbyte, rctx->content_length - rctx->bytes_read);
-
-  return c_read(rctx->conn->server->loop, &rctx->conn->f,
-                buf, nbyte,
-                _handle_request_read,
-                &rctx->sub.rrs);
+    return c_read(rctx->conn->server->loop, &rctx->conn->f,
+                  buf, nbyte,
+                  _handle_request_read, rctx);
+  }
 }
 
 static
@@ -706,8 +702,6 @@ UTHR_DEFINE(client_coroutine) {
       .conn = cc,
       .read_state = HTTP_REQUEST_READ_STATE_NONE,
       .write_state = HTTP_REQUEST_WRITE_STATE_NONE,
-      .bytes_read = 0,
-      .bytes_written = 0,
       .last_error_number = 0,
     };
 
@@ -746,8 +740,7 @@ UTHR_DEFINE(client_coroutine) {
       while (true) {
         UTHR_YIELD(cc,
                    http_request_read(&cc->rctx, cc->spare.buffer,
-                                     MIN(cc->rctx.content_length - cc->rctx.bytes_read,
-                                         sizeof(cc->spare.buffer)),
+                                     sizeof(cc->spare.buffer),
                                      client_coroutine, cc));
         assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_READ_DONE_EVENT);
         HTTPRequestReadDoneEvent *read_done_ev = UTHR_EVENT();
@@ -990,26 +983,30 @@ UTHR_DEFINE(c_get_request) {
       }
       else {
         state->rh->is_chunked_request = true;
-        state->rh->sub.chunked_coro_ctx.pos = CORO_POS_INIT;
-        state->rh->sub.chunked_coro_ctx.cb = NULL;
+        state->rh->persist_ctx.chunked_coro_ctx.pos = CORO_POS_INIT;
       }
     }
-    else if (content_length_str) {
+    else {
+      long converted_content_length;
+      if (content_length_str) {
       /* get the "Content-Length" header */
-      long converted_content_length = strtol(content_length_str, NULL, 10);
+        converted_content_length = strtol(content_length_str, NULL, 10);
+      }
+      else {
+        /* if there is no data header, treat it as zero-length body */
+        converted_content_length = 0;
+        errno = 0;
+      }
+
       if (converted_content_length > 0 ||
           (converted_content_length == 0 && errno != EINVAL)) {
         state->rh->is_chunked_request = false;
-        state->rh->content_length = converted_content_length;
+        state->rh->persist_ctx.content_length_read.content_length = converted_content_length;
+        state->rh->persist_ctx.content_length_read.bytes_read = 0;
       }
       else {
         err = HTTP_GENERIC_ERROR;
       }
-    }
-    else {
-      /* if there is no data header, treat it as zero-length body */
-      state->rh->is_chunked_request = false;
-      state->rh->content_length = 0;
     }
   }
 
