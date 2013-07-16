@@ -411,18 +411,19 @@ uri_from_path(struct handler_context *hc, const char *path) {
 
   memcpy(real_uri, prefix, prefix_len - 1);
   memcpy(real_uri + prefix_len - 1, path, path_len);
-  real_uri[prefix_len - 1 + path_len] = '\0';
+  real_uri[prefix_len - 1 + path_len] = '/';
+  real_uri[prefix_len - 1 + path_len + 1] = '\0';
 
-  if (!str_startswith(real_uri, request_uri)) {
-    /* add trailing slash to catch case where request uri
-       has a trailing slash
-    */
-    real_uri[prefix_len - 1 + path_len] = '/';
-    real_uri[prefix_len - 1 + path_len + 1] = '\0';
+  if (!str_equals(request_uri, real_uri)) {
+    real_uri[prefix_len - 1 + path_len] = '\0';
   }
 
-  /* 8.3 URL Handling, RFC 4918 */
-  assert(str_startswith(real_uri, request_uri));
+  if (false) {
+    /* if (false) for now, copy/move might need to transform a path
+       that's not a child of the request uri */
+    /* 8.3 URL Handling, RFC 4918 */
+    assert(str_startswith(real_uri, request_uri));
+  }
 
   return real_uri;
 }
@@ -1671,6 +1672,8 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
                                        "application/xml",
                                        LINKED_LIST_INITIALIZER,
                                        handle_copy_request, hc));
+
+  free(ctx->response_body);
 
   CRRETURN(ctx->pos,
            request_proc(GENERIC_EVENT, NULL, hc));
