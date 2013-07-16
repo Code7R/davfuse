@@ -94,28 +94,42 @@ http_server_start(HTTPServer *http,
   http->handler = handler;
   http->loop = loop;
   http->ud = ud;
+  http->shutting_down = false;
+  http->num_connections = 0;
 
   return true;
 
  error:
   close(fd);
-  http->fd = -1;
   http->watch_key = FD_EVENT_INVALID_WATCH_KEY;
   return false;
 }
 
-bool
-http_server_stop(HTTPServer *http) {
-  if (http->watch_key != FD_EVENT_INVALID_WATCH_KEY) {
-    bool ret = fdevent_remove_watch(http->loop, http->watch_key);
-    assert(ret);
-    http->watch_key = FD_EVENT_INVALID_WATCH_KEY;
+void
+http_server_stop(HTTPServer *http,
+                 event_handler_t cb, void *user_data) {
+  assert(http->watch_key != FD_EVENT_INVALID_WATCH_KEY);
+  bool remove_watch_ret = fdevent_remove_watch(http->loop, http->watch_key);
+  if (!remove_watch_ret) {
+    abort();
   }
-  if (http->fd >= 0) {
-    close(http->fd);
-    http->fd = -1;
+
+  http->watch_key = FD_EVENT_INVALID_WATCH_KEY;
+
+  int close_ret = close(http->fd);
+  if (close_ret < 0) {
+    /* this can't fail */
+    abort();
   }
-  return true;
+
+  http->shutting_down = true;
+  http->stop_cb = cb;
+  http->stop_ud = user_data;
+
+  if (!http->num_connections) {
+    /* no more connections, call callback immediately */
+    cb(HTTP_SERVER_STOP_DONE_EVENT, NULL, user_data);
+  }
 }
 
 void
@@ -641,6 +655,8 @@ EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
   assert(http->loop == fdev->loop);
   assert(http->fd == fdev->fd);
 
+  assert(!http->shutting_down);
+
   client_fd = accept(fdev->fd, NULL, NULL);
   if (client_fd < 0) {
     log_error("Couldn't accept client connnection: %s", strerror(errno));
@@ -662,6 +678,8 @@ EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
     log_error("Couldn't make client fd non-blocking: %s", strerror(errno));
     goto error;
   }
+
+  http->num_connections += 1;
 
   /* run client */
   HTTPConnection ctx = {
@@ -793,7 +811,18 @@ UTHR_DEFINE(client_coroutine) {
 
   log_debug("Client done, closing descriptor %d", cc->f.fd);
   close(cc->f.fd);
-  UTHR_RETURN(cc, 0);
+  /* NB: ordinarily we'd call UTHR_RETURN, but we need
+     to free the memory first before calling the stop handler */
+  HTTPServer *server = cc->server;
+  UTHR_FREE(cc);
+  server->num_connections -= 1;
+  if (!server->num_connections && server->shutting_down) {
+    return server->stop_cb(HTTP_SERVER_STOP_DONE_EVENT, NULL,
+                           server->stop_ud);
+  }
+  else {
+    return;
+  }
 
   UTHR_FOOTER();
 }

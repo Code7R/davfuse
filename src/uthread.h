@@ -26,6 +26,7 @@
 #define UTHR_RETURN(ctx, ret) \
   CRRETURN(ctx->__coropos,                                              \
            ((void) ret, free(ctx)))
+#define UTHR_FREE(ctx) free(ctx)
 
 #define UTHR_RUN(coro, ctx) coro(START_COROUTINE_EVENT, NULL, ctx)
 

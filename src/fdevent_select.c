@@ -39,6 +39,7 @@ fdevent_add_watch(FDEventLoop *loop,
     .ew = {fd, ud, events, handler},
     .prev = NULL,
     .next = NULL,
+    .active = true,
   };
 
   if (loop->ll) {
@@ -67,6 +68,13 @@ fdevent_remove_watch(FDEventLoop *loop,
   assert(loop->ll);
   assert(key);
 
+  ll->active = false;
+
+  return true;
+}
+
+static void
+_actually_free_link(FDEventLoop *loop, FDEventLink *ll) {
   if (ll->prev) {
     ll->prev->next = ll->next;
   }
@@ -80,9 +88,7 @@ fdevent_remove_watch(FDEventLoop *loop,
     loop->ll = ll->next;
   }
 
-  free(key);
-
-  return true;
+  free(ll);
 }
 
 bool
@@ -99,6 +105,13 @@ fdevent_main_loop(FDEventLoop *loop) {
     FD_ZERO(&writefds);
 
     while (ll) {
+      if (!ll->active) {
+        FDEventLink *tmpll = ll->next;
+        _actually_free_link(loop, ll);
+        ll = tmpll;
+        continue;
+      }
+
       if (ll->ew.events.read) {
         log_debug("Adding fd %d to read set", ll->ew.fd);
 	FD_SET(ll->ew.fd, &readfds);
@@ -131,31 +144,27 @@ fdevent_main_loop(FDEventLoop *loop) {
     /* now dispatch on events */
     ll = loop->ll;
     while (ll) {
-      FDEventLink *tmpll;
       StreamEvents events;
 
-      /* do this first in case this link gets removed
-         while calling `handler() `*/
-      tmpll = ll->next;
-
-      events = create_stream_events(FD_ISSET(ll->ew.fd, &readfds),
-				    FD_ISSET(ll->ew.fd, &writefds));
-
-      if ((events.read && ll->ew.events.read) ||
-          (events.write && ll->ew.events.write)) {
-	event_handler_t h = ll->ew.handler;
-	int fd = ll->ew.fd;
-	void *ud = ll->ew.ud;
-	FDEvent e = (FDEvent) {
-	  .loop = loop,
-	  .fd = fd,
-	  .events = events,
-	};
-	fdevent_remove_watch(loop, ll);
-        h(FD_EVENT, &e, ud);
+      if (ll->active) {
+        events = create_stream_events(FD_ISSET(ll->ew.fd, &readfds),
+                                      FD_ISSET(ll->ew.fd, &writefds));
+        if ((events.read && ll->ew.events.read) ||
+            (events.write && ll->ew.events.write)) {
+          event_handler_t h = ll->ew.handler;
+          int fd = ll->ew.fd;
+          void *ud = ll->ew.ud;
+          FDEvent e = (FDEvent) {
+            .loop = loop,
+            .fd = fd,
+            .events = events,
+          };
+          fdevent_remove_watch(loop, ll);
+          h(FD_EVENT, &e, ud);
+        }
       }
 
-      ll = tmpll;
+      ll = ll->next;
     }
   }
 }

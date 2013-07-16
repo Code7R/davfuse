@@ -128,11 +128,15 @@ webdav_server_start(FDEventLoop *loop,
 		    const char *public_prefix,
 		    webdav_fs_t fs);
 
-bool
-webdav_server_stop(webdav_server_t ws);
+void
+webdav_server_stop(webdav_server_t ws,
+                   event_handler_t cb, void *user_data);
 
 webdav_fs_t
 webdav_fs_new(WebdavOperations *op, size_t op_size, void *user_data);
+
+void
+webdav_fs_destroy(webdav_fs_t);
 
 void
 webdav_fs_open(webdav_fs_t fs,

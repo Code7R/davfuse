@@ -26,6 +26,7 @@ typedef struct _fdevent_link {
   FDEventWatcher ew;
   struct _fdevent_link *prev;
   struct _fdevent_link *next;
+  bool active;
 } FDEventLink;
 
 typedef FDEventLink *fd_event_watch_key_t;

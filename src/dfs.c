@@ -102,4 +102,5 @@ my_free(void *p, void *ud) {
 NON_NULL_ARGS0() void
 dfs_destroy(depth_first_t ctx) {
   linked_list_free_ud(ctx->stack, my_free, ctx);
+  free(ctx);
 }

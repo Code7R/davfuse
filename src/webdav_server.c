@@ -88,6 +88,8 @@ struct webdav_server {
   linked_list_t locks;
   webdav_fs_t fs;
   char *public_prefix;
+  event_handler_t stop_cb;
+  void *stop_ud;
 };
 
 struct handler_context {
@@ -156,7 +158,7 @@ struct handler_context {
       linked_list_t props_to_get;
       propfind_req_type_t propfind_req_type;
     } propfind;
-    struct {
+    struct proppatch_context {
       coroutine_position_t pos;
       char *request_body;
       size_t request_body_size;
@@ -176,9 +178,6 @@ struct handler_context {
       size_t total_amount_transferred;
     } put;
     struct {
-      coroutine_position_t pos;
-      char *response_body;
-      size_t response_body_len;
     } unlock;
   } sub;
 };
@@ -329,6 +328,7 @@ static EVENT_HANDLER_DECLARE(handle_get_request);
 static EVENT_HANDLER_DECLARE(handle_lock_request);
 static EVENT_HANDLER_DECLARE(handle_mkcol_request);
 static EVENT_HANDLER_DECLARE(handle_options_request);
+static EVENT_HANDLER_DECLARE(handle_post_request);
 static EVENT_HANDLER_DECLARE(handle_propfind_request);
 static EVENT_HANDLER_DECLARE(handle_proppatch_request);
 static EVENT_HANDLER_DECLARE(handle_put_request);
@@ -564,6 +564,15 @@ is_parent_path(const char *potential_parent, const char *potential_child) {
           potential_child[strlen(potential_parent)] == '/');
 }
 
+static void
+free_webdav_lock_descriptor(void *ld) {
+  WebdavLockDescriptor *wdld = ld;
+  free(wdld->path);
+  free(wdld->owner_xml);
+  free(wdld->lock_token);
+  free(ld);
+}
+
 static bool
 perform_write_lock(struct webdav_server *ws,
                    const char *file_path,
@@ -649,7 +658,7 @@ unlock_resource(struct webdav_server *ws,
     if (str_equals(elt->path, file_path) &&
         str_equals(elt->lock_token, lock_token)) {
       WebdavLockDescriptor *popped_elt = linked_list_pop_link(llp);
-      free(popped_elt);
+      free_webdav_lock_descriptor(popped_elt);
       *unlocked = true;
       break;
     }
@@ -1477,6 +1486,9 @@ UTHR_DEFINE(request_proc) {
   }
   else if (str_case_equals(hc->rhs.method, "OPTIONS")) {
     handler = handle_options_request;
+  }
+  else if (str_case_equals(hc->rhs.method, "POST")) {
+    handler = handle_post_request;
   }
   else if (str_case_equals(hc->rhs.method, "PROPFIND")) {
     handler = handle_propfind_request;
@@ -2513,6 +2525,23 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
 }
 
 static
+EVENT_HANDLER_DEFINE(handle_post_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
+  UNUSED(ev);
+
+  struct handler_context *hc = ud;
+
+  if (str_equals(hc->rhs.uri, "/quit")) {
+    webdav_server_stop(hc->serv, NULL, NULL);
+  }
+
+  http_request_string_response(hc->rh,
+                               HTTP_STATUS_CODE_METHOD_NOT_ALLOWED,
+                               "",
+                               request_proc, ud);
+}
+
+static
 EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   UNUSED(ev_type);
   UNUSED(ev);
@@ -3037,9 +3066,6 @@ EVENT_HANDLER_DEFINE(handle_unlock_request, ev_type, ev, ud) {
 
   /* set this variable before coroutine restarts */
   struct handler_context *hc = ud;
-
-  CRBEGIN(hc->sub.lock.pos);
-
   http_status_code_t status_code = HTTP_STATUS_CODE___INVALID;
   char *lock_token = NULL;
 
@@ -3083,17 +3109,12 @@ EVENT_HANDLER_DEFINE(handle_unlock_request, ev_type, ev, ud) {
 
  done:
   free(lock_token);
+  free(file_path);
   assert(status_code != HTTP_STATUS_CODE___INVALID);
 
-  CRYIELD(hc->sub.unlock.pos,
-          http_request_string_response(hc->rh,
-                                       status_code, "",
-                                       handle_unlock_request, hc));
-
-  CRRETURN(hc->sub.unlock.pos,
-           request_proc(GENERIC_EVENT, NULL, hc));
-
-  CREND();
+  http_request_string_response(hc->rh,
+                               status_code, "",
+                               request_proc, ud);
 }
 
 static
@@ -3123,6 +3144,11 @@ webdav_fs_new(WebdavOperations *op,
   };
 
   return toret;
+}
+
+void
+webdav_fs_destroy(webdav_fs_t fs) {
+  free(fs);
 }
 
 void
@@ -3245,17 +3271,33 @@ webdav_server_start(FDEventLoop *loop,
   return NULL;
 }
 
-bool
-webdav_server_stop(webdav_server_t ws) {
-  struct webdav_server *serv = ws;
+static
+EVENT_HANDLER_DEFINE(_webdav_stop_cb, ev_type, ev, ud) {
+  UNUSED(ev_type);
+  UNUSED(ev);
+  struct webdav_server *serv = ud;
 
-  bool ret = http_server_stop(&serv->http);
-  if (!ret) {
-    return false;
+  linked_list_free(serv->locks, free_webdav_lock_descriptor);
+  free(serv->public_prefix);
+
+  event_handler_t cb = serv->stop_cb;
+  void *cb_ud = serv->stop_ud;
+
+  free(serv);
+
+  /* to shut down xml library (cleanup memory) */
+  xmlCleanupParser();
+
+  if (cb) {
+    cb(GENERIC_EVENT, NULL, cb_ud);
   }
+}
 
-  /* TODO: actually free each WebdavLockDescriptor */
-  linked_list_free(serv->locks, NULL);
-
-  return true;
+void
+webdav_server_stop(webdav_server_t ws,
+                   event_handler_t cb, void *user_data) {
+  struct webdav_server *serv = ws;
+  serv->stop_cb = cb;
+  serv->stop_ud = user_data;
+  return http_server_stop(&serv->http, _webdav_stop_cb, serv);
 }

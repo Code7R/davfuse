@@ -627,5 +627,11 @@ main(int argc, char *argv[]) {
   log_info("Starting main loop");
   fdevent_main_loop(&loop);
 
+  log_info("Server stopped");
+
+  webdav_fs_destroy(fs);
+
+  free(base_path);
+
   return 0;
 }

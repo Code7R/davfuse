@@ -92,6 +92,10 @@ struct _http_server {
   fd_event_watch_key_t watch_key;
   event_handler_t handler;
   void *ud;
+  bool shutting_down;
+  size_t num_connections;
+  event_handler_t stop_cb;
+  void *stop_ud;
 };
 
 typedef struct {
@@ -229,8 +233,9 @@ http_server_start(HTTPServer *http,
 		  event_handler_t handler,
 		  void *ud);
 
-NON_NULL_ARGS0() bool
-http_server_stop(HTTPServer *http);
+void
+http_server_stop(HTTPServer *http,
+                 event_handler_t cb, void *user_data);
 
 NON_NULL_ARGS3(1, 2, 3) void
 http_request_read_headers(http_request_handle_t rh,
