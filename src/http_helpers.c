@@ -1,5 +1,9 @@
+#define _ISOC99_SOURCE
+
+#include <assert.h>
 #include <stddef.h>
 
+#include "coroutine_io.h"
 #include "http_server.h"
 #include "logging.h"
 #include "uthread.h"
@@ -220,3 +224,115 @@ http_request_ignore_body(http_request_handle_t rh,
              .ud = ud);
 }
 
+char *
+decode_urlpath(const char *urlpath, size_t len) {
+  /* TODO: remove params from /path_segment;param/ */
+  assert(str_startswith(urlpath, "/"));
+
+  /* first figure out length of new string */
+  size_t new_size = 0;
+  for (size_t i = 0; i < len; ++new_size) {
+    /* this should definitely not include any query component,
+       TODO: we should expand this assert
+     */
+    assert(urlpath[i] != '?' && urlpath[i] != ';');
+    i += (urlpath[i] == '%' &&
+          match_hex_digit(urlpath[i + 1]) &&
+          match_hex_digit(urlpath[i + 2]))
+      ? 3
+      : 1;
+  }
+
+  /* allocate necessary memory */
+  char *toret = malloc(new_size + 1);
+  if (!toret) {
+    return NULL;
+  }
+
+  /* now actually decode */
+  size_t j = 0;
+  for (size_t i = 0; i < len; ++j) {
+    if (urlpath[i] == '%' &&
+        match_hex_digit(urlpath[i + 1]) &&
+        match_hex_digit(urlpath[i + 2])) {
+      char hex_temp[3] = {urlpath[i + 1], urlpath[i + 2], '\0'};
+      long char_code = strtol(hex_temp, NULL, 16);
+      assert(char_code >= 0 && char_code < 256);
+      toret[j] = (unsigned char) char_code;
+      i += 3;
+    }
+    else {
+      toret[j] = urlpath[i];
+      i += 1;
+    }
+  }
+
+  assert(j == new_size);
+  toret[new_size] = '\0';
+  return toret;
+}
+
+static bool
+match_valid_urlpath_set(char c) {
+  static const char unreserved_url_chars[] = "-_.!~*'()/";
+  for (size_t i = 0; i < sizeof(unreserved_url_chars) - 1; ++i) {
+    if (c == unreserved_url_chars[i]) {
+      return true;
+    }
+  }
+
+  return (('A' <= c && c <= 'Z') ||
+          ('a' <= c && c <= 'z') ||
+          ('0' <= c && c <= '9'));
+}
+
+static char
+to_hex_digit(char c) {
+  /* you should def know what you're doing
+     if you use this function */
+  assert(c >= 0 && c <= 15);
+  if (c < 10) {
+    return '0' + c;
+  }
+  else {
+    return 'a' + (c - 10);
+  }
+}
+
+char *
+encode_urlpath(const char *urlpath, size_t len) {
+  assert(str_startswith(urlpath, "/"));
+  /* this encodes the path to be usable in the HTTP request line,
+     this only allows: "-" | "_" | "." | "!" | "~" | "*" | "'" | "(" | ")"
+     and: alphanum (A-Z,a-z,0-9)
+     (reserved characters, ":" | "@" | "&" | "=" | "+" | "$" | ",",
+     are technically allowed but not in the path component of a url)
+   */
+
+  size_t new_size = 0;
+  for (size_t i = 0; i < len; ++i) {
+    new_size += match_valid_urlpath_set(urlpath[i]) ? 1 : 3;
+  }
+
+  char *toret = malloc(new_size + 1);
+  if (!toret) {
+    return NULL;
+  }
+
+  size_t new_pos = 0;
+  for (size_t i = 0; i < len; ++i) {
+    assert(new_pos < new_size);
+    if (match_valid_urlpath_set(urlpath[i])) {
+      toret[new_pos++] = urlpath[i];
+    }
+    else {
+      toret[new_pos++] = '%';
+      toret[new_pos++] = to_hex_digit(((unsigned char) urlpath[i]) / 16);
+      toret[new_pos++] = to_hex_digit(((unsigned char) urlpath[i]) % 16);
+    }
+  }
+
+  assert(new_pos == new_size);
+  toret[new_pos] = '\0';
+  return toret;
+}

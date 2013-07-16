@@ -5,7 +5,6 @@
 
 /*
   TODO:
-  * Percent encoding/decoding of URIs (path_from_uri()/uri_from_path())
   * Support 'If-Modified-Since'
  */
 
@@ -367,27 +366,37 @@ xml_str_equals(const xmlChar *restrict a, const char *restrict b) {
 
 static char *
 path_from_uri(struct handler_context *hc, const char *uri) {
-  const char *real_uri;
+  const char *abs_path_start;
 
   if (uri[0] != '/') {
+    /* we don't handle non-relative URIs that don't start with
+       our prefix, this includes '*' URIs
+     */
     if (!str_startswith(uri, hc->serv->public_prefix)) {
       return NULL;
     }
     /* -1 to account for and incorporate the trailing slash */
-    real_uri = &uri[strlen(hc->serv->public_prefix) - 1];
+    abs_path_start = &uri[strlen(hc->serv->public_prefix) - 1];
   }
   else {
-    real_uri = uri;
+    abs_path_start = uri;
+  }
+
+  /* okay now `real_uri` should point to a URI without the
+     scheme/authority, now strip out the query part */
+
+  const char *abs_path_end = strchr(abs_path_start, '?');
+  if (!abs_path_end) {
+    abs_path_end = abs_path_start + strlen(abs_path_start);
   }
 
   /* if uri ends with '/' shave it off */
-  size_t len = strlen(real_uri);
-  if (real_uri[len - 1] == '/' && len != 1) {
-    len -= 1;
+  if (abs_path_end[-1] == '/' && abs_path_end - abs_path_start != 1) {
+    abs_path_end -= 1;
   }
 
-  /* TODO: de-urlencode `real_uri` */
-  return strndup_x(real_uri, len);
+  /* path could be something like /hai%20;there/sup, this fixes that */
+  return decode_urlpath(abs_path_start, abs_path_end - abs_path_start);
 }
 
 static char *
@@ -395,6 +404,8 @@ uri_from_path(struct handler_context *hc, const char *path) {
   /* TODO: urlencode `path` */
   assert(str_startswith(path, "/"));
   assert(str_equals(path, "/") || !str_endswith(path, "/"));
+
+  char *encoded_path = encode_urlpath(path, strlen(path));
 
   const char *request_uri = hc->rhs.uri;
 
@@ -410,16 +421,16 @@ uri_from_path(struct handler_context *hc, const char *path) {
   }
 
   size_t prefix_len = strlen(prefix);
-  size_t path_len = strlen(path);
+  size_t path_len = strlen(encoded_path);
 
   /* make extra space for a trailing space */
   real_uri = malloc(prefix_len - 1 + path_len + 1 + 1);
   if (!real_uri) {
-    return NULL;
+    goto done;
   }
 
   memcpy(real_uri, prefix, prefix_len - 1);
-  memcpy(real_uri + prefix_len - 1, path, path_len);
+  memcpy(real_uri + prefix_len - 1, encoded_path, path_len);
   real_uri[prefix_len - 1 + path_len] = '/';
   real_uri[prefix_len - 1 + path_len + 1] = '\0';
 
@@ -433,6 +444,9 @@ uri_from_path(struct handler_context *hc, const char *path) {
     /* 8.3 URL Handling, RFC 4918 */
     assert(str_startswith(real_uri, request_uri));
   }
+
+ done:
+  free(encoded_path);
 
   return real_uri;
 }
@@ -1843,7 +1857,7 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
     goto done;
   }
 
-  log_debug("Sending file %s, length: %s", &hc->rhs.uri[1], hc->resp.headers[0].value);
+  log_debug("Sending resource %s, length: %s", hc->rhs.uri, hc->resp.headers[0].value);
 
   /* TODO: must send up to the content-length we sent */
   ctx->total_read = 0;

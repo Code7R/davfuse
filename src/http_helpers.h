@@ -45,4 +45,10 @@ http_request_ignore_body(http_request_handle_t rh,
                          event_handler_t cb,
                          void *ud);
 
+char *
+decode_urlpath(const char *urlpath, size_t len);
+
+char *
+encode_urlpath(const char *urlpath, size_t len);
+
 #endif /* HTTP_HELPERS_H */

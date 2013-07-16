@@ -208,7 +208,7 @@ HEADER_FUNCTION CONST_FUNCTION bool
 match_separator(char c) {
   static const char separators[] = "()<>@,;:\\/[]?={} \t";
 
-  for (size_t i = 0; i < sizeof(separators); ++i) {
+  for (size_t i = 0; i < sizeof(separators) - 1; ++i) {
     if (c == separators[i]) {
       return true;
     }
