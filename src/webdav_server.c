@@ -7,6 +7,7 @@
   TODO:
   * Fix lock owner XML preservation (perform_write_lock()/refresh_lock())
   * Percent encoding/decoding of URIs (path_from_uri()/uri_from_path())
+  * Support 'If-Modified-Since'
  */
 
 /* replace this by something that is X-platform */

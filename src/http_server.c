@@ -242,6 +242,7 @@ EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
 
     /* read chunk */
     while (cctx->chunk_read < cctx->chunk_size) {
+      assert(cctx->input_buf_offset < cctx->input_nbyte);
       CRYIELD(cctx->pos,
               c_read(rctx->conn->server->loop, &rctx->conn->f,
                      cctx->input_buf + cctx->input_buf_offset,
