@@ -3065,10 +3065,10 @@ EVENT_HANDLER_DEFINE(handle_unlock_request, ev_type, ev, ud) {
   UNUSED(ev);
   UNUSED(ev_type);
 
-  /* set this variable before coroutine restarts */
   struct handler_context *hc = ud;
   http_status_code_t status_code = HTTP_STATUS_CODE___INVALID;
   char *lock_token = NULL;
+  char *file_path = NULL;
 
   const char *lock_token_header = http_get_header_value(&hc->rhs, WEBDAV_HEADER_LOCK_TOKEN);
   if (!lock_token_header) {
@@ -3090,7 +3090,7 @@ EVENT_HANDLER_DEFINE(handle_unlock_request, ev_type, ev, ud) {
   }
 
   /* unlock based on token */
-  char *file_path = path_from_uri(hc, hc->rhs.uri);
+  file_path = path_from_uri(hc, hc->rhs.uri);
   bool unlocked;
   bool success_unlock =
     unlock_resource(hc->serv, file_path, lock_token, &unlocked);
