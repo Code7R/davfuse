@@ -9,6 +9,9 @@
 bool
 set_non_blocking(int fd);
 
+bool
+set_blocking(int fd);
+
 int
 create_bound_socket(const struct sockaddr *addr, socklen_t address_len);
 

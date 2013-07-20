@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 
+#include "coroutine.h"
 #include "c_util.h"
 
 #define UTHR_DEFINE(name) void name(event_type_t __ev_type, void *__ev, void *__tctx)

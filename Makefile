@@ -37,7 +37,7 @@ ALL_SRC_ := ${TARGET_SRC_} ${HTTP_SERVER_SRC_}
 HTTP_SERVER_OBJ_ := $(patsubst %.c,%.o,${HTTP_SERVER_SRC_})
 POSIX_FS_WEBDAV_SERVER_OBJ_ := posix_fs_webdav_server.o webdav_server.o ${HTTP_SERVER_OBJ_} ${FSTATAT_MODULE}.o
 TEST_HTTP_SERVER_OBJ_ := test_http_server.o ${HTTP_SERVER_OBJ_}
-LIBFUSE_OBJ_ := libdavfuse.o ${HTTP_SERVER_OBJ_}
+LIBFUSE_OBJ_ := libdavfuse.o async_fuse_fs.o webdav_server.o ${HTTP_SERVER_OBJ_}
 ALL_OBJ_ := $(patsubst %.c,%.o,${ALL_SRC_})
 
 # Absolute locations of the sources
@@ -52,7 +52,7 @@ ALL_OBJ := $(patsubst %,${OBJROOT}/%,${ALL_OBJ_})
 TEST_HTTP_SERVER_TARGET := ${TARGETROOT}/test_http_server
 POSIX_FS_WEBDAV_SERVER_TARGET := ${TARGETROOT}/posix_fs_webdav_server
 LIBFUSE_TARGET := ${TARGETROOT}/libfuse.so.2
-DAVFUSE_TARGET := ${TARGETROOT}/davfuse 
+DAVFUSE_TARGET := ${TARGETROOT}/davfuse
 
 ALL_TARGETS := ${TEST_HTTP_SERVER_TARGET} ${POSIX_FS_WEBDAV_SERVER_TARGET} \
 	${LIBFUSE_TARGET} ${DAVFUSE_TARGET}
@@ -67,6 +67,8 @@ options:
 	@echo "LD       = ${LD}"
 
 posix_fs_webdav_server: options ${POSIX_FS_WEBDAV_SERVER_TARGET}
+libdavfuse: options ${LIBFUSE_TARGET}
+davfuse: options ${DAVFUSE_TARGET}
 
 ${GENHROOT}/config.h: config.def.h ${MAKEFILES}
 	@mkdir -p $(dir $@)
@@ -86,7 +88,7 @@ ${GENHROOT}/fstatat.h: ${SRCROOT}/${FSTATAT_MODULE}.h ${MAKEFILES}
 	@cp ${SRCROOT}/${FSTATAT_MODULE}.h $@
 	@echo ' Done!'
 
-${DAVFUSE_TARGET}: generate-davfuse.sh ${MAKEFILES}
+${DAVFUSE_TARGET}: generate-davfuse.sh ${MAKEFILES} ${LIBFUSE_TARGET}
 	@mkdir -p $(dir $@)
 	@echo Running generate-davfuse.sh...
 	@PRIVATE_LIBDIR=. sh generate-davfuse.sh > $@
@@ -123,7 +125,7 @@ ${POSIX_FS_WEBDAV_SERVER_TARGET}: ${POSIX_FS_WEBDAV_SERVER_OBJ}
 ${LIBFUSE_TARGET}: ${LIBFUSE_OBJ}
 	@mkdir -p $(dir $@)
 	@echo Linking $(notdir $@)
-	@${LD} -shared --version-script fuse_versionscript -soname $@ -o $@ $^
+	@${LINK_COMMAND} -o $@ $^ ${LDFLAGS}
 
 # for dependency auto generateion
 DEPDIR := .deps
@@ -135,4 +137,4 @@ MAKEDEPEND = mkdir -p ${DEPDIR}; gcc -M -MT $@ ${CFLAGS} -o ${df}.d $<
 clean:
 	-rm -rf ${DEPDIR} ${OUTROOT}
 
-.PHONY: all options clean posix_fs_webdav_server
+.PHONY: all options clean posix_fs_webdav_server libdavfuse

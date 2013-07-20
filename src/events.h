@@ -38,6 +38,9 @@ typedef enum {
   WEBDAV_WRITE_DONE_EVENT,
   WEBDAV_TOUCH_DONE_EVENT,
   HTTP_SERVER_STOP_DONE_EVENT,
+  SEND_OPEN_MESSAGE_DONE_EVENT,
+  RECEIVE_OPEN_REPLY_MESSAGE_DONE_EVENT,
+  ASYNC_FUSE_FS_OPEN_DONE_EVENT,
 } event_type_t;
 
 #define EVENT_HANDLER_DEFINE(handler, a, b, c) void handler(event_type_t a, void *b, void *c)

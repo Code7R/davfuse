@@ -14,15 +14,32 @@
 
 bool
 set_non_blocking(int fd) {
-  int flags;
-
-  flags = fcntl(fd, F_GETFL, 0);
+  int flags = fcntl(fd, F_GETFL, 0);
   if (flags < 0) {
-    log_warning("Couldn't read file flags: %s, setting 0", strerror(errno));
-    flags = 0;
+    log_warning("Couldn't read file flags: %s", strerror(errno));
+    return false;
+  }
+
+  if (flags & O_NONBLOCK) {
+    return true;
   }
 
   return fcntl(fd, F_SETFL, (long) flags | O_NONBLOCK) >= 0;
+}
+
+bool
+set_blocking(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0) {
+    log_warning("Couldn't read file flags: %s", strerror(errno));
+    return false;
+  }
+
+  if (!(flags & O_NONBLOCK)) {
+    return true;
+  }
+
+  return fcntl(fd, F_SETFL, (long) flags & ~O_NONBLOCK) >= 0;
 }
 
 int
