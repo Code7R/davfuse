@@ -471,7 +471,7 @@ async_fuse_worker_main_loop(async_fuse_fs_t fs,
       receive_atomic_message(&fs->to_worker, &msg);
     if (!success_receive_atomic_message) {
       log_critical("Error while reading worker msg");
-      break;
+      abort();
     }
 
     if (msg.generic.type == MESSAGE_TYPE_QUIT) {
