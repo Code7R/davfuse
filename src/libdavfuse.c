@@ -298,6 +298,7 @@ parse_environment(DavOptions *options) {
 
 int
 create_server_socket(char *listen_str) {
+  UNUSED(listen_str);
   assert(!listen_str);
   /* TODO: parse `listen_str` */
   return create_ipv4_bound_socket(8080);

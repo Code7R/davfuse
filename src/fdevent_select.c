@@ -61,6 +61,8 @@ fdevent_add_watch(FDEventLoop *loop,
 NON_NULL_ARGS0() bool
 fdevent_remove_watch(FDEventLoop *loop,
                      fd_event_watch_key_t key) {
+  UNUSED(loop);
+
   /* fd_event_watch_key_t types are actually pointers to FDEventLink types */
   FDEventLink *ll = key;
 

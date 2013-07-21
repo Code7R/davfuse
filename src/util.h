@@ -86,4 +86,12 @@ ASSERT_NOT_NULL(void *foo) {
   }
 }
 
+HEADER_FUNCTION void
+ASSERT_TRUE(bool foo) {
+  if (!foo) {
+    log_critical("Illegal false value");
+    abort();
+  }
+}
+
 #endif /* UTIL_H */

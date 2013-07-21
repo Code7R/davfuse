@@ -133,7 +133,7 @@ webdav_server_stop(webdav_server_t ws,
                    event_handler_t cb, void *user_data);
 
 webdav_fs_t
-webdav_fs_new(WebdavOperations *op, size_t op_size, void *user_data);
+webdav_fs_new(const WebdavOperations *op, size_t op_size, void *user_data);
 
 void
 webdav_fs_destroy(webdav_fs_t);

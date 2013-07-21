@@ -25,6 +25,12 @@ async_fuse_fs_open(async_fuse_fs_t fs,
                    event_handler_t cb, void *cb_ud);
 
 void
+async_fuse_fs_read(async_fuse_fs_t fs,
+                   const char *path, char *buf, size_t size,
+                   off_t off, struct fuse_file_info *fi,
+                   event_handler_t cb, void *cb_ud);
+
+void
 async_fuse_worker_main_loop(async_fuse_fs_t fs,
                             const struct fuse_operations *op,
                             size_t op_size,

@@ -88,7 +88,7 @@ typedef struct {
 } WebdavLockDescriptor;
 
 struct webdav_fs {
-  WebdavOperations *op;
+  const WebdavOperations *op;
   void *user_data;
 };
 
@@ -776,7 +776,7 @@ parse_xml_string(const char *req_data, size_t req_data_length) {
                              XML_PARSE_NONET |
                              XML_PARSE_PEDANTIC);
 #ifdef NDEBUG
-  options |= XML_PARSE_NOERROR | XML_PARSER_NOWARNING;
+  options |= XML_PARSE_NOERROR | XML_PARSE_NOWARNING;
 #endif
   xmlResetLastError();
   xmlDocPtr doc = xmlReadMemory(req_data, req_data_length,
@@ -1058,35 +1058,35 @@ generate_propfind_response(struct handler_context *hc,
     ASSERT_NOT_NULL(uri);
     xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns,
                                           XMLSTR("href"), XMLSTR(uri));
-    assert(href_elt);
+    ASSERT_NOT_NULL(href_elt);
     free(uri);
 
     xmlNodePtr propstat_not_found_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
-    assert(propstat_not_found_elt);
+    ASSERT_NOT_NULL(propstat_not_found_elt);
     xmlNodePtr prop_not_found_elt = xmlNewChild(propstat_not_found_elt, dav_ns, XMLSTR("prop"), NULL);
-    assert(prop_not_found_elt);
+    ASSERT_NOT_NULL(prop_not_found_elt);
     xmlNodePtr status_not_found_elt = xmlNewTextChild(propstat_not_found_elt, dav_ns,
                                                       XMLSTR("status"),
                                                       XMLSTR("HTTP/1.1 404 Not Found"));
-    assert(status_not_found_elt);
+    ASSERT_NOT_NULL(status_not_found_elt);
 
     xmlNodePtr propstat_success_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
-    assert(propstat_success_elt);
+    ASSERT_NOT_NULL(propstat_success_elt);
     xmlNodePtr prop_success_elt = xmlNewChild(propstat_success_elt, dav_ns, XMLSTR("prop"), NULL);
-    assert(propstat_success_elt);
+    ASSERT_NOT_NULL(propstat_success_elt);
     xmlNodePtr status_success_elt = xmlNewTextChild(propstat_success_elt, dav_ns,
                                                     XMLSTR("status"),
                                                     XMLSTR("HTTP/1.1 200 OK"));
-    assert(status_success_elt);
+    ASSERT_NOT_NULL(status_success_elt);
 
     xmlNodePtr propstat_failure_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
-    assert(propstat_failure_elt);
+    ASSERT_NOT_NULL(propstat_failure_elt);
     xmlNodePtr prop_failure_elt = xmlNewChild(propstat_failure_elt, dav_ns, XMLSTR("prop"), NULL);
-    assert(prop_failure_elt);
+    ASSERT_NOT_NULL(prop_failure_elt);
     xmlNodePtr status_failure_elt = xmlNewTextChild(propstat_failure_elt, dav_ns,
                                                     XMLSTR("status"),
                                                     XMLSTR("HTTP/1.1 500 Internal Server Error"));
-    assert(status_failure_elt);
+    ASSERT_NOT_NULL(status_failure_elt);
 
     LINKED_LIST_FOR (WebdavProperty, elt, props_to_get) {
       bool is_get_last_modified;
@@ -1119,7 +1119,7 @@ generate_propfind_response(struct handler_context *hc,
 
         xmlNodePtr getlastmodified_elt = xmlNewTextChild(xml_node, dav_ns,
                                                          XMLSTR(elt->element_name), XMLSTR(time_str));
-        assert(getlastmodified_elt);
+        ASSERT_NOT_NULL(getlastmodified_elt);
       }
       else if (str_equals(elt->element_name, "getcontentlength") &&
                str_equals(elt->ns_href, DAV_XML_NS) &&
@@ -1129,18 +1129,18 @@ generate_propfind_response(struct handler_context *hc,
                  (long long) propfind_entry->file_info.length);
         xmlNodePtr getcontentlength_elt = xmlNewTextChild(prop_success_elt, dav_ns,
                                                           XMLSTR("getcontentlength"), XMLSTR(length_str));
-        assert(getcontentlength_elt);
+        ASSERT_NOT_NULL(getcontentlength_elt);
       }
       else if (str_equals(elt->element_name, "resourcetype") &&
                str_equals(elt->ns_href, DAV_XML_NS)) {
         xmlNodePtr resourcetype_elt = xmlNewChild(prop_success_elt, dav_ns,
                                                   XMLSTR("resourcetype"), NULL);
-        assert(resourcetype_elt);
+        ASSERT_NOT_NULL(resourcetype_elt);
 
         if (propfind_entry->file_info.is_collection) {
           xmlNodePtr collection_elt = xmlNewChild(resourcetype_elt, dav_ns,
                                                   XMLSTR("collection"), NULL);
-          assert(collection_elt);
+          ASSERT_NOT_NULL(collection_elt);
         }
       }
       else {
@@ -1531,7 +1531,7 @@ UTHR_DEFINE(request_proc) {
   }
 
   bool ret = http_response_init(&hc->resp);
-  assert(ret);
+  ASSERT_TRUE(ret);
 
   if (handler) {
     UTHR_YIELD(hc, handler(GENERIC_EVENT, NULL, hc));
@@ -1798,6 +1798,8 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
 
 static
 EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
+
   struct handler_context *hc = ud;
   struct get_context *ctx = &hc->sub.get;
 
@@ -1955,6 +1957,8 @@ generate_success_lock_response_body(struct handler_context *hc,
 
 static
 EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
+
   /* set this variable before coroutine restarts */
   struct handler_context *hc = ud;
   struct lock_context *ctx = &hc->sub.lock;
@@ -2449,6 +2453,8 @@ generate_success_lock_response_body(struct handler_context *hc,
 
 static
 EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
+
   /* these are run on every re-entry */
   struct handler_context *hc = ud;
   struct mkcol_context *ctx = &hc->sub.mkcol;
@@ -2801,23 +2807,23 @@ run_proppatch(struct handler_context *hc, const char *uri,
 
   /* build response */
   xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
-  assert(xml_response);
+  ASSERT_NOT_NULL(xml_response);
   xmlNodePtr multistatus_elt = xmlNewDocNode(xml_response, NULL,
                                              XMLSTR("multistatus"), NULL);
-  assert(multistatus_elt);
+  ASSERT_NOT_NULL(multistatus_elt);
   xmlDocSetRootElement(xml_response, multistatus_elt);
 
   xmlNsPtr dav_ns = xmlNewNs(multistatus_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
-  assert(dav_ns);
+  ASSERT_NOT_NULL(dav_ns);
   xmlSetNs(multistatus_elt, dav_ns);
 
   xmlNodePtr response_elt = xmlNewChild(multistatus_elt, dav_ns,
                                         XMLSTR("response"), NULL);
-  assert(response_elt);
+  ASSERT_NOT_NULL(response_elt);
 
   xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns,
                                         XMLSTR("href"), XMLSTR(uri));
-  assert(href_elt);
+  ASSERT_NOT_NULL(href_elt);
 
   xmlNodePtr propstat_elt = xmlNewChild(response_elt, dav_ns,
                                         XMLSTR("propstat"), NULL);
@@ -2826,7 +2832,7 @@ run_proppatch(struct handler_context *hc, const char *uri,
   xmlNodePtr new_status_elt = xmlNewTextChild(propstat_elt, dav_ns,
                                               XMLSTR("status"),
                                               XMLSTR("HTTP/1.1 403 Forbidden"));
-  assert(new_status_elt);
+  ASSERT_NOT_NULL(new_status_elt);
 
   /* now iterate over every propertyupdate directive */
   /* TODO: for now we don't support setting anything */
@@ -2888,6 +2894,8 @@ run_proppatch(struct handler_context *hc, const char *uri,
 
 static
 EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
+
   /* re-init these before restarting the coroutine */
   struct handler_context *hc = ud;
   struct put_context *ctx = &hc->sub.put;
@@ -3144,6 +3152,7 @@ EVENT_HANDLER_DEFINE(handle_unlock_request, ev_type, ev, ud) {
 
 static
 EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
+  UNUSED(ev_type);
   assert(ev_type == HTTP_NEW_REQUEST_EVENT);
   HTTPNewRequestEvent *new_request_ev = ev;
 
@@ -3153,7 +3162,7 @@ EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
 }
 
 webdav_fs_t
-webdav_fs_new(WebdavOperations *op,
+webdav_fs_new(const WebdavOperations *op,
               size_t op_size,
               void *user_data) {
   UNUSED(op_size);

@@ -188,6 +188,8 @@ EVENT_HANDLER_DEFINE(_handle_request_read, ev_type, ev, ud) {
 
 static
 EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
+  UNUSED(ev_type);
+
   HTTPRequestContext *rctx = ud;
   struct chunked_read_persist_ctx *cctx = &rctx->persist_ctx.chunked_coro_ctx;
   struct chunked_read_temp_ctx *tctx = &rctx->sub.chunked_read_ctx;
@@ -1131,8 +1133,9 @@ http_response_add_header(HTTPResponseHeaders *rsp,
   int best_string_size = vsnprintf(rsp->headers[rsp->num_headers].value,
                                    sizeof(rsp->headers[rsp->num_headers].value),
                                    value_fmt, ap);
-  assert(best_string_size >= 0);
-  assert((size_t) best_string_size <= (sizeof(rsp->headers[rsp->num_headers].value) - 1));
+  /* poor man's error handling */
+  ASSERT_TRUE(best_string_size >= 0);
+  ASSERT_TRUE((size_t) best_string_size <= (sizeof(rsp->headers[rsp->num_headers].value) - 1));
   va_end(ap);
 
   rsp->num_headers += 1;

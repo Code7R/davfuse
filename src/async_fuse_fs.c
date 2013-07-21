@@ -59,42 +59,58 @@ struct async_fuse_fs {
 typedef enum {
   MESSAGE_TYPE_QUIT,
   MESSAGE_TYPE_OPEN,
-  MESSAGE_TYPE_OPEN_REPLY,
+  MESSAGE_TYPE_READ,
+  MESSAGE_TYPE_REPLY,
 } worker_message_type_t;
 
 #define MESSAGE_HDR worker_message_type_t type
+#define REQUEST_MESSAGE_HDR worker_message_type_t type; Channel *reply_chan
 
 typedef struct {
   MESSAGE_HDR;
 } QuitMessage;
 
 typedef struct {
-  MESSAGE_HDR;
-  const char *file_path;
+  REQUEST_MESSAGE_HDR;
+  const char *path;
   struct fuse_file_info *fi;
-  Channel *reply_chan;
 } OpenMessage;
+
+typedef struct {
+  REQUEST_MESSAGE_HDR;
+  const char *path;
+  char *buf;
+  size_t size;
+  off_t off;
+  struct fuse_file_info *fi;
+} ReadMessage;
 
 typedef struct {
   MESSAGE_HDR;
   int ret;
-} OpenReplyMessage;
+} ReplyMessage;
 
 typedef union {
-  MESSAGE_HDR;
+  struct {
+    MESSAGE_HDR;
+  } generic;
+  struct {
+    REQUEST_MESSAGE_HDR;
+  } request;
   QuitMessage quit;
   OpenMessage open;
-  OpenReplyMessage open_reply;
+  ReadMessage read;
+  ReplyMessage reply;
 } Message;
 
 typedef struct {
   bool error;
-} SendOpenMessageDoneEvent;
+} SendMessageDoneEvent;
 
 typedef struct {
   bool error;
-  OpenReplyMessage msg;
-} ReceiveOpenReplyMessageDoneEvent;
+  ReplyMessage msg;
+} ReceiveReplyMessageDoneEvent;
 
 static bool
 send_atomic_message(Channel *chan, Message *msg) {
@@ -121,7 +137,7 @@ send_quit_message_blocking(Channel *chan) {
     return false;
   }
 
-  Message msg = {.type = MESSAGE_TYPE_QUIT};
+  Message msg = {.quit = {.type = MESSAGE_TYPE_QUIT}};
   int ret_send_atomic_message = send_atomic_message(chan, &msg);
 
   bool success_set_non_blocking = set_non_blocking(chan->named.in);
@@ -138,32 +154,20 @@ typedef struct {
   /* args */
   FDEventLoop *loop;
   Channel *to_chan;
-  const char *file_path;
-  struct fuse_file_info *fi;
-  Channel *reply_chan;
+  Message *msg;
   event_handler_t cb;
   void *ud;
   /* ctx */
-  Message msg;
-} SendOpenMessageCtx;
+} SendMessageCtx;
 
 static
-UTHR_DEFINE(_send_open_message) {
+UTHR_DEFINE(_send_message) {
   bool error;
 
-  UTHR_HEADER(SendOpenMessageCtx, ctx);
-
-  ctx->msg = (Message) {
-    .open = {
-      .type = MESSAGE_TYPE_OPEN,
-      .file_path = ctx->file_path,
-      .fi = ctx->fi,
-      .reply_chan = ctx->reply_chan,
-    }
-  };
+  UTHR_HEADER(SendMessageCtx, ctx);
 
   while (true) {
-    bool success_sent = send_atomic_message(ctx->to_chan, &ctx->msg);
+    bool success_sent = send_atomic_message(ctx->to_chan, ctx->msg);
     if (success_sent) {
       error = false;
       break;
@@ -172,7 +176,7 @@ UTHR_DEFINE(_send_open_message) {
     if (errno == EAGAIN) {
       bool ret = fdevent_add_watch(ctx->loop, ctx->to_chan->named.in,
                                    create_stream_events(false, true),
-                                   _send_open_message,
+                                   _send_message,
                                    ctx,
                                    NULL);
       if (!ret) { abort(); }
@@ -184,28 +188,24 @@ UTHR_DEFINE(_send_open_message) {
     }
   }
 
-  SendOpenMessageDoneEvent ev = {
+  SendMessageDoneEvent ev = {
     .error = error,
   };
   UTHR_RETURN(ctx,
-              ctx->cb(SEND_OPEN_MESSAGE_DONE_EVENT, &ev, ctx->ud));
+              ctx->cb(SEND_MESSAGE_DONE_EVENT, &ev, ctx->ud));
 
   UTHR_FOOTER();
 }
 
 static void
-send_open_message(FDEventLoop *loop,
-                  Channel *to_chan,
-                  const char *file_path,
-                  struct fuse_file_info *fi,
-                  Channel *reply_chan,
-                  event_handler_t cb, void *ud) {
-  UTHR_CALL7(_send_open_message, SendOpenMessageCtx,
+send_message(FDEventLoop *loop,
+             Channel *to_chan,
+             Message *msg,
+             event_handler_t cb, void *ud) {
+  UTHR_CALL6(_send_message, SendMessageCtx,
              .loop = loop,
              .to_chan = to_chan,
-             .file_path = file_path,
-             .fi = fi,
-             .reply_chan = reply_chan,
+             .msg = msg,
              .cb = cb,
              .ud = ud);
 }
@@ -219,13 +219,13 @@ typedef struct {
   void *ud;
   /* ctx */
   Message msg;
-} ReceiveOpenReplyMessageCtx;
+} ReceiveReplyMessageCtx;
 
 static
-UTHR_DEFINE(_receive_open_reply_message) {
+UTHR_DEFINE(_receive_reply_message) {
   bool error;
 
-  UTHR_HEADER(ReceiveOpenReplyMessageCtx, ctx);
+  UTHR_HEADER(ReceiveReplyMessageCtx, ctx);
 
   while (true) {
     bool success_receive =
@@ -238,7 +238,7 @@ UTHR_DEFINE(_receive_open_reply_message) {
     if (errno == EAGAIN) {
       bool ret = fdevent_add_watch(ctx->loop, ctx->from_chan->named.out,
                                    create_stream_events(true, false),
-                                   _receive_open_reply_message,
+                                   _receive_reply_message,
                                    ctx,
                                    NULL);
       if (!ret) { abort(); }
@@ -250,21 +250,21 @@ UTHR_DEFINE(_receive_open_reply_message) {
     }
   }
 
-  ReceiveOpenReplyMessageDoneEvent ev = {
+  ReceiveReplyMessageDoneEvent ev = {
     .error = error,
-    .msg = ctx->msg.open_reply,
+    .msg = ctx->msg.reply,
   };
   UTHR_RETURN(ctx,
-              ctx->cb(RECEIVE_OPEN_REPLY_MESSAGE_DONE_EVENT, &ev, ctx->ud));
+              ctx->cb(RECEIVE_REPLY_MESSAGE_DONE_EVENT, &ev, ctx->ud));
 
   UTHR_FOOTER();
 }
 
 static void
-receive_open_reply_message(FDEventLoop *loop,
-                           Channel *from_chan,
-                           event_handler_t cb, void *ud) {
-  UTHR_CALL4(_receive_open_reply_message, ReceiveOpenReplyMessageCtx,
+receive_reply_message(FDEventLoop *loop,
+                      Channel *from_chan,
+                      event_handler_t cb, void *ud) {
+  UTHR_CALL4(_receive_reply_message, ReceiveReplyMessageCtx,
              .loop = loop,
              .from_chan = from_chan,
              .cb = cb,
@@ -345,18 +345,19 @@ typedef struct {
   UTHR_CTX_BASE;
   /* args */
   struct async_fuse_fs *fs;
-  const char *path;
-  struct fuse_file_info *fi;
+  Message msg;
+  event_type_t done_event_type;
   event_handler_t cb;
   void *cb_ud;
   /* ctx */
   bool set_in_use;
-} FuseFsOpenAsync;
+} SendRequestCtx;
 
-UTHR_DEFINE(_fuse_fs_open_async_uthr) {
+static
+UTHR_DEFINE(_send_request_uthr) {
   FuseFsOpDoneEvent ev;
 
-  UTHR_HEADER(FuseFsOpenAsync, ctx);
+  UTHR_HEADER(SendRequestCtx, ctx);
 
   ctx->set_in_use = false;
 
@@ -369,33 +370,34 @@ UTHR_DEFINE(_fuse_fs_open_async_uthr) {
   ctx->fs->from_in_use = true;
   ctx->set_in_use = true;
 
+  ctx->msg.request.reply_chan = &ctx->fs->to_server;
+
   UTHR_YIELD(ctx,
-             send_open_message(ctx->fs->loop,
-                               &ctx->fs->to_worker,
-                               ctx->path, ctx->fi,
-                               &ctx->fs->to_server,
-                               _fuse_fs_open_async_uthr, ctx));
-  UTHR_RECEIVE_EVENT(SEND_OPEN_MESSAGE_DONE_EVENT,
-                     SendOpenMessageDoneEvent, send_open_msg_done_ev);
-  if (send_open_msg_done_ev->error) {
+             send_message(ctx->fs->loop,
+                          &ctx->fs->to_worker,
+                          &ctx->msg,
+                          _send_request_uthr, ctx));
+  UTHR_RECEIVE_EVENT(SEND_MESSAGE_DONE_EVENT,
+                     SendMessageDoneEvent, send_msg_done_ev);
+  if (send_msg_done_ev->error) {
     ev.ret = -EIO;
     goto done;
   }
 
   /* okay now that we sent off message, wait for the reply */
   UTHR_YIELD(ctx,
-             receive_open_reply_message(ctx->fs->loop,
-                                        &ctx->fs->to_server,
-                                        _fuse_fs_open_async_uthr, ctx));
-  UTHR_RECEIVE_EVENT(RECEIVE_OPEN_REPLY_MESSAGE_DONE_EVENT,
-                     ReceiveOpenReplyMessageDoneEvent,
-                     receive_open_reply_message_done_ev);
-  if (receive_open_reply_message_done_ev->error) {
+             receive_reply_message(ctx->fs->loop,
+                                   &ctx->fs->to_server,
+                                   _send_request_uthr, ctx));
+  UTHR_RECEIVE_EVENT(RECEIVE_REPLY_MESSAGE_DONE_EVENT,
+                     ReceiveReplyMessageDoneEvent,
+                     receive_reply_message_done_ev);
+  if (receive_reply_message_done_ev->error) {
     /* this is pretty hard to recover from, just abort for now */
     abort();
   }
 
-  ev.ret = receive_open_reply_message_done_ev->msg.ret;
+  ev.ret = receive_reply_message_done_ev->msg.ret;
 
  done:
   if (ctx->set_in_use) {
@@ -403,7 +405,7 @@ UTHR_DEFINE(_fuse_fs_open_async_uthr) {
   }
 
   UTHR_RETURN(ctx,
-              ctx->cb(ASYNC_FUSE_FS_OPEN_DONE_EVENT, &ev, ctx->cb_ud));
+              ctx->cb(ctx->done_event_type, &ev, ctx->cb_ud));
 
   UTHR_FOOTER();
 }
@@ -412,10 +414,42 @@ void
 async_fuse_fs_open(async_fuse_fs_t fs,
                    const char *path, struct fuse_file_info *fi,
                    event_handler_t cb, void *cb_ud) {
-  UTHR_CALL5(_fuse_fs_open_async_uthr, FuseFsOpenAsync,
+  Message msg = {
+    .open = {
+      .type = MESSAGE_TYPE_OPEN,
+      .path = path,
+      .fi = fi,
+    }
+  };
+
+  UTHR_CALL5(_send_request_uthr, SendRequestCtx,
              .fs = fs,
-             .path = path,
-             .fi = fi,
+             .msg = msg,
+             .done_event_type = ASYNC_FUSE_FS_OPEN_DONE_EVENT,
+             .cb = cb,
+             .cb_ud = cb_ud);
+}
+
+void
+async_fuse_fs_read(async_fuse_fs_t fs,
+                   const char *path, char *buf, size_t size,
+                   off_t off, struct fuse_file_info *fi,
+                   event_handler_t cb, void *cb_ud) {
+  Message msg = {
+    .read = {
+      .type = MESSAGE_TYPE_READ,
+      .path = path,
+      .buf = buf,
+      .size = size,
+      .off = off,
+      .fi = fi,
+    },
+  };
+
+  UTHR_CALL6(_send_request_uthr, SendRequestCtx,
+             .fs = fs,
+             .msg = msg,
+             .done_event_type = ASYNC_FUSE_FS_READ_DONE_EVENT,
              .cb = cb,
              .cb_ud = cb_ud);
 }
@@ -440,37 +474,41 @@ async_fuse_worker_main_loop(async_fuse_fs_t fs,
       break;
     }
 
-    switch (msg.type) {
-    case MESSAGE_TYPE_QUIT:
+    if (msg.generic.type == MESSAGE_TYPE_QUIT) {
       log_info("Received quit message, quitting...");
-      goto done;
       break;
+    }
+
+    int ret;
+    switch (msg.request.type) {
     case MESSAGE_TYPE_OPEN:
-      {
-        assert(msg.open.type == MESSAGE_TYPE_OPEN);
-        int ret = op->open(msg.open.file_path, msg.open.fi);
-        Message reply_msg = {
-          .open_reply = {
-            .type = MESSAGE_TYPE_OPEN_REPLY,
-            .ret = ret,
-          },
-        };
-        bool success_send_atomic_message =
-          send_atomic_message(msg.open.reply_chan, &reply_msg);
-        if (!success_send_atomic_message) {
-          /* this can't fail because it's a reply message */
-          abort();
-        }
-      };
+      ret = op->open(msg.open.path, msg.open.fi);
+      break;
+    case MESSAGE_TYPE_READ:
+      ret = op->read(msg.read.path,
+                     msg.read.buf, msg.read.size, msg.read.off,
+                     msg.read.fi);
       break;
     default:
-      log_info("Received unknown message type: %d", msg.type);
+      log_critical("Received unknown message type: %d", msg.request.type);
       abort();
       break;
     }
+
+    Message reply_msg = {
+      .reply = {
+        .type = MESSAGE_TYPE_REPLY,
+        .ret = ret,
+      },
+    };
+    bool success_send_atomic_message =
+      send_atomic_message(msg.request.reply_chan, &reply_msg);
+    if (!success_send_atomic_message) {
+      /* this can't fail because it's a reply message */
+      abort();
+    }
   }
 
- done:
   return;
 }
 
