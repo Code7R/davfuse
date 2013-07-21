@@ -446,7 +446,7 @@ async_fuse_fs_read(async_fuse_fs_t fs,
     },
   };
 
-  UTHR_CALL6(_send_request_uthr, SendRequestCtx,
+  UTHR_CALL5(_send_request_uthr, SendRequestCtx,
              .fs = fs,
              .msg = msg,
              .done_event_type = ASYNC_FUSE_FS_READ_DONE_EVENT,
