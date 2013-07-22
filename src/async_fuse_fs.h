@@ -25,10 +25,27 @@ async_fuse_fs_open(async_fuse_fs_t fs,
                    event_handler_t cb, void *cb_ud);
 
 void
+async_fuse_fs_fgetattr(async_fuse_fs_t fs,
+                       const char *path, struct stat *buf,
+                       struct fuse_file_info *fi,
+                       event_handler_t cb, void *cb_ud);
+
+void
 async_fuse_fs_read(async_fuse_fs_t fs,
                    const char *path, char *buf, size_t size,
                    off_t off, struct fuse_file_info *fi,
                    event_handler_t cb, void *cb_ud);
+
+void
+async_fuse_fs_write(async_fuse_fs_t fs,
+                    const char *path, const char *buf,
+                    size_t size, off_t off, struct fuse_file_info *fi,
+                    event_handler_t cb, void *cb_ud);
+
+void
+async_fuse_fs_opendir(async_fuse_fs_t fs,
+                      const char *path, struct fuse_file_info *fi,
+                      event_handler_t cb, void *cb_ud);
 
 void
 async_fuse_worker_main_loop(async_fuse_fs_t fs,

@@ -87,8 +87,8 @@ typedef struct {
   webdav_timeout_t timeout_in_seconds;
 } WebdavLockDescriptor;
 
-struct webdav_fs {
-  const WebdavOperations *op;
+struct webdav_backend {
+  const WebdavBackendOperations *op;
   void *user_data;
 };
 
@@ -96,11 +96,22 @@ struct webdav_server {
   HTTPServer http;
   FDEventLoop *loop;
   linked_list_t locks;
-  webdav_fs_t fs;
+  webdav_backend_t fs;
   char *public_prefix;
   event_handler_t stop_cb;
   void *stop_ud;
 };
+
+typedef struct {
+  const void *buf;
+  size_t nbyte;
+  event_handler_t cb;
+  void *cb_ud;
+} WebdavGetRequestWriteEvent;
+
+typedef struct {
+  webdav_error_t error;
+} WebdavGetRequestEndEvent;
 
 struct handler_context {
   UTHR_CTX_BASE;
@@ -129,10 +140,10 @@ struct handler_context {
     } delete;
     struct get_context {
       coroutine_position_t pos;
-      char buf[BUF_SIZE];
-      void *file_handle;
       char *resource_uri;
-      size_t total_read;
+      bool set_size_hint;
+      bool sent_headers;
+      WebdavGetRequestWriteEvent rwev;
     } get;
     struct lock_context {
       coroutine_position_t pos;
@@ -198,7 +209,7 @@ typedef struct {
 typedef struct {
   UTHR_CTX_BASE;
   /* args */
-  webdav_fs_t fs;
+  webdav_backend_t fs;
   const char *relative_uri;
   event_handler_t cb;
   void *cb_ud;
@@ -208,15 +219,15 @@ typedef struct {
 } WebdavFsStatCtx;
 
 static
-UTHR_DEFINE(webdav_fs_stat_uthr) {
+UTHR_DEFINE(webdav_backend_stat_uthr) {
   UTHR_HEADER(WebdavFsStatCtx, ctx);
 
   ctx->file_handle = NULL;
 
   bool should_create = false;
   UTHR_YIELD(ctx,
-             webdav_fs_open(ctx->fs, ctx->relative_uri, should_create,
-                            webdav_fs_stat_uthr, ctx));
+             webdav_backend_open(ctx->fs, ctx->relative_uri, should_create,
+                            webdav_backend_stat_uthr, ctx));
   UTHR_RECEIVE_EVENT(WEBDAV_OPEN_DONE_EVENT, WebdavOpenDoneEvent, open_done_ev);
   if (open_done_ev->error) {
     log_info("Couldn't open file (%s): %d",
@@ -229,8 +240,8 @@ UTHR_DEFINE(webdav_fs_stat_uthr) {
   ctx->file_handle = open_done_ev->file_handle;
 
   UTHR_YIELD(ctx,
-             webdav_fs_fstat(ctx->fs, ctx->file_handle,
-                             webdav_fs_stat_uthr, ctx));
+             webdav_backend_fstat(ctx->fs, ctx->file_handle,
+                             webdav_backend_stat_uthr, ctx));
   UTHR_RECEIVE_EVENT(WEBDAV_FSTAT_DONE_EVENT, WebdavFstatDoneEvent, fstat_done_ev);
   if (fstat_done_ev->error) {
     log_info("Couldn't fstat file (%s): %d",
@@ -247,8 +258,8 @@ UTHR_DEFINE(webdav_fs_stat_uthr) {
  done:
   if (ctx->file_handle) {
     UTHR_YIELD(ctx,
-               webdav_fs_close(ctx->fs, ctx->file_handle,
-                               webdav_fs_stat_uthr, ctx));
+               webdav_backend_close(ctx->fs, ctx->file_handle,
+                               webdav_backend_stat_uthr, ctx));
     UTHR_RECEIVE_EVENT(WEBDAV_CLOSE_DONE_EVENT, WebdavCloseDoneEvent, close_done_ev);
     if (close_done_ev->error) {
       /* this kind of error is intolerable */
@@ -266,10 +277,10 @@ UTHR_DEFINE(webdav_fs_stat_uthr) {
 }
 
 static void
-webdav_fs_stat(webdav_fs_t fs,
+webdav_backend_stat(webdav_backend_t fs,
                const char *relative_uri,
                event_handler_t cb, void *cb_ud) {
-  UTHR_CALL4(webdav_fs_stat_uthr, WebdavFsStatCtx,
+  UTHR_CALL4(webdav_backend_stat_uthr, WebdavFsStatCtx,
              .fs = fs,
              .relative_uri = relative_uri,
              .cb = cb,
@@ -283,7 +294,7 @@ typedef struct {
 typedef struct {
   UTHR_CTX_BASE;
   /* args */
-  webdav_fs_t fs;
+  webdav_backend_t fs;
   const char *relative_uri;
   event_handler_t cb;
   void *cb_ud;
@@ -292,19 +303,19 @@ typedef struct {
 } WebdavFsTouchCtx;
 
 static
-UTHR_DEFINE(webdav_fs_touch_uthr) {
+UTHR_DEFINE(webdav_backend_touch_uthr) {
   UTHR_HEADER(WebdavFsTouchCtx, ctx);
 
   bool create_file = true;
   UTHR_YIELD(ctx,
-             webdav_fs_open(ctx->fs, ctx->relative_uri, create_file,
-                            webdav_fs_touch_uthr, ctx));
+             webdav_backend_open(ctx->fs, ctx->relative_uri, create_file,
+                            webdav_backend_touch_uthr, ctx));
   UTHR_RECEIVE_EVENT(WEBDAV_OPEN_DONE_EVENT, WebdavOpenDoneEvent, open_done_ev);
   ctx->ev.error = open_done_ev->error;
 
   UTHR_YIELD(ctx,
-             webdav_fs_close(ctx->fs, open_done_ev->file_handle,
-                             webdav_fs_touch_uthr, ctx));
+             webdav_backend_close(ctx->fs, open_done_ev->file_handle,
+                             webdav_backend_touch_uthr, ctx));
   UTHR_RECEIVE_EVENT(WEBDAV_CLOSE_DONE_EVENT, WebdavCloseDoneEvent, close_done_ev);
 
   if (close_done_ev->error) {
@@ -319,10 +330,10 @@ UTHR_DEFINE(webdav_fs_touch_uthr) {
 }
 
 static void
-webdav_fs_touch(webdav_fs_t fs,
+webdav_backend_touch(webdav_backend_t fs,
                 const char *relative_uri,
                 event_handler_t cb, void *cb_ud) {
-  UTHR_CALL4(webdav_fs_touch_uthr, WebdavFsTouchCtx,
+  UTHR_CALL4(webdav_backend_touch_uthr, WebdavFsTouchCtx,
              .fs = fs,
              .relative_uri = relative_uri,
              .cb = cb,
@@ -913,7 +924,7 @@ UTHR_DEFINE(run_propfind_uthr) {
   /* open the resource */
   bool create_resource = false;
   UTHR_YIELD(ctx,
-             webdav_fs_open(ctx->hc->serv->fs,
+             webdav_backend_open(ctx->hc->serv->fs,
                             ctx->relative_uri, create_resource,
                             run_propfind_uthr, ctx));
   UTHR_RECEIVE_EVENT(WEBDAV_OPEN_DONE_EVENT, WebdavOpenDoneEvent, open_done_ev);
@@ -927,7 +938,7 @@ UTHR_DEFINE(run_propfind_uthr) {
 
   /* first get info for root element */
   UTHR_YIELD(ctx,
-             webdav_fs_fstat(ctx->hc->serv->fs, ctx->handle,
+             webdav_backend_fstat(ctx->hc->serv->fs, ctx->handle,
                              run_propfind_uthr, ctx));
   UTHR_RECEIVE_EVENT(WEBDAV_FSTAT_DONE_EVENT, WebdavFstatDoneEvent, fstat_done_ev);
   if (fstat_done_ev->error) {
@@ -946,7 +957,7 @@ UTHR_DEFINE(run_propfind_uthr) {
       fstat_done_ev->file_info.is_collection) {
     while (true) {
       UTHR_YIELD(ctx,
-                 webdav_fs_readcol(ctx->hc->serv->fs, ctx->handle, ctx->ce, NELEMS(ctx->ce),
+                 webdav_backend_readcol(ctx->hc->serv->fs, ctx->handle, ctx->ce, NELEMS(ctx->ce),
                                    run_propfind_uthr, ctx));
       UTHR_RECEIVE_EVENT(WEBDAV_READCOL_DONE_EVENT, WebdavReadcolDoneEvent, readcol_done_ev);
       if (readcol_done_ev->error) {
@@ -1000,7 +1011,7 @@ UTHR_DEFINE(run_propfind_uthr) {
 
   if (ctx->handle) {
     UTHR_YIELD(ctx,
-               webdav_fs_close(ctx->hc->serv->fs, ctx->handle,
+               webdav_backend_close(ctx->hc->serv->fs, ctx->handle,
                                run_propfind_uthr, ctx));
     UTHR_RECEIVE_EVENT(WEBDAV_CLOSE_DONE_EVENT, WebdavCloseDoneEvent, close_done_ev);
     if (close_done_ev->error) {
@@ -1619,7 +1630,7 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
                "bad depth header");
 
   CRYIELD(ctx->pos,
-          webdav_fs_stat(hc->serv->fs,
+          webdav_backend_stat(hc->serv->fs,
                          ctx->dst_relative_uri,
                          handle_copy_request, ud));
   assert(WEBDAV_STAT_DONE_EVENT == ev_type);
@@ -1635,7 +1646,7 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
     /* TODO: XXX: destroy all locks held for the source resource */
 
     CRYIELD(ctx->pos,
-            webdav_fs_move(hc->serv->fs,
+            webdav_backend_move(hc->serv->fs,
                            ctx->src_relative_uri, ctx->dst_relative_uri,
                            overwrite,
                            handle_copy_request, ud));
@@ -1646,7 +1657,7 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   }
   else {
     CRYIELD(ctx->pos,
-            webdav_fs_copy(hc->serv->fs,
+            webdav_backend_copy(hc->serv->fs,
                            ctx->src_relative_uri, ctx->dst_relative_uri,
                            overwrite, ctx->depth,
                            handle_copy_request, ud));
@@ -1728,7 +1739,7 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   }
 
   CRYIELD(ctx->pos,
-          webdav_fs_stat(hc->serv->fs,
+          webdav_backend_stat(hc->serv->fs,
                          ctx->request_relative_uri,
                          handle_delete_request, ud));
   assert(WEBDAV_STAT_DONE_EVENT == ev_type);
@@ -1744,7 +1755,7 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
     }
 
     CRYIELD(ctx->pos,
-            webdav_fs_delete(hc->serv->fs,
+            webdav_backend_delete(hc->serv->fs,
                              ctx->request_relative_uri,
                              handle_delete_request, ud));
     assert(WEBDAV_DELETE_DONE_EVENT == ev_type);
@@ -1796,6 +1807,47 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   CREND();
 }
 
+void
+webdav_get_request_size_hint(webdav_get_request_ctx_t hc,
+                             size_t size,
+                             event_handler_t cb, void *cb_ud) {
+  struct get_context *ctx = &hc->sub.get;
+
+  bool success_set_code = http_response_set_code(&hc->resp, HTTP_STATUS_CODE_OK);
+  ASSERT_TRUE(success_set_code);
+
+  bool success_add_header =
+    http_response_add_header(&hc->resp,
+                             HTTP_HEADER_CONTENT_LENGTH, "%zu", size);
+  ASSERT_TRUE(success_add_header);
+
+  ctx->set_size_hint = true;
+  WebdavGetRequestSizeHintDoneEvent ev = {.error = WEBDAV_ERROR_NONE};
+  return cb(WEBDAV_GET_REQUEST_SIZE_HINT_DONE_EVENT, &ev, cb_ud);
+}
+
+void
+webdav_get_request_write(webdav_get_request_ctx_t get_ctx,
+                         const void *buf, size_t nbyte,
+                         event_handler_t cb, void *cb_ud) {
+  WebdavGetRequestWriteEvent ev = {
+    .buf = buf,
+    .nbyte = nbyte,
+    .cb = cb,
+    .cb_ud = cb_ud,
+  };
+
+  return handle_get_request(WEBDAV_GET_REQUEST_WRITE_EVENT, &ev, get_ctx);
+}
+
+void
+webdav_get_request_end(webdav_get_request_ctx_t get_ctx, webdav_error_t error) {
+  WebdavGetRequestEndEvent ev = {
+    .error = error,
+  };
+  return handle_get_request(WEBDAV_GET_REQUEST_END_EVENT, &ev, get_ctx);
+}
+
 static
 EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   UNUSED(ev_type);
@@ -1810,119 +1862,70 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   ctx->resource_uri = path_from_uri(hc, hc->rhs.uri);
   if (!ctx->resource_uri) {
     code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    goto error_response;
-  }
-
-  /* open file */
-  bool create_file = false;
-  CRYIELD(ctx->pos,
-          webdav_fs_open(hc->serv->fs,
-                         ctx->resource_uri, create_file,
-                         handle_get_request, ud));
-  assert(WEBDAV_OPEN_DONE_EVENT == ev_type);
-  WebdavOpenDoneEvent *open_done_ev = ev;
-  if (open_done_ev->error) {
-    code = open_done_ev->error == WEBDAV_ERROR_DOES_NOT_EXIST
-      ? HTTP_STATUS_CODE_NOT_FOUND
-      : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    goto error_response;
-  }
-
-  ctx->file_handle = open_done_ev->file_handle;
-
-  CRYIELD(ctx->pos,
-          webdav_fs_fstat(hc->serv->fs, ctx->file_handle,
-                          handle_get_request, ud));
-  assert(WEBDAV_FSTAT_DONE_EVENT == ev_type);
-  WebdavFstatDoneEvent *fstat_done_ev = ev;
-  if (fstat_done_ev->error) {
-    code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    goto error_response;
-  }
-
-  size_t content_length = fstat_done_ev->file_info.length;
-
-  bool ret;
-  ret = http_response_set_code(&hc->resp, HTTP_STATUS_CODE_OK);
-  assert(ret);
-  ret = http_response_add_header(&hc->resp,
-                                 HTTP_HEADER_CONTENT_LENGTH, "%zu", content_length);
-  assert(ret);
-
-  CRYIELD(ctx->pos,
-          http_request_write_headers(hc->rh, &hc->resp,
-                                     handle_get_request, hc));
-  assert(ev_type == HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT);
-  HTTPRequestWriteHeadersDoneEvent *write_headers_ev = ev;
-  assert(write_headers_ev->request_handle == hc->rh);
-  if (write_headers_ev->err != HTTP_SUCCESS) {
     goto done;
   }
 
-  log_debug("Sending resource %s, length: %s", hc->rhs.uri, hc->resp.headers[0].value);
+  CRYIELD(ctx->pos,
+          webdav_backend_get(hc->serv->fs, ctx->resource_uri, hc));
+  while (ev_type != WEBDAV_GET_REQUEST_END_EVENT) {
+    assert(ev_type == WEBDAV_GET_REQUEST_WRITE_EVENT);
+    ctx->rwev = *((WebdavGetRequestWriteEvent *) ev);
 
-  /* TODO: must send up to the content-length we sent */
-  ctx->total_read = 0;
-  while (true) {
-    CRYIELD(ctx->pos,
-            webdav_fs_read(hc->serv->fs, ctx->file_handle,
-                           ctx->buf, sizeof(ctx->buf),
-                           handle_get_request, ud));
-    assert(WEBDAV_READ_DONE_EVENT == ev_type);
-    WebdavReadDoneEvent *read_done_ev = ev;
-    if (read_done_ev->error) {
-      log_error("Error while read()ing file");
-      goto done;
+    if (!ctx->set_size_hint) {
+      /* this is an error */
+      goto loop_error;
     }
 
-    ssize_t amt_read = read_done_ev->nbyte;
-    if (!amt_read) {
-      /* EOF */
-      log_debug("EOF done reading file; total read: %zu", ctx->total_read);
-      break;
+    if (!ctx->sent_headers) {
+      CRYIELD(ctx->pos,
+              http_request_write_headers(hc->rh, &hc->resp,
+                                         handle_get_request, hc));
+      assert(ev_type == HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT);
+      HTTPRequestWriteHeadersDoneEvent *write_headers_ev = ev;
+      assert(write_headers_ev->request_handle == hc->rh);
+      if (write_headers_ev->err != HTTP_SUCCESS) {
+        goto loop_error;
+      }
+      ctx->sent_headers = true;
     }
 
-    log_debug("Sending %zd bytes", amt_read);
-
-    /* NB: eagerly increment this since the yield will lose the amt_read local */
-    ctx->total_read += amt_read;
-
-    /* now write to socket */
     CRYIELD(ctx->pos,
-            http_request_write(hc->rh, ctx->buf, amt_read,
+            http_request_write(hc->rh, ctx->rwev.buf, ctx->rwev.nbyte,
                                handle_get_request, hc));
     assert(ev_type == HTTP_REQUEST_WRITE_DONE_EVENT);
     HTTPRequestWriteDoneEvent *write_ev = ev;
     assert(write_ev->request_handle == hc->rh);
     if (write_ev->err != HTTP_SUCCESS) {
-      goto done;
+      goto loop_error;
     }
-  }
 
-  if (false) {
-  error_response:
+    WebdavGetRequestWriteDoneEvent ev1 = {.error = WEBDAV_ERROR_NONE};
+    if (false) {
+    loop_error:
+      ev1.error = WEBDAV_ERROR_GENERAL;
+    }
+
+    CRYIELD(ctx->pos,
+            ctx->rwev.cb(WEBDAV_GET_REQUEST_WRITE_DONE_EVENT, &ev1, ctx->rwev.cb_ud));
+  }
+  WebdavGetRequestEndEvent *request_end_ev = ev;
+
+ done:
+  if (!ctx->sent_headers) {
+    http_status_code_t code = request_end_ev->error
+      ? HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR
+      /* 0-byte file */
+      : HTTP_STATUS_CODE_OK;
     CRYIELD(ctx->pos,
             http_request_simple_response(hc->rh,
                                          code,
                                          "", 0,
-                                         "application/xml",
+                                         "text/plain",
                                          LINKED_LIST_INITIALIZER,
                                          handle_get_request, ud));
   }
 
- done:
   free(ctx->resource_uri);
-
-  if (ctx->file_handle) {
-    CRYIELD(ctx->pos,
-            webdav_fs_close(hc->serv->fs, ctx->file_handle,
-                            handle_get_request, ud));
-    assert(ev_type == WEBDAV_CLOSE_DONE_EVENT);
-    WebdavCloseDoneEvent *close_done_ev = ev;
-    if (close_done_ev->error) {
-      abort();
-    }
-  }
 
   CRRETURN(ctx->pos,
            request_proc(GENERIC_EVENT, NULL, hc));
@@ -2102,7 +2105,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   ctx->created = false;
   if (!ctx->is_locked) {
     CRYIELD(ctx->pos,
-            webdav_fs_stat(hc->serv->fs,
+            webdav_backend_stat(hc->serv->fs,
                            ctx->file_path,
                            handle_lock_request, ud));
     assert(WEBDAV_STAT_DONE_EVENT == ev_type);
@@ -2110,7 +2113,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
     if (stat_done_ev->error == WEBDAV_ERROR_DOES_NOT_EXIST) {
       ctx->created = true;
       CRYIELD(ctx->pos,
-              webdav_fs_touch(hc->serv->fs, ctx->file_path,
+              webdav_backend_touch(hc->serv->fs, ctx->file_path,
                               handle_lock_request, ud));
       /* NB: ignoring touch error */
       assert(WEBDAV_TOUCH_DONE_EVENT == ev_type);
@@ -2487,7 +2490,7 @@ EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
   }
 
   CRYIELD(ctx->pos,
-          webdav_fs_mkcol(hc->serv->fs,
+          webdav_backend_mkcol(hc->serv->fs,
                           ctx->request_relative_uri,
                           handle_mkcol_request, hc));
   assert(WEBDAV_MKCOL_DONE_EVENT == ev_type);
@@ -2924,7 +2927,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
   }
 
   CRYIELD(ctx->pos,
-          webdav_fs_stat(hc->serv->fs,
+          webdav_backend_stat(hc->serv->fs,
                          ctx->request_relative_uri,
                          handle_put_request, ud));
   assert(WEBDAV_STAT_DONE_EVENT == ev_type);
@@ -2945,7 +2948,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
 
   bool create_file = true;
   CRYIELD(ctx->pos,
-          webdav_fs_open(hc->serv->fs,
+          webdav_backend_open(hc->serv->fs,
                          ctx->request_relative_uri, create_file,
                          handle_put_request, ud));
   assert(WEBDAV_OPEN_DONE_EVENT == ev_type);
@@ -2968,7 +2971,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
 
   /* check if this is a collection */
   CRYIELD(ctx->pos,
-          webdav_fs_fstat(hc->serv->fs, ctx->file_handle,
+          webdav_backend_fstat(hc->serv->fs, ctx->file_handle,
                           handle_put_request, ud));
   assert(ev_type == WEBDAV_FSTAT_DONE_EVENT);
   WebdavFstatDoneEvent *fstat_done_ev = ev;
@@ -3006,7 +3009,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
     ctx->amount_written = 0;
     while (ctx->amount_written < ctx->amount_read) {
       CRYIELD(ctx->pos,
-              webdav_fs_write(hc->serv->fs, ctx->file_handle,
+              webdav_backend_write(hc->serv->fs, ctx->file_handle,
                               ctx->read_buf + ctx->amount_written,
                               ctx->amount_read - ctx->amount_written,
                               handle_put_request, ud));
@@ -3051,7 +3054,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
 
   if (ctx->file_handle) {
     CRYIELD(ctx->pos,
-            webdav_fs_close(hc->serv->fs, ctx->file_handle,
+            webdav_backend_close(hc->serv->fs, ctx->file_handle,
                             handle_put_request, ud));
     assert(WEBDAV_CLOSE_DONE_EVENT == ev_type);
     WebdavCloseDoneEvent *close_done_ev = ev;
@@ -3161,18 +3164,18 @@ EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
              .serv = ud);
 }
 
-webdav_fs_t
-webdav_fs_new(const WebdavOperations *op,
+webdav_backend_t
+webdav_backend_new(const WebdavBackendOperations *op,
               size_t op_size,
               void *user_data) {
   UNUSED(op_size);
 
-  struct webdav_fs *toret = malloc(sizeof(*toret));
+  struct webdav_backend *toret = malloc(sizeof(*toret));
   if (!toret) {
     return NULL;
   }
 
-  *toret = (struct webdav_fs) {
+  *toret = (struct webdav_backend) {
     .op = op,
     .user_data = user_data,
   };
@@ -3181,22 +3184,30 @@ webdav_fs_new(const WebdavOperations *op,
 }
 
 void
-webdav_fs_destroy(webdav_fs_t fs) {
+webdav_backend_destroy(webdav_backend_t fs) {
   free(fs);
 }
 
 void
-webdav_fs_open(webdav_fs_t fs,
-               const char *relative_uri,
-               bool create,
-               event_handler_t cb, void *cb_ud) {
+webdav_backend_get(webdav_backend_t fs,
+                   const char *relative_uri,
+                   webdav_get_request_ctx_t get_ctx) {
+  return fs->op->get(fs->user_data,
+                     relative_uri, get_ctx);
+}
+
+void
+webdav_backend_open(webdav_backend_t fs,
+                    const char *relative_uri,
+                    bool create,
+                    event_handler_t cb, void *cb_ud) {
   return fs->op->open(fs->user_data,
                       relative_uri, create,
                       cb, cb_ud);
 }
 
 void
-webdav_fs_fstat(webdav_fs_t fs,
+webdav_backend_fstat(webdav_backend_t fs,
                 void *file_handle,
                 event_handler_t cb, void *cb_ud) {
   return fs->op->fstat(fs->user_data,
@@ -3205,7 +3216,7 @@ webdav_fs_fstat(webdav_fs_t fs,
 }
 
 void
-webdav_fs_read(webdav_fs_t fs, void *file_handle,
+webdav_backend_read(webdav_backend_t fs, void *file_handle,
                void *buf, size_t buf_size,
                event_handler_t cb, void *cb_ud) {
   return fs->op->read(fs->user_data, file_handle,
@@ -3214,7 +3225,7 @@ webdav_fs_read(webdav_fs_t fs, void *file_handle,
 }
 
 void
-webdav_fs_write(webdav_fs_t fs, void *file_handle,
+webdav_backend_write(webdav_backend_t fs, void *file_handle,
                 const void *buf, size_t buf_size,
                 event_handler_t cb, void *cb_ud) {
   return fs->op->write(fs->user_data, file_handle,
@@ -3223,7 +3234,7 @@ webdav_fs_write(webdav_fs_t fs, void *file_handle,
 }
 
 void
-webdav_fs_readcol(webdav_fs_t fs,
+webdav_backend_readcol(webdav_backend_t fs,
                   void *col_handle,
                   WebdavCollectionEntry *ce, size_t nentries,
                   event_handler_t cb, void *ud) {
@@ -3232,7 +3243,7 @@ webdav_fs_readcol(webdav_fs_t fs,
 }
 
 void
-webdav_fs_close(webdav_fs_t fs,
+webdav_backend_close(webdav_backend_t fs,
                 void *file_handle,
                 event_handler_t cb, void *cb_ud) {
   return fs->op->close(fs->user_data, file_handle,
@@ -3240,21 +3251,21 @@ webdav_fs_close(webdav_fs_t fs,
 }
 
 void
-webdav_fs_mkcol(webdav_fs_t fs,
+webdav_backend_mkcol(webdav_backend_t fs,
                 const char *relative_uri,
                 event_handler_t cb, void *cb_ud) {
   return fs->op->mkcol(fs->user_data, relative_uri, cb, cb_ud);
 }
 
 void
-webdav_fs_delete(webdav_fs_t fs,
+webdav_backend_delete(webdav_backend_t fs,
                  const char *relative_uri,
                  event_handler_t cb, void *cb_ud) {
   return fs->op->delete(fs->user_data, relative_uri, cb, cb_ud);
 }
 
 void
-webdav_fs_move(webdav_fs_t fs,
+webdav_backend_move(webdav_backend_t fs,
                const char *src_relative_uri, const char *dst_relative_uri,
                bool overwrite,
                event_handler_t cb, void *cb_ud) {
@@ -3265,7 +3276,7 @@ webdav_fs_move(webdav_fs_t fs,
 }
 
 void
-webdav_fs_copy(webdav_fs_t fs,
+webdav_backend_copy(webdav_backend_t fs,
                const char *src_relative_uri, const char *dst_relative_uri,
                bool overwrite, webdav_depth_t depth,
                event_handler_t cb, void *cb_ud) {
@@ -3279,7 +3290,7 @@ webdav_server_t
 webdav_server_start(FDEventLoop *loop,
                     int server_fd,
                     const char *public_prefix,
-                    webdav_fs_t fs) {
+                    webdav_backend_t fs) {
   struct webdav_server *serv = malloc(sizeof(*serv));
   if (!serv) {
     goto error;
