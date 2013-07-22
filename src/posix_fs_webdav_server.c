@@ -31,28 +31,26 @@
 #include "uthread.h"
 #include "util.h"
 
+enum {
+  TRANSFER_BUF_SIZE = 4096,
+};
+
 typedef struct {
   char *base_path;
   size_t base_path_len;
 } PosixBackendCtx;
 
-static void
-fill_file_info(WebdavFileInfo *fi, struct stat *st) {
-  *fi = (WebdavFileInfo) {
-    .modified_time = (webdav_file_time_t) st->st_mtime,
-    /* TODO: this should be configurable but for now we just
-       set getlastmodified and creationdate to the same date
-       because that's what apache mod_dav does */
-    .creation_time = (webdav_file_time_t) st->st_ctime,
-    .is_collection = S_ISDIR(st->st_mode),
-    .length = (size_t) st->st_size,
-  };
+static void *
+malloc_or_abort(size_t n) {
+  int saved_errno = errno;
+  void *ret = malloc(n);
+  ASSERT_NOT_NULL(ret);
+  errno = saved_errno;
+  return ret;
 }
 
 static char *
 path_from_uri(PosixBackendCtx *pbctx, const char *real_uri) {
-  UNUSED(fill_file_info);
-
   size_t uri_len = strlen(real_uri);
   if (str_equals(real_uri, "/")) {
     uri_len = 0;
@@ -82,7 +80,7 @@ typedef struct {
   webdav_get_request_ctx_t get_ctx;
   /* ctx */
   char *file_path;
-  char buf[4096];
+  char buf[TRANSFER_BUF_SIZE];
   int fd;
 } PosixGetCtx;
 
@@ -96,7 +94,7 @@ UTHR_DEFINE(_posix_get_uthr) {
 
   ctx->file_path = path_from_uri(ctx->pbctx, ctx->relative_uri);
   if (!ctx->file_path) {
-    error = WEBDAV_ERROR_NO_MEM;
+    error = WEBDAV_ERROR_GENERAL;
     goto done;
   }
 
@@ -109,7 +107,7 @@ UTHR_DEFINE(_posix_get_uthr) {
   }
 
   struct stat st;
-  int fstat_ret = fstat(ctx->fd, &st);
+  const int fstat_ret = fstat(ctx->fd, &st);
   if (fstat_ret < 0) {
     error = WEBDAV_ERROR_GENERAL;
     goto done;
@@ -133,7 +131,7 @@ UTHR_DEFINE(_posix_get_uthr) {
   }
 
   while (true) {
-    ssize_t read_ret = read(ctx->fd, ctx->buf, sizeof(ctx->buf));
+    const ssize_t read_ret = read(ctx->fd, ctx->buf, sizeof(ctx->buf));
     if (read_ret < 0) {
       error = WEBDAV_ERROR_GENERAL;
       goto done;
@@ -173,11 +171,118 @@ UTHR_DEFINE(_posix_get_uthr) {
 static void
 posix_get(void *backend_handle, const char *relative_uri,
           webdav_get_request_ctx_t get_ctx) {
-  UTHR_CALL6(_posix_get_uthr, PosixGetCtx,
+  UTHR_CALL3(_posix_get_uthr, PosixGetCtx,
              .pbctx = (PosixBackendCtx *) backend_handle,
              .relative_uri = relative_uri,
              .get_ctx = get_ctx);
 }
+
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  PosixBackendCtx *pbctx;
+  const char *relative_uri;
+  webdav_put_request_ctx_t put_ctx;
+  /* ctx */
+  int fd;
+  char *file_path;
+  bool resource_existed;
+  size_t total_amount_transferred;
+  char buf[TRANSFER_BUF_SIZE];
+} PosixPutCtx;
+
+static
+UTHR_DEFINE(_posix_put_uthr) {
+  UTHR_HEADER(PosixPutCtx, ctx);
+
+  webdav_error_t error;
+
+  ctx->fd = -1;
+
+  ctx->file_path = path_from_uri(ctx->pbctx, ctx->relative_uri);
+  if (!ctx->file_path) {
+    error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  bool created;
+  const bool success_open_create =
+    open_or_create(ctx->file_path, O_WRONLY, 0666, &ctx->fd, &created);
+
+  if (!success_open_create) {
+    log_info("Error opening \"%s\" (%s)",
+             ctx->file_path, strerror(errno));
+    switch (errno) {
+    case ENOENT: error = WEBDAV_ERROR_DOES_NOT_EXIST; break;
+    case ENOTDIR: error = WEBDAV_ERROR_NOT_COLLECTION; break;
+    case EISDIR: error = WEBDAV_ERROR_IS_COL; break;
+    default: error = WEBDAV_ERROR_GENERAL; break;
+    }
+    goto done;
+  }
+
+  ctx->resource_existed = !created;
+
+  ctx->total_amount_transferred = 0;
+  while (true) {
+    UTHR_YIELD(ctx,
+               webdav_put_request_read(ctx->put_ctx,
+                                       ctx->buf, sizeof(ctx->buf),
+                                       _posix_put_uthr, ctx));
+    UTHR_RECEIVE_EVENT(WEBDAV_PUT_REQUEST_READ_DONE_EVENT,
+                       WebdavPutRequestReadDoneEvent,
+                       read_done_ev);
+
+    /* EOF */
+    if (!read_done_ev->nbyte) {
+      break;
+    }
+
+    const size_t amount_read = read_done_ev->nbyte;
+    size_t amount_written = 0;
+    while (amount_written < amount_read) {
+      int write_ret = write(ctx->fd, ctx->buf + amount_written, amount_read - amount_written);
+      if (write_ret < 0) {
+        log_error("Couldn't write to resource \"%s\" (fd: %d)",
+                  ctx->relative_uri, ctx->fd);
+        error = WEBDAV_ERROR_GENERAL;
+        goto done;
+      }
+
+      amount_written += write_ret;
+    }
+
+    assert(amount_written == amount_read);
+    ctx->total_amount_transferred += amount_written;
+  }
+
+  log_info("Resource \"%s\" created with %zu bytes",
+           ctx->relative_uri, ctx->total_amount_transferred);
+  error = WEBDAV_ERROR_NONE;
+
+ done:
+  free(ctx->file_path);
+
+  if (ctx->fd >= 0) {
+    close_or_abort(ctx->fd);
+  }
+
+  UTHR_RETURN(ctx,
+              webdav_put_request_end(ctx->put_ctx, error, ctx->resource_existed));
+
+  UTHR_FOOTER();
+}
+
+static void
+posix_put(void *backend_handle, const char *relative_uri,
+          webdav_put_request_ctx_t put_ctx) {
+  UTHR_CALL3(_posix_put_uthr, PosixPutCtx,
+             .pbctx = (PosixBackendCtx *) backend_handle,
+             .relative_uri = relative_uri,
+             .put_ctx = put_ctx);
+
+}
+
 
 static void
 posix_mkcol(void *backend_handle, const char *relative_uri,
@@ -235,21 +340,249 @@ posix_mkcol(void *backend_handle, const char *relative_uri,
   return cb(WEBDAV_MKCOL_DONE_EVENT, &ev, ud);
 }
 
+static webdav_propfind_entry_t
+create_propfind_entry_from_stat(const char *relative_uri, struct stat *st) {
+  return webdav_new_propfind_entry(relative_uri,
+                                   st->st_mtime,
+                                   /* mod_dav from apache also uses mtime as creation time */
+                                   st->st_mtime,
+                                   S_ISDIR(st->st_mode),
+                                   st->st_size);
+}
+
+static void
+posix_propfind(void *backend_handle,
+               const char *relative_uri, webdav_depth_t depth,
+               webdav_propfind_req_type_t propfind_req_type,
+               event_handler_t cb, void *cb_ud) {
+  WebdavPropfindDoneEvent ev = {
+    .entries = LINKED_LIST_INITIALIZER,
+    .error = 0,
+  };
+  union {
+    DIR *dirp;
+    int fd;
+  } handle;
+  bool is_dir = false;
+  bool valid_handle = false;
+  PosixBackendCtx *pbctx = (PosixBackendCtx *) backend_handle;
+  char *file_path = NULL;
+
+  /* TODO: support this */
+  if (depth == DEPTH_INF) {
+    log_info("We don't support infinity propfind requests");
+    ev.error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  /* TODO: support this */
+  if (propfind_req_type != WEBDAV_PROPFIND_PROP) {
+    log_info("We only support 'prop' requests");
+    ev.error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  file_path = path_from_uri(pbctx, relative_uri);
+  if (!file_path) {
+    log_info("Couldn't make file path from \"%s\'", file_path);
+    ev.error = true;
+    goto done;
+  }
+
+  /* open the resource */
+  errno = 0;
+  while (!valid_handle && !errno) {
+    handle.dirp = opendir(file_path);
+    if (!handle.dirp && errno == ENOTDIR) {
+      errno = 0;
+      handle.fd = open(file_path, O_RDONLY);
+
+      if (handle.fd >= 0) {
+        /* check if this is a directory, if so try again... */
+        struct stat st;
+        int fstat_ret = fstat(handle.fd, &st);
+        if (fstat_ret < 0 ||
+            S_ISDIR(st.st_mode)) {
+          /* it's a directory! try again */
+          close_or_abort(handle.fd);
+        }
+        else {
+          valid_handle = true;
+        }
+      }
+    }
+    else if (handle.dirp) {
+      is_dir = true;
+      valid_handle = true;
+    }
+  }
+
+  if (errno) {
+    assert(!valid_handle);
+    ev.error = errno == ENOENT
+      ? WEBDAV_ERROR_DOES_NOT_EXIST
+      : WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  /* first get info for root element */
+  int fd_for_stat = is_dir ? dirfd(handle.dirp) : handle.fd;
+  if (fd_for_stat < 0) {
+    /* dirfd() failed for some reason, we can't deal with this */
+    abort();
+  }
+
+  struct stat st;
+  int fstat_ret = fstat(fd_for_stat, &st);
+  if (fstat_ret < 0) {
+    ev.error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  webdav_propfind_entry_t pfe = create_propfind_entry_from_stat(relative_uri, &st);
+  ASSERT_NOT_NULL(pfe);
+  ev.entries = linked_list_prepend(ev.entries, pfe);
+
+  assert(S_ISDIR(st.st_mode) == is_dir);
+
+  if (depth == DEPTH_1 && S_ISDIR(st.st_mode)) {
+    size_t relative_uri_len = strlen(relative_uri);
+    while (true) {
+      int orig_errno = errno;
+      struct dirent *dirent = readdir(handle.dirp);
+      if (!dirent && orig_errno != errno) {
+        ev.error = WEBDAV_ERROR_GENERAL;
+        goto done;
+      }
+
+      if (!dirent) {
+        /* EOF */
+        break;
+      }
+
+      if (str_equals(dirent->d_name, ".") ||
+          str_equals(dirent->d_name, "..")) {
+        /* ignore these entries */
+        continue;
+      }
+
+      /* must stat the file */
+      struct stat entry_st;
+      int fstatatx_ret = fstatat_x(fd_for_stat, dirent->d_name, &entry_st, 0);
+      if (fstatatx_ret < 0) {
+        ev.error = WEBDAV_ERROR_GENERAL;
+        goto done;
+      }
+
+      size_t name_len = strlen(dirent->d_name);
+      assert(name_len);
+
+      char *new_uri;
+      if (str_equals(relative_uri, "/")) {
+        new_uri = malloc_or_abort(1 + name_len + 1);
+        new_uri[0] = '/';
+        memcpy(&new_uri[1], dirent->d_name, name_len);
+        new_uri[name_len + 1] = '\0';
+      }
+      else {
+        /* NB: intentionally don't use `asprintf()` */
+        new_uri = malloc_or_abort(relative_uri_len + 1 + name_len + 1);
+        memcpy(new_uri, relative_uri, relative_uri_len);
+        new_uri[relative_uri_len] = '/';
+        memcpy(new_uri + relative_uri_len + 1, dirent->d_name, name_len);
+        new_uri[relative_uri_len + 1 + name_len] = '\0';
+      }
+
+      webdav_propfind_entry_t pfe = create_propfind_entry_from_stat(new_uri, &entry_st);
+      ASSERT_TRUE(pfe);
+      ev.entries = linked_list_prepend(ev.entries, pfe);
+    }
+  }
+
+  ev.error = WEBDAV_ERROR_NONE;
+
+ done:
+  if (ev.error) {
+    linked_list_free(ev.entries,
+                     (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
+  }
+
+  if (valid_handle) {
+    if (is_dir) {
+      closedir_or_abort(handle.dirp);
+    }
+    else {
+      close_or_abort(handle.fd);
+    }
+  }
+
+  free(file_path);
+
+  return cb(WEBDAV_PROPFIND_DONE_EVENT, &ev, cb_ud);
+}
+
+static void
+posix_touch(void *backend_handle,
+            const char *relative_uri,
+            event_handler_t cb, void *ud) {
+  WebdavTouchDoneEvent ev;
+  PosixBackendCtx *pbctx = backend_handle;
+
+  char *file_path = path_from_uri(pbctx, relative_uri);
+  if (!file_path) {
+    ev.error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  int ret_touch = touch(file_path);
+  if (ret_touch < 0) {
+    ev.error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  ev = (WebdavTouchDoneEvent) {
+    .error = WEBDAV_ERROR_NONE,
+    .resource_existed = !ret_touch,
+  };
+
+ done:
+  free(file_path);
+
+  return cb(WEBDAV_TOUCH_DONE_EVENT, &ev, ud);
+}
+
 static void
 posix_delete(void *backend_handle,
 	     const char *relative_uri,
 	     event_handler_t cb, void *ud) {
+  WebdavDeleteDoneEvent ev;
   PosixBackendCtx *pbctx = backend_handle;
   char *file_path = path_from_uri(pbctx, relative_uri);
+  if (!file_path) {
+    ev.error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
 
-  /* TODO: yield after every delete */
+  int ret_exists = file_exists(file_path);
+  if (ret_exists < 0) {
+    ev.error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+  else if (!ret_exists) {
+    ev.error = WEBDAV_ERROR_DOES_NOT_EXIST;
+    goto done;
+  }
+
   linked_list_t failed_to_delete = rmtree(file_path);
-  free(file_path);
 
-  WebdavDeleteDoneEvent ev = {
+  ev = (WebdavDeleteDoneEvent) {
     .error = WEBDAV_ERROR_NONE,
     .failed_to_delete = failed_to_delete,
   };
+
+ done:
+  free(file_path);
+
   return cb(WEBDAV_DELETE_DONE_EVENT, &ev, ud);
 }
 
@@ -371,6 +704,7 @@ _posix_copy_move(void *backend_handle,
       .error = err,
       /* TODO: implement */
       .failed_to_move = LINKED_LIST_INITIALIZER,
+      .dst_existed = dst_existed,
     };
     return cb(WEBDAV_MOVE_DONE_EVENT, &move_done_ev, ud);
   }
@@ -379,6 +713,7 @@ _posix_copy_move(void *backend_handle,
       .error = err,
       /* TODO: implement */
       .failed_to_copy = LINKED_LIST_INITIALIZER,
+      .dst_existed = dst_existed,
     };
     return cb(WEBDAV_COPY_DONE_EVENT, &copy_done_ev, ud);
   }
@@ -410,11 +745,14 @@ posix_move(void *backend_handle,
 
 static WebdavBackendOperations
 posix_backend_operations = {
-  .get = posix_get,
-  .mkcol = posix_mkcol,
-  .delete = posix_delete,
   .copy = posix_copy,
+  .delete = posix_delete,
+  .get = posix_get,
+  .propfind = posix_propfind,
+  .put = posix_put,
+  .mkcol = posix_mkcol,
   .move = posix_move,
+  .touch = posix_touch,
 };
 
 int

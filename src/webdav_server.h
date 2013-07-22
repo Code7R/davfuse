@@ -6,6 +6,18 @@
 
 typedef long long webdav_file_time_t;
 
+/* opaque forward decls */
+struct webdav_propfind_entry;
+struct webdav_backend;
+struct webdav_server;
+struct handler_context;
+
+typedef struct webdav_backend *webdav_backend_t;
+typedef struct webdav_server *webdav_server_t;
+typedef struct webdav_propfind_entry *webdav_propfind_entry_t;
+typedef struct handler_context *webdav_get_request_ctx_t;
+typedef struct handler_context *webdav_put_request_ctx_t;
+
 enum {
   MAX_FILE_NAME_LENGTH=256,
 };
@@ -17,17 +29,11 @@ typedef enum {
   DEPTH_INVALID,
 } webdav_depth_t;
 
-typedef struct {
-  webdav_file_time_t modified_time;
-  webdav_file_time_t creation_time;
-  bool is_collection;
-  size_t length;
-} WebdavFileInfo;
-
-typedef struct {
-  WebdavFileInfo file_info;
-  char name[MAX_FILE_NAME_LENGTH];
-} WebdavCollectionEntry;
+typedef enum {
+  WEBDAV_PROPFIND_PROP,
+  WEBDAV_PROPFIND_ALLPROP,
+  WEBDAV_PROPFIND_PROPNAME,
+} webdav_propfind_req_type_t;
 
 typedef enum {
   WEBDAV_ERROR_NONE,
@@ -46,28 +52,7 @@ typedef enum {
 
 typedef struct {
   webdav_error_t error;
-  void *file_handle;
-} WebdavOpenDoneEvent;
-
-typedef struct {
-  webdav_error_t error;
-  WebdavFileInfo file_info;
-} WebdavFstatDoneEvent;
-
-typedef struct {
-  webdav_error_t error;
-  size_t nbyte;
-} WebdavReadDoneEvent;
-
-typedef struct {
-  webdav_error_t error;
-  size_t nbyte;
-} WebdavWriteDoneEvent;
-
-typedef struct {
-  webdav_error_t error;
-  size_t nread;
-} WebdavReadcolDoneEvent;
+} _WebdavGenericDoneEvent;
 
 typedef struct {
   webdav_error_t error;
@@ -77,44 +62,53 @@ typedef struct {
 typedef struct {
   webdav_error_t error;
   linked_list_t failed_to_move;
+  bool dst_existed;
 } WebdavMoveDoneEvent;
 
 typedef struct {
   webdav_error_t error;
   linked_list_t failed_to_copy;
+  bool dst_existed;
 } WebdavCopyDoneEvent;
 
 typedef struct {
   webdav_error_t error;
-} _WebdavGenericDoneEvent;
+  bool resource_existed;
+} WebdavTouchDoneEvent;
+
+typedef struct {
+  webdav_error_t error;
+  linked_list_t entries;
+} WebdavPropfindDoneEvent;
 
 typedef _WebdavGenericDoneEvent WebdavMkcolDoneEvent;
 typedef _WebdavGenericDoneEvent WebdavCloseDoneEvent;
+
+/* backend method helper done events */
 typedef _WebdavGenericDoneEvent WebdavGetRequestSizeHintDoneEvent;
 typedef _WebdavGenericDoneEvent WebdavGetRequestWriteDoneEvent;
 
-struct webdav_backend;
-struct webdav_server;
-struct handler_context;
+typedef struct {
+  webdav_error_t error;;
+  size_t nbyte;
+} WebdavPutRequestReadDoneEvent;
 
-typedef struct webdav_backend *webdav_backend_t;
-typedef struct webdav_server *webdav_server_t;
-
-typedef struct handler_context *webdav_get_request_ctx_t;
 
 typedef struct {
-  /* for GET / PUT / PROPFIND */
   void (*get)(void *backend_user_data,
               const char *relative_uri,
               webdav_get_request_ctx_t get_ctx);
-  void (*open)(void *backend_user_data, const char *, bool, event_handler_t, void *);
-  void (*fstat)(void *backend_user_data, void *, event_handler_t, void *);
-  void (*read)(void *backend_user_data, void *, void *, size_t, event_handler_t, void *);
-  void (*write)(void *backend_user_data, void *, const void *, size_t, event_handler_t, void *);
-  void (*readcol)(void *backend_user_data,
-                  void *, WebdavCollectionEntry *, size_t, event_handler_t, void *);
-  void (*close)(void *backend_user_data,
-                void *, event_handler_t, void *);
+  void (*put)(void *backend_user_data,
+              const char *relative_uri,
+              webdav_put_request_ctx_t put_ctx);
+  /* for LOCK */
+  void (*touch)(void *backend_user_data,
+                const char *relative_uri,
+                event_handler_t cb, void *user_data);
+  void (*propfind)(void *backend_user_data,
+                   const char *relative_uri, webdav_depth_t depth,
+                   webdav_propfind_req_type_t propfind_req_type,
+                   event_handler_t cb, void *user_data);
   void (*mkcol)(void *backend_user_data,
                 const char *relative_uri,
                 event_handler_t cb, void *ud);
@@ -131,6 +125,15 @@ typedef struct {
 	       event_handler_t cb, void *ud);
 } WebdavBackendOperations;
 
+webdav_propfind_entry_t
+webdav_new_propfind_entry(const char *relative_uri,
+                             webdav_file_time_t modified_time,
+                             webdav_file_time_t creation_time,
+                             bool is_collection,
+                             size_t length);
+
+void
+webdav_destroy_propfind_entry(webdav_propfind_entry_t pfe);
 
 webdav_server_t
 webdav_server_start(FDEventLoop *loop,
@@ -155,6 +158,16 @@ webdav_get_request_write(webdav_get_request_ctx_t get_ctx,
 void
 webdav_get_request_end(webdav_get_request_ctx_t get_ctx, webdav_error_t error);
 
+void
+webdav_put_request_read(webdav_put_request_ctx_t put_ctx,
+                        void *buf, size_t nbyte,
+                        event_handler_t cb, void *cb_ud);
+
+void
+webdav_put_request_end(webdav_get_request_ctx_t put_ctx,
+                       webdav_error_t error,
+                       bool resource_existed);
+
 webdav_backend_t
 webdav_backend_new(const WebdavBackendOperations *op, size_t op_size, void *user_data);
 
@@ -167,36 +180,20 @@ webdav_backend_get(webdav_backend_t fs,
                    webdav_get_request_ctx_t get_ctx);
 
 void
-webdav_backend_open(webdav_backend_t fs,
-                    const char *relative_uri,
-                    bool create,
-                    event_handler_t cb, void *cb_ud);
+webdav_backend_put(webdav_backend_t fs,
+                   const char *relative_uri,
+                   webdav_put_request_ctx_t put_ctx);
 
 void
-webdav_backend_fstat(webdav_backend_t fs,
-                     void *file_handle,
+webdav_backend_touch(webdav_backend_t fs,
+                     const char *relative_uri,
                      event_handler_t cb, void *cb_ud);
 
 void
-webdav_backend_read(webdav_backend_t fs, void *file_handle,
-                    void *buf, size_t buf_size,
-                    event_handler_t cb, void *cb_ud);
-
-void
-webdav_backend_write(webdav_backend_t fs, void *file_handle,
-                     const void *buf, size_t buf_size,
-                     event_handler_t cb, void *cb_ud);
-
-void
-webdav_backend_readcol(webdav_backend_t fs,
-                       void *col_handle,
-                       WebdavCollectionEntry *ce, size_t nentries,
-                       event_handler_t cb, void *ud);
-
-void
-webdav_backend_close(webdav_backend_t fs,
-                     void *file_handle,
-                     event_handler_t cb, void *cb_ud);
+webdav_backend_propfind(webdav_backend_t fs,
+                        const char *relative_uri, webdav_depth_t depth,
+                        webdav_propfind_req_type_t propfind_req_type,
+                        event_handler_t cb, void *cb_ud);
 
 void
 webdav_backend_mkcol(webdav_backend_t fs,

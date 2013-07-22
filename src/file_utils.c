@@ -19,10 +19,28 @@
 #include "logging.h"
 #include "util.h"
 
+#include "file_utils.h"
+
+void
+close_or_abort(int fd) {
+  const int saved_errno = errno;
+  const int close_ret = close(fd);
+  ASSERT_TRUE(!close_ret);
+  errno = saved_errno;
+}
+
+void
+closedir_or_abort(DIR *dirp) {
+  const int saved_errno = errno;
+  const int close_ret = closedir(dirp);
+  ASSERT_TRUE(!close_ret);
+  errno = saved_errno;
+}
+
 int
 file_exists(const char *file_path) {
   struct stat st;
-  int ret = stat(file_path, &st);
+  const int ret = stat(file_path, &st);
   if (ret < 0) {
     if (errno == ENOENT ||
         errno == ENOTDIR) {
@@ -48,18 +66,60 @@ file_is_dir(const char *file_path) {
   return S_ISDIR(st.st_mode);
 }
 
-bool
+int
 touch(const char *file_path) {
-  int fd = open(file_path, O_WRONLY | O_CREAT, 0666);
-  if (fd >= 0) {
-    /* ignore failure here */
-    utimes(file_path, NULL);
-    close(fd);
-    return true;
+  bool created;
+  int fd;
+  const bool success_open =
+    open_or_create(file_path, O_RDONLY, 0666, &fd, &created);
+
+  if (success_open) {
+    const int ret_utimes = futimes(fd, NULL);
+    ASSERT_TRUE(!ret_utimes);
+    close_or_abort(fd);
+    return created;
+  }
+  else {
+    log_debug("Error while opening \"%s\" for touch: %s",
+              file_path, strerror(errno));
   }
 
-  return false;
+  return -1;
 }
+
+bool
+open_or_create(const char *file_path, int flags, mode_t mode,
+               int *fd, bool *created) {
+  assert(!(flags & O_CREAT));
+  assert(!(flags & O_EXCL));
+
+  errno = 0;
+  do {
+    *fd = open(file_path, flags);
+    if (*fd < 0 && errno == ENOENT) {
+      errno = 0;
+      *fd = open(file_path, flags | O_CREAT | O_EXCL, mode);
+
+      if (*fd < 0 && errno == EEXIST) {
+        errno = 0;
+        continue;
+      }
+
+      if (*fd >= 0) {
+        assert(!errno);
+        *created = true;
+      }
+    }
+    else if (*fd >= 0) {
+      assert(!errno);
+      *created = false;
+    }
+  }
+  while (*fd < 0 && !errno);
+
+  return !errno;
+}
+
 
 static linked_list_t
 _rm_tree_expand(void *node, linked_list_t ll) {
