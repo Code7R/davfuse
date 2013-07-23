@@ -806,7 +806,7 @@ main(int argc, char *argv[]) {
   /* create event loop */
   FDEventLoop loop;
   bool ret = fdevent_init(&loop);
-  assert(ret);
+  ASSERT_TRUE(ret);
 
   /* start webdav server */
   PosixBackendCtx pbctx = {
@@ -819,7 +819,7 @@ main(int argc, char *argv[]) {
                                            &pbctx);
   webdav_server_t ws = webdav_server_start(&loop, server_fd, public_prefix, fs);
 
-  assert(ws);
+  ASSERT_TRUE(ws);
 
   log_info("Starting main loop");
   fdevent_main_loop(&loop);

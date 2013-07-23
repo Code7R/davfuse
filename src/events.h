@@ -42,6 +42,9 @@ typedef enum {
   WEBDAV_PUT_REQUEST_READ_DONE_EVENT,
   WEBDAV_PUT_REQUEST_END_EVENT,
   WEBDAV_PROPFIND_DONE_EVENT,
+  ASYNC_RDWR_DESTROY_DONE_EVENT,
+  ASYNC_RDWR_WRITE_LOCK_DONE_EVENT,
+  ASYNC_RDWR_READ_LOCK_DONE_EVENT,
 } event_type_t;
 
 #define EVENT_HANDLER_DEFINE(handler, a, b, c) void handler(event_type_t a, void *b, void *c)
