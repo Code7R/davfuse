@@ -1725,7 +1725,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   ctx->request_body = rbev->body;
   ctx->request_body_len = rbev->length;
 
-  log_debug("Incoming lock request XML:\n%*s",
+  log_debug("Incoming lock request XML:\n%.*s",
             (int) ctx->request_body_len, ctx->request_body);
 
   /* get timeout */
@@ -1904,7 +1904,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
  done:
   assert(status_code);
   log_debug("Response with status code: %d", status_code);
-  log_debug("Outgoing lock response XML (%lld bytes):\n%*s",
+  log_debug("Outgoing lock response XML (%lld bytes):\n%.*s",
             (long long) ctx->response_body_len,
             (int) ctx->response_body_len,
             ctx->response_body);
