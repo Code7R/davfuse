@@ -72,6 +72,8 @@ async_rdwr_destroy(async_rdwr_lock_t lock,
     return;
   }
 
+  free(lock);
+
   return cb(ASYNC_RDWR_DESTROY_DONE_EVENT, NULL, ud);
 }
 
@@ -138,6 +140,14 @@ async_rdwr_write_unlock(async_rdwr_lock_t lock) {
     lock->has_write_lock = true;
     return cb(ASYNC_RDWR_WRITE_LOCK_DONE_EVENT, &ev, ud);
   }
+
+  /* nothing was waiting on the lock, call the destroy callback */
+  event_handler_t cb = lock->waiting_for_destroy_cb;
+  void *ud = lock->waiting_for_destroy_ud;
+  if (cb) {
+    free(lock);
+    return cb(ASYNC_RDWR_DESTROY_DONE_EVENT, NULL, ud);
+  }
 }
 
 void
@@ -192,6 +202,15 @@ async_rdwr_read_unlock(async_rdwr_lock_t lock) {
       lock->has_write_lock = true;
       return cb(ASYNC_RDWR_WRITE_LOCK_DONE_EVENT, &ev, ud);
     }
+
+    /* nothing was waiting on the lock, call the destroy callback */
+    assert(!lock->waiting_on_read_lock);
+
+    event_handler_t cb = lock->waiting_for_destroy_cb;
+    void *ud = lock->waiting_for_destroy_ud;
+    if (cb) {
+      free(lock);
+      return cb(ASYNC_RDWR_DESTROY_DONE_EVENT, NULL, ud);
+    }
   }
 }
-

@@ -16,18 +16,11 @@
 #include <string.h>
 
 #include "dfs.h"
+#include "fd_utils.h"
 #include "logging.h"
 #include "util.h"
 
 #include "file_utils.h"
-
-void
-close_or_abort(int fd) {
-  const int saved_errno = errno;
-  const int close_ret = close(fd);
-  ASSERT_TRUE(!close_ret);
-  errno = saved_errno;
-}
 
 void
 closedir_or_abort(DIR *dirp) {

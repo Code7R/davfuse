@@ -12,9 +12,6 @@
 #include "util.h"
 
 void
-close_or_abort(int fd);
-
-void
 closedir_or_abort(DIR *dirp);
 
 int

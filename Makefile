@@ -15,9 +15,9 @@ MINOR_VERSION := 1
 VERSION := ${MAJOR_VERSION}.${MINOR_VERSION}
 
 # TODO: configure this with a flag
-#CFLAGS += -g
-CFLAGS += -O3
-CPPFLAGS += -DNDEBUG
+CFLAGS += -g
+#CFLAGS += -O3
+#CPPFLAGS += -DNDEBUG
 
 # Cross-platform essential build flags
 CPPFLAGS += -DVERSION=\"${VERSION}\" -I${GENHROOT} -I${SRCROOT}

@@ -6,6 +6,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+void
+close_or_abort(int fd);
+
 bool
 set_non_blocking(int fd);
 

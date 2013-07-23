@@ -13,6 +13,7 @@
 
 #include <assert.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -21,6 +22,7 @@
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 
+#include "async_rdwr_lock.h"
 #include "events.h"
 #include "http_helpers.h"
 #include "http_server.h"
@@ -75,6 +77,7 @@ struct webdav_server {
   linked_list_t locks;
   webdav_backend_t fs;
   char *public_prefix;
+  async_rdwr_lock_t lock;
   event_handler_t stop_cb;
   void *stop_ud;
 };
@@ -135,6 +138,13 @@ struct handler_context {
   HTTPRequestHeaders rhs;
   HTTPResponseHeaders resp;
   http_request_handle_t rh;
+  enum {
+    ACQUIRE_READ_LOCK,
+    ACQUIRE_WRITE_LOCK,
+    ACQUIRE_NO_LOCK,
+  } lock_to_acquire;
+  bool lock_was_acquired;
+  event_handler_t handler;
   union {
     struct copy_context {
       coroutine_position_t pos;
@@ -1226,68 +1236,118 @@ UTHR_DEFINE(request_proc) {
   /* TODO: move to hash-based dispatch where each method
      maps to a different bucket
   */
-  event_handler_t handler;
   if (str_case_equals(hc->rhs.method, "COPY")) {
-    handler = handle_copy_request;
+    hc->handler = handle_copy_request;
     hc->sub.copy.is_move = false;
   }
   else if (str_case_equals(hc->rhs.method, "DELETE")) {
-    handler = handle_delete_request;
+    hc->handler = handle_delete_request;
   }
   else if (str_case_equals(hc->rhs.method, "GET")) {
-    handler = handle_get_request;
+    hc->handler = handle_get_request;
   }
   else if (str_case_equals(hc->rhs.method, "LOCK")) {
-    handler = handle_lock_request;
+    hc->handler = handle_lock_request;
   }
   else if (str_case_equals(hc->rhs.method, "MKCOL")) {
-    handler = handle_mkcol_request;
+    hc->handler = handle_mkcol_request;
   }
   else if (str_case_equals(hc->rhs.method, "MOVE")) {
     /* move is essentially copy, then delete source */
     /* allows for servers to optimize as well */
-    handler = handle_copy_request;
+    hc->handler = handle_copy_request;
     hc->sub.copy.is_move = true;
   }
   else if (str_case_equals(hc->rhs.method, "OPTIONS")) {
-    handler = handle_options_request;
+    hc->handler = handle_options_request;
   }
   else if (str_case_equals(hc->rhs.method, "POST")) {
-    handler = handle_post_request;
+    hc->handler = handle_post_request;
   }
   else if (str_case_equals(hc->rhs.method, "PROPFIND")) {
-    handler = handle_propfind_request;
+    hc->handler = handle_propfind_request;
   }
   else if (str_case_equals(hc->rhs.method, "PROPPATCH")) {
-    handler = handle_proppatch_request;
+    hc->handler = handle_proppatch_request;
   }
   else if (str_case_equals(hc->rhs.method, "PUT")) {
-    handler = handle_put_request;
+    hc->handler = handle_put_request;
   }
   else if (str_case_equals(hc->rhs.method, "UNLOCK")) {
-    handler = handle_unlock_request;
+    hc->handler = handle_unlock_request;
   }
   else {
-    handler = NULL;
+    hc->handler = NULL;
+  }
+
+  /* NB: we limit request concurrency based on whether or not
+     the method can modify the path namespace
+     TODO: make this more granular */
+  if (hc->handler == handle_get_request ||
+      hc->handler == handle_propfind_request ||
+      hc->handler == handle_lock_request ||
+      hc->handler == handle_unlock_request) {
+    hc->lock_to_acquire = ACQUIRE_READ_LOCK;
+  }
+  else if (hc->handler != handle_options_request &&
+           hc->handler != handle_post_request) {
+    hc->lock_to_acquire = ACQUIRE_WRITE_LOCK;
+  }
+  else {
+    hc->lock_to_acquire = ACQUIRE_NO_LOCK;
+  }
+
+  if (hc->lock_to_acquire == ACQUIRE_READ_LOCK) {
+    UTHR_YIELD(hc, async_rdwr_read_lock(hc->serv->lock, request_proc, hc));
+    UTHR_RECEIVE_EVENT(ASYNC_RDWR_READ_LOCK_DONE_EVENT, AsyncRdwrReadLockDoneEvent, read_lock_done_ev);
+    hc->lock_was_acquired = read_lock_done_ev->success;
+  }
+  else if (hc->lock_to_acquire == ACQUIRE_WRITE_LOCK) {
+    UTHR_YIELD(hc, async_rdwr_write_lock(hc->serv->lock, request_proc, hc));
+    UTHR_RECEIVE_EVENT(ASYNC_RDWR_WRITE_LOCK_DONE_EVENT, AsyncRdwrWriteLockDoneEvent, write_lock_done_ev);
+    hc->lock_was_acquired = write_lock_done_ev->success;
+  }
+  else {
+    hc->lock_was_acquired = true;
   }
 
   bool ret = http_response_init(&hc->resp);
   ASSERT_TRUE(ret);
 
-  if (handler) {
-    UTHR_YIELD(hc, handler(GENERIC_EVENT, NULL, hc));
-  }
-  else {
+  if (!hc->lock_was_acquired) {
     UTHR_YIELD(hc,
                http_request_string_response(hc->rh,
-                                            HTTP_STATUS_CODE_NOT_IMPLEMENTED, "Not Implemented",
+                                            HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR, "",
                                             request_proc, hc));
+  }
+  else {
+    if (hc->handler) {
+      UTHR_YIELD(hc, hc->handler(GENERIC_EVENT, NULL, hc));
+    }
+    else {
+      UTHR_YIELD(hc,
+                 http_request_string_response(hc->rh,
+                                              HTTP_STATUS_CODE_NOT_IMPLEMENTED, "Not Implemented",
+                                              request_proc, hc));
+    }
   }
 
  done:
   log_info("request done!");
 
-  UTHR_RETURN(hc, http_request_end(hc->rh));
+  http_request_end(hc->rh);
+
+  if (hc->lock_was_acquired) {
+    /* these could block for while */
+    if (hc->lock_to_acquire == ACQUIRE_READ_LOCK) {
+      async_rdwr_read_unlock(hc->serv->lock);
+    }
+    else if (hc->lock_to_acquire == ACQUIRE_WRITE_LOCK) {
+      async_rdwr_write_unlock(hc->serv->lock);
+    }
+  }
+
+  UTHR_RETURN(hc, 0);
 
   UTHR_FOOTER();
 }
@@ -2941,8 +3001,22 @@ webdav_server_start(FDEventLoop *loop,
                     int server_fd,
                     const char *public_prefix,
                     webdav_backend_t fs) {
-  struct webdav_server *serv = malloc(sizeof(*serv));
+  struct webdav_server *serv = NULL;
+  char *public_prefix_copy = NULL;
+  async_rdwr_lock_t lock = 0;
+
+  serv = malloc(sizeof(*serv));
   if (!serv) {
+    goto error;
+  }
+
+  lock = async_rdwr_new();
+  if (!lock) {
+    goto error;
+  }
+
+  public_prefix_copy = strdup_x(public_prefix);
+  if (!public_prefix_copy) {
     goto error;
   }
 
@@ -2950,7 +3024,8 @@ webdav_server_start(FDEventLoop *loop,
     .loop = loop,
     .locks = LINKED_LIST_INITIALIZER,
     .fs = fs,
-    .public_prefix = strdup_x(public_prefix),
+    .public_prefix = public_prefix_copy,
+    .lock = lock,
   };
 
   bool ret = http_server_start(&serv->http, loop, server_fd,
@@ -2963,14 +3038,23 @@ webdav_server_start(FDEventLoop *loop,
 
  error:
   free(serv);
+  free(public_prefix_copy);
+  if (lock) {
+    async_rdwr_destroy(lock, NULL, NULL);
+  }
   return NULL;
 }
 
 static
 EVENT_HANDLER_DEFINE(_webdav_stop_cb, ev_type, ev, ud) {
-  UNUSED(ev_type);
   UNUSED(ev);
   struct webdav_server *serv = ud;
+
+  if (ev_type == HTTP_SERVER_STOP_DONE_EVENT) {
+    return async_rdwr_destroy(serv->lock, _webdav_stop_cb, ud);
+  }
+
+  assert(ev_type == ASYNC_RDWR_DESTROY_DONE_EVENT);
 
   linked_list_free(serv->locks, free_webdav_lock_descriptor);
   free(serv->public_prefix);
@@ -2984,7 +3068,7 @@ EVENT_HANDLER_DEFINE(_webdav_stop_cb, ev_type, ev, ud) {
   xmlCleanupParser();
 
   if (cb) {
-    cb(GENERIC_EVENT, NULL, cb_ud);
+    return cb(GENERIC_EVENT, NULL, cb_ud);
   }
 }
 

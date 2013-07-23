@@ -11,6 +11,15 @@
 #include "c_util.h"
 #include "fd_utils.h"
 #include "logging.h"
+#include "util.h"
+
+void
+close_or_abort(int fd) {
+  const int saved_errno = errno;
+  const int close_ret = close(fd);
+  ASSERT_TRUE(!close_ret);
+  errno = saved_errno;
+}
 
 bool
 set_non_blocking(int fd) {

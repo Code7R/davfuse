@@ -100,7 +100,7 @@ http_server_start(HTTPServer *http,
   return true;
 
  error:
-  close(fd);
+  close_or_abort(fd);
   http->watch_key = FD_EVENT_INVALID_WATCH_KEY;
   return false;
 }
@@ -110,17 +110,12 @@ http_server_stop(HTTPServer *http,
                  event_handler_t cb, void *user_data) {
   assert(http->watch_key != FD_EVENT_INVALID_WATCH_KEY);
   bool remove_watch_ret = fdevent_remove_watch(http->loop, http->watch_key);
-  if (!remove_watch_ret) {
-    abort();
-  }
+  ASSERT_TRUE(remove_watch_ret);
 
   http->watch_key = FD_EVENT_INVALID_WATCH_KEY;
 
-  int close_ret = close(http->fd);
-  if (close_ret < 0) {
-    /* this can't fail */
-    abort();
-  }
+  /* this can't fail */
+  close_or_abort(http->fd);
 
   http->shutting_down = true;
   http->stop_cb = cb;

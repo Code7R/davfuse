@@ -1,6 +1,10 @@
 #ifndef ASYNC_RDWR_LOCK_H
 #define ASYNC_RDWR_LOCK_H
 
+#include <stdbool.h>
+
+#include "events.h"
+
 typedef struct {
   bool success;
 } AsyncRdwrWriteLockDoneEvent;
