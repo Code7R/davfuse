@@ -304,19 +304,6 @@ posix_mkcol(void *backend_handle, const char *relative_uri,
     }
     else if (errno == EEXIST) {
       ev.error = WEBDAV_ERROR_EXISTS;
-      /*
-      struct stat st;
-      ret = stat(file_path, &st);
-      if (ret < 0) {
-	ev.error = WEBDAV_ERROR_GENERAL;
-      }
-      else if (S_ISDIR(st.st_mode)) {
-	ev.error = WEBDAV_ERROR_EXISTS;
-      }
-      else {
-	ev.error = WEBDAV_ERROR_NOT_COLLECTION;
-      }
-      */
     }
     else {
       ev.error = WEBDAV_ERROR_GENERAL;

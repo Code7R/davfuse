@@ -73,10 +73,10 @@ typedef struct {
   UTHR_CTX_BASE;
   /* args */
   FuseBackendCtx *fbctx;
-  bool is_move;
+  bool is_move : 1;
+  bool overwrite : 1;
   const char *src_relative_uri;
   const char *dst_relative_uri;
-  bool overwrite;
   webdav_depth_t depth;
   event_handler_t cb;
   void *cb_ud;
@@ -86,8 +86,8 @@ typedef struct {
   char *destination_path_copy;
   struct stat src_stat;
   struct stat dst_stat;
-  bool dst_existed;
-  bool copy_failed;
+  bool dst_existed : 1;
+  bool copy_failed : 1;
 } FuseCopyMoveCtx;
 
 UTHR_DEFINE(_fuse_copy_move_uthr) {
@@ -487,14 +487,75 @@ fuse_get(void *backend_ctx,
              .get_ctx = get_ctx);
 }
 
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  FuseBackendCtx *fbctx;
+  const char *relative_uri;
+  event_handler_t cb;
+  void *cb_ud;
+  /* ctx */
+  char *path;
+  WebdavMkcolDoneEvent ev;
+} FuseMkcolCtx;
+
+static
+UTHR_DEFINE(_fuse_mkcol_uthr) {
+  UTHR_HEADER(FuseMkcolCtx, ctx);
+
+  ctx->path = path_from_uri(ctx->fbctx, ctx->relative_uri);
+  if (!ctx->path) {
+    ctx->ev.error = WEBDAV_ERROR_NO_MEM;
+    goto done;
+  }
+
+  UTHR_SUBCALL(ctx,
+               async_fuse_fs_mkdir(ctx->fbctx->fuse_fs,
+                                   ctx->path, 0777,
+                                   _fuse_mkcol_uthr, ctx),
+               ASYNC_FUSE_FS_MKDIR_DONE_EVENT,
+               FuseFsOpDoneEvent,
+               mkdir_done_ev);
+  if (!mkdir_done_ev->ret) {
+    ctx->ev.error = WEBDAV_ERROR_NONE;
+  }
+  else if (-mkdir_done_ev->ret == ENOENT) {
+    ctx->ev.error = WEBDAV_ERROR_DOES_NOT_EXIST;
+  }
+  else if (-mkdir_done_ev->ret == ENOSPC ||
+           -mkdir_done_ev->ret == EDQUOT) {
+    ctx->ev.error = WEBDAV_ERROR_NO_SPACE;
+  }
+  else if (-mkdir_done_ev->ret == ENOTDIR) {
+    ctx->ev.error = WEBDAV_ERROR_NOT_COLLECTION;
+  }
+  else if (-mkdir_done_ev->ret == EACCES) {
+    ctx->ev.error = WEBDAV_ERROR_PERM;
+  }
+  else if (-mkdir_done_ev->ret == EEXIST) {
+    ctx->ev.error = WEBDAV_ERROR_EXISTS;
+  }
+  else {
+    ctx->ev.error = WEBDAV_ERROR_GENERAL;
+  }
+
+ done:
+  free(ctx->path);
+
+  UTHR_RETURN(ctx,
+              ctx->cb(WEBDAV_MKCOL_DONE_EVENT, &ctx->ev, ctx->cb_ud));
+
+  UTHR_FOOTER();
+}
+
 static void
 fuse_mkcol(void *backend_ctx, const char *relative_uri,
-           event_handler_t cb, void *ud) {
-  UNUSED(backend_ctx);
-  UNUSED(relative_uri);
-  UNUSED(cb);
-  UNUSED(ud);
-  abort();
+           event_handler_t cb, void *cb_ud) {
+  UTHR_CALL4(_fuse_mkcol_uthr, FuseMkcolCtx,
+             .fbctx = backend_ctx,
+             .relative_uri = relative_uri,
+             .cb = cb,
+             .cb_ud = cb_ud);
 }
 
 static void
