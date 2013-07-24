@@ -148,7 +148,7 @@ UTHR_DEFINE(_posix_get_uthr) {
 
  done:
   if (ctx->fd >= 0) {
-    close(ctx->fd);
+    close_or_abort(ctx->fd);
   }
 
   free(ctx->file_path);

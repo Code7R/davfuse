@@ -37,6 +37,10 @@
 #include "uthread.h"
 #include "util.h"
 
+enum {
+  TRANSFER_BUF_SIZE = 4096,
+};
+
 typedef struct {
   bool singlethread : 1;
 } FuseOptions;
@@ -351,14 +355,136 @@ fuse_delete(void *backend_ctx,
              .ud = ud);
 }
 
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  FuseBackendCtx *fbctx;
+  const char *relative_uri;
+  webdav_get_request_ctx_t get_ctx;
+  /* ctx */
+  struct fuse_file_info fi;
+  bool opened_file;
+  char *path;
+  webdav_error_t error;
+  struct stat st;
+  char buf[TRANSFER_BUF_SIZE];
+  off_t offset;
+} FuseGetCtx;
+
+static
+UTHR_DEFINE(_fuse_get_uthr) {
+  UTHR_HEADER(FuseGetCtx, ctx);
+
+  ctx->path = path_from_uri(ctx->fbctx, ctx->relative_uri);
+  if (!ctx->path) {
+    ctx->error = WEBDAV_ERROR_NO_MEM;
+    goto done;
+  }
+
+  UTHR_SUBCALL(ctx,
+               async_fuse_fs_open(ctx->fbctx->fuse_fs,
+                                  ctx->path, &ctx->fi,
+                                  _fuse_get_uthr, ctx),
+               ASYNC_FUSE_FS_OPEN_DONE_EVENT,
+               FuseFsOpDoneEvent, open_done_ev);
+  if (open_done_ev->ret < 0) {
+    ctx->error = -open_done_ev->ret == ENOENT
+      ? WEBDAV_ERROR_DOES_NOT_EXIST
+      : WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  ctx->opened_file = true;
+
+  UTHR_SUBCALL(ctx,
+               async_fuse_fs_fgetattr(ctx->fbctx->fuse_fs,
+                                      ctx->path, &ctx->st,
+                                      &ctx->fi,
+                                      _fuse_get_uthr, ctx),
+               ASYNC_FUSE_FS_FGETATTR_DONE_EVENT,
+               FuseFsOpDoneEvent, fgetattr_done_ev);
+  if (fgetattr_done_ev->ret < 0) {
+    ctx->error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  if (S_ISDIR(ctx->st.st_mode)) {
+    ctx->error = WEBDAV_ERROR_IS_COL;
+    goto done;
+  }
+
+  UTHR_SUBCALL(ctx,
+               webdav_get_request_size_hint(ctx->get_ctx, ctx->st.st_mode,
+                                            _fuse_get_uthr, ctx),
+               WEBDAV_GET_REQUEST_SIZE_HINT_DONE_EVENT,
+               WebdavGetRequestSizeHintDoneEvent, size_hint_done_ev);
+  if (size_hint_done_ev->error) {
+    ctx->error = size_hint_done_ev->error;
+    goto done;
+  }
+
+  ctx->offset = 0;
+  while (true) {
+    UTHR_SUBCALL(ctx,
+                 async_fuse_fs_read(ctx->fbctx->fuse_fs,
+                                    ctx->path,
+                                    ctx->buf, sizeof(ctx->buf),
+                                    ctx->offset, &ctx->fi,
+                                    _fuse_get_uthr, ctx),
+                 ASYNC_FUSE_FS_READ_DONE_EVENT,
+                 FuseFsOpDoneEvent, read_done_ev);
+    if (read_done_ev->ret < 0) {
+      ctx->error = WEBDAV_ERROR_GENERAL;
+      goto done;
+    }
+    else if (!read_done_ev->ret) {
+      break;
+    }
+
+    UTHR_SUBCALL(ctx,
+                 webdav_get_request_write(ctx->get_ctx,
+                                          ctx->buf, read_done_ev->ret,
+                                          _fuse_get_uthr, ctx),
+                 WEBDAV_GET_REQUEST_WRITE_DONE_EVENT,
+                 WebdavGetRequestWriteDoneEvent, write_done_ev);
+    if (write_done_ev->error) {
+      ctx->error = write_done_ev->error;
+      goto done;
+    }
+  }
+
+  ctx->error = WEBDAV_ERROR_NONE;
+
+ done:
+  if (ctx->opened_file) {
+    UTHR_SUBCALL(ctx,
+                 async_fuse_fs_release(ctx->fbctx->fuse_fs,
+                                       ctx->path, &ctx->fi,
+                                       _fuse_get_uthr, ctx),
+                 ASYNC_FUSE_FS_RELEASE_DONE_EVENT,
+                 FuseFsOpDoneEvent,
+                 release_done_ev);
+    /* the return value of release is always ignored in the FUSE API */
+    UNUSED(release_done_ev);
+  }
+
+  free(ctx->path);
+
+  UTHR_RETURN(ctx,
+              webdav_get_request_end(ctx->get_ctx, ctx->error));
+
+
+  UTHR_FOOTER();
+}
+
 static void
 fuse_get(void *backend_ctx,
          const char *relative_uri,
          webdav_get_request_ctx_t get_ctx) {
-  UNUSED(backend_ctx);
-  UNUSED(relative_uri);
-  UNUSED(get_ctx);
-  abort();
+  UTHR_CALL3(_fuse_get_uthr, FuseGetCtx,
+             .fbctx = backend_ctx,
+             .relative_uri = relative_uri,
+             .get_ctx = get_ctx);
 }
 
 static void
