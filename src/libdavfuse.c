@@ -3,8 +3,10 @@
  */
 
 #define _ISOC99_SOURCE
+#define _POSIX_C_SOURCE 199309L
 
 #include <errno.h>
+#include <libgen.h>
 #include <pthread.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -24,6 +26,7 @@
 #undef FUSE_USE_VERSION
 
 #include "async_fuse_fs.h"
+#include "async_fuse_fs_helpers.h"
 #include "c_util.h"
 #include "coroutine.h"
 #include "fd_utils.h"
@@ -31,6 +34,7 @@
 #include "http_server.h"
 #include "logging.h"
 #include "webdav_server.h"
+#include "uthread.h"
 #include "util.h"
 
 typedef struct {
@@ -51,452 +55,323 @@ typedef struct {
 } HTTPThreadArguments;
 
 typedef struct {
-  char *file_path;
-  uint64_t fh;
-  bool is_dir;
-  union {
-    struct {
-      size_t pos;
-      bool pos_being_modified;
-    } file;
-    struct {
-      uint64_t dir_fh;
-    } dir;
-  } object_state;
-} FuseHandle;
-
-typedef struct {
   async_fuse_fs_t fuse_fs;
-  /* currently this rdwr lock on file paths
-     starves rename() */
-  bool rename_in_progress;
-  int opens_in_progress;
-  linked_list_t opens_waiting_on_renames;
-  void *rename_waiting_on_open;
-  linked_list_t open_file_list;
-} FuseFsCtx;
+} FuseBackendCtx;
 
-static FuseHandle *
-create_fuse_handle(const char *file_path, uint64_t fh, bool is_dir) {
-  char *file_path_dup = strdup_x(file_path);
-  if (!file_path_dup) {
-    return NULL;
-  }
-
-  FuseHandle *of = malloc(sizeof(*of));
-  if (!of) {
-    free(file_path_dup);
-    return NULL;
-  }
-
-  *of = (FuseHandle) {
-    .file_path = file_path_dup,
-    .fh = fh,
-    .is_dir = is_dir,
-  };
-
-  return of;
-}
-
-static void
-fill_file_info(WebdavFileInfo *fi, struct stat *st) {
-  *fi = (WebdavFileInfo) {
-    .modified_time = (webdav_file_time_t) st->st_mtime,
-    /* TODO: this should be configurable but for now we just
-       set getlastmodified and creationdate to the same date
-       because that's what apache mod_dav does */
-    .creation_time = (webdav_file_time_t) st->st_ctime,
-    .is_collection = S_ISDIR(st->st_mode),
-    .length = (size_t) st->st_size,
-  };
+static char *
+path_from_uri(FuseBackendCtx *ctx, const char *relative_uri) {
+  UNUSED(ctx);
+  /* TODO: no translation seems necessary yet */
+  return strdup_x(relative_uri);
 }
 
 typedef struct {
   UTHR_CTX_BASE;
   /* args */
-  FuseFsCtx *fs_ctx;
-  const char *relative_uri;
-  bool create;
+  FuseBackendCtx *fbctx;
+  bool is_move;
+  const char *src_relative_uri;
+  const char *dst_relative_uri;
+  bool overwrite;
+  webdav_depth_t depth;
   event_handler_t cb;
   void *cb_ud;
   /* ctx */
-  struct fuse_file_info fi;
-  bool open_success;
-  uint64_t fh;
-  uint64_t fh_dir;
-  bool is_dir;
-  int my_errno;
-} FuseOpenCtx;
+  char *file_path;
+  char *destination_path;
+  char *destination_path_copy;
+  struct stat src_stat;
+  struct stat dst_stat;
+  bool dst_existed;
+  bool copy_failed;
+} FuseCopyMoveCtx;
 
-static
-UTHR_DEFINE(_fuse_open_uthr) {
-  UTHR_HEADER(FuseOpenCtx, ctx);
+UTHR_DEFINE(_fuse_copy_move_uthr) {
+  UTHR_HEADER(FuseCopyMoveCtx, ctx);
 
-  /* should already be null on initialization of ctx */
-  assert(all_null(&ctx->fi, sizeof(ctx->fi)));
+  assert(ctx->depth == DEPTH_INF ||
+	 (ctx->depth == DEPTH_0 && !ctx->is_move));
 
-  WebdavOpenDoneEvent ev;
-  while (!ctx->open_success) {
-    ctx->fi.flags = O_RDWR | (ctx->create ? O_CREAT : 0);
-    UTHR_YIELD(ctx,
-               async_fuse_fs_open(ctx->fs_ctx->fuse_fs,
-                                  ctx->relative_uri, &ctx->fi,
-                                  _fuse_open_uthr, ctx));
-    UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_OPEN_DONE_EVENT,
-                       FuseFsOpDoneEvent, op_done_ev);
-    ctx->my_errno = -op_done_ev->ret;
-    if (!ctx->my_errno) {
-      ctx->open_success = true;
+  webdav_error_t err;
+
+  ctx->file_path = path_from_uri(ctx->fbctx, ctx->src_relative_uri);
+  ctx->destination_path = path_from_uri(ctx->fbctx, ctx->dst_relative_uri);
+
+  ctx->destination_path_copy = strdup_x(ctx->destination_path);
+  char *destination_path_dirname = dirname(ctx->destination_path_copy);
+
+  /* check if destination directory exists */
+  UTHR_YIELD(ctx,
+             async_fuse_fs_getattr(ctx->fbctx->fuse_fs, destination_path_dirname,
+                                   &ctx->src_stat,
+                                   _fuse_copy_move_uthr, ctx));
+  UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_GETATTR_DONE_EVENT,
+                     FuseFsOpDoneEvent, getattr_done_ev);
+  if (getattr_done_ev->ret) {
+    err = getattr_done_ev->ret == -ENOENT
+      ? WEBDAV_ERROR_DESTINATION_DOES_NOT_EXIST
+      : WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  /* check if source exists */
+  UTHR_YIELD(ctx,
+             async_fuse_fs_getattr(ctx->fbctx->fuse_fs, ctx->file_path,
+                                   &ctx->src_stat,
+                                   _fuse_copy_move_uthr, ctx));
+  UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_GETATTR_DONE_EVENT,
+                     FuseFsOpDoneEvent, getattr_done_ev_2);
+  if (getattr_done_ev_2->ret) {
+    if (-getattr_done_ev_2->ret != ENOENT) {
+      log_info("Error while calling stat(\"%s\"): %s",
+	       ctx->file_path, strerror(-getattr_done_ev_2->ret));
+      err = WEBDAV_ERROR_GENERAL;
     }
-
-    if (!ctx->open_success && ctx->my_errno == EISDIR) {
-      /* if it's a directory open rd-only and
-         open a directory handle as well */
-      ctx->fi.flags = O_RDONLY;
-      UTHR_YIELD(ctx,
-                 async_fuse_fs_open(ctx->fs_ctx->fuse_fs,
-                                    ctx->relative_uri, &ctx->fi,
-                                    _fuse_open_uthr, ctx));
-      UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_OPEN_DONE_EVENT,
-                         FuseFsOpDoneEvent, op_done_ev_2);
-      ctx->my_errno = -op_done_ev_2->ret;
-      if (!ctx->my_errno) {
-      }
-
-      UTHR_YIELD(ctx,
-                 async_fuse_fs_opendir(ctx->fs_ctx->fuse_fs,
-                                       ctx->relative_uri, &ctx->fi,
-                                       _fuse_open_uthr, ctx));
-      UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_OPENDIR_DONE_EVENT,
-                         FuseFsOpDoneEvent, op_done_ev_3);
-      ctx->my_errno = -op_done_ev_3->ret;
-      if (!ctx->my_errno) {
-        ctx->open_success = true;
-        ctx->is_dir = true;
-      }
-
-      if (!ctx->open_success &&
-          ctx->my_errno == ENOENT &&
-          ctx->create) {
-        /* we tried opening the directory, but it disappeared,
-           WEBDAV_ERROR_DOES_NOT_EXIST is not a valid response
-           when create is true */
-        continue;
-      }
+    else {
+      err = WEBDAV_ERROR_DOES_NOT_EXIST;
     }
+    goto done;
+  }
 
-    if (!ctx->open_success) {
-      log_info("Couldn't open resource \"%s\": %s",
-               ctx->relative_uri, strerror(ctx->my_errno));
-      ev.error = ctx->my_errno == ENOENT
-        ? WEBDAV_ERROR_DOES_NOT_EXIST
-        : WEBDAV_ERROR_GENERAL;
+  /* check if destination exists */
+  UTHR_YIELD(ctx,
+             async_fuse_fs_getattr(ctx->fbctx->fuse_fs, ctx->destination_path,
+                                   &ctx->dst_stat,
+                                   _fuse_copy_move_uthr, ctx));
+  UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_GETATTR_DONE_EVENT,
+                     FuseFsOpDoneEvent, getattr_done_ev_3);
+  if (getattr_done_ev_3->ret && -getattr_done_ev_3->ret != ENOENT) {
+    log_info("Error while calling stat(\"%s\"): %s",
+	     ctx->destination_path, strerror(-getattr_done_ev_3->ret));
+    err = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+  ctx->dst_existed = !getattr_done_ev_3->ret;
+
+  /* kill directory if we're overwriting it */
+  if (ctx->dst_existed) {
+    if (!ctx->overwrite) {
+      err = WEBDAV_ERROR_DESTINATION_EXISTS;
       goto done;
     }
+
+    UTHR_YIELD(ctx,
+               async_fuse_fs_rmtree(ctx->fbctx->fuse_fs, ctx->destination_path,
+                                    _fuse_copy_move_uthr, ctx));
+    UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_RMTREE_DONE_EVENT, void, _throw_away_ev);
+    /* we ignore the error here because we rely on a subsequent failure */
+    UNUSED(_throw_away_ev);
   }
 
-  FuseHandle *handle = create_fuse_handle(ctx->relative_uri, ctx->fi.fh, ctx->is_dir);
-  /* TODO: this can't fail for now */
-  ASSERT_NOT_NULL(handle);
-  ctx->fs_ctx->open_file_list =
-    linked_list_prepend(ctx->fs_ctx->open_file_list, handle);
+  ctx->copy_failed = true;
+  if (ctx->is_move) {
+    /* first try moving */
+    UTHR_SUBCALL(ctx,
+                 async_fuse_fs_rename(ctx->fbctx->fuse_fs,
+                                      ctx->file_path, ctx->destination_path,
+                                      _fuse_copy_move_uthr, ctx),
+                 ASYNC_FUSE_FS_RENAME_DONE_EVENT,
+                 FuseFsOpDoneEvent,
+                 rename_done_ev);
 
-  ev = (WebdavOpenDoneEvent) {
-    .error = (ctx->my_errno == ENOENT
-              ? WEBDAV_ERROR_DOES_NOT_EXIST
-              : WEBDAV_ERROR_GENERAL),
-    .file_handle = handle,
-  };
+    if (rename_done_ev->ret < 0 && -rename_done_ev->ret != EXDEV) {
+      log_info("Error while calling rename(\"%s\", \"%s\"): %s",
+	       ctx->file_path, ctx->destination_path,
+	       strerror(-rename_done_ev->ret));
+      err = WEBDAV_ERROR_GENERAL;
+      goto done;
+    }
+
+    ctx->copy_failed = rename_done_ev->ret < 0;
+  }
+
+  if (ctx->copy_failed) {
+    if (ctx->depth == DEPTH_0) {
+      if (S_ISDIR(ctx->src_stat.st_mode)) {
+        UTHR_SUBCALL(ctx,
+                     async_fuse_fs_mkdir(ctx->fbctx->fuse_fs,
+                                         ctx->destination_path, 0777,
+                                         _fuse_copy_move_uthr, ctx),
+                     ASYNC_FUSE_FS_MKDIR_DONE_EVENT,
+                     FuseFsOpDoneEvent,
+                     mkdir_done_ev);
+	if (mkdir_done_ev->ret < 0) {
+	  log_info("Failure to mkdir(\"%s\"): %s",
+		   ctx->destination_path, strerror(-mkdir_done_ev->ret));
+	  err = WEBDAV_ERROR_GENERAL;
+	  goto done;
+	}
+      }
+      else {
+        UTHR_SUBCALL(ctx,
+                     async_fuse_fs_copyfile(ctx->fbctx->fuse_fs,
+                                            ctx->file_path, ctx->destination_path,
+                                            _fuse_copy_move_uthr, ctx),
+                     ASYNC_FUSE_FS_COPYFILE_DONE_EVENT,
+                     FuseFsOpDoneEvent,
+                     copyfile_done_ev);
+	if (copyfile_done_ev->ret < 0) {
+	  log_info("Failure to copyfile(\"%s\", \"%s\"): %s",
+		   ctx->file_path, ctx->destination_path,
+                   strerror(-copyfile_done_ev->ret));
+	  err = WEBDAV_ERROR_GENERAL;
+	  goto done;
+	}
+      }
+    }
+    else {
+      UTHR_SUBCALL(ctx,
+                   async_fuse_fs_copytree(ctx->fbctx->fuse_fs,
+                                          ctx->file_path, ctx->destination_path,
+                                          ctx->is_move,
+                                          _fuse_copy_move_uthr, ctx),
+                   ASYNC_FUSE_FS_COPYTREE_DONE_EVENT,
+                   AsyncFuseFsCopytreeDoneEvent,
+                   copytree_done_ev);
+      /* we don't handle errors here yet */
+      ASSERT_TRUE(!copytree_done_ev->error);
+    }
+  }
+
+  err = WEBDAV_ERROR_NONE;
 
  done:
-  UTHR_RETURN(ctx,
-              ctx->cb(WEBDAV_OPEN_DONE_EVENT, &ev, ctx->cb_ud));
+  free(ctx->file_path);
+  free(ctx->destination_path);
+  free(ctx->destination_path_copy);
+
+  if (ctx->is_move) {
+    WebdavMoveDoneEvent move_done_ev = {
+      .error = err,
+      /* TODO: implement */
+      .failed_to_move = LINKED_LIST_INITIALIZER,
+      .dst_existed = ctx->dst_existed,
+    };
+    UTHR_RETURN(ctx,
+                ctx->cb(WEBDAV_MOVE_DONE_EVENT, &move_done_ev, ctx->cb_ud));
+  }
+  else {
+    WebdavCopyDoneEvent copy_done_ev = {
+      .error = err,
+      /* TODO: implement */
+      .failed_to_copy = LINKED_LIST_INITIALIZER,
+      .dst_existed = ctx->dst_existed,
+    };
+    UTHR_RETURN(ctx,
+                ctx->cb(WEBDAV_COPY_DONE_EVENT, &copy_done_ev, ctx->cb_ud));
+  }
 
   UTHR_FOOTER();
 }
 
-static void
-fuse_open(void *fs_ctx,
-          const char *relative_uri, bool create,
-          event_handler_t cb, void *cb_ud) {
-  UTHR_CALL5(_fuse_open_uthr, FuseOpenCtx,
-             .fs_ctx = (FuseFsCtx *) fs_ctx,
-             .relative_uri = relative_uri,
-             .create = create,
-             .cb = cb,
-             .cb_ud = cb_ud);
-}
-
-typedef struct {
-  UTHR_CTX_BASE;
-  /* args */
-  FuseFsCtx *fs_ctx;
-  FuseHandle *handle;
-  event_handler_t cb;
-  void *cb_ud;
-  /* ctx */
-  struct fuse_file_info fi;
-  struct stat st;
-} FuseFstatCtx;
-
-static
-UTHR_DEFINE(_fuse_fstat_uthr) {
-  UTHR_HEADER(FuseFstatCtx, ctx);
-
-  ctx->fi.fh = ctx->handle->fh;
-  UTHR_YIELD(ctx,
-             async_fuse_fs_fgetattr(ctx->fs_ctx->fuse_fs,
-                                    ctx->handle->file_path, &ctx->st, &ctx->fi,
-                                    _fuse_fstat_uthr, ctx));
-  UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_FGETATTR_DONE_EVENT,
-                     FuseFsOpDoneEvent, op_done_ev);
-
-  WebdavFstatDoneEvent ev;
-  if (op_done_ev->ret) {
-    log_info("Couldn't async_fuse_fs_fgetattr path/handle (%s/%jd): %s",
-             ctx->handle->file_path, ctx->handle->fh, strerror(-op_done_ev->ret));
-    ev.error = WEBDAV_ERROR_GENERAL;
-    goto done;
-  }
-
-  ev.error = WEBDAV_ERROR_NONE;
-  fill_file_info(&ev.file_info, &ctx->st);
-
- done:
-  UTHR_RETURN(ctx,
-              ctx->cb(WEBDAV_FSTAT_DONE_EVENT, &ev, ctx->cb_ud));
-
-  UTHR_FOOTER();
-}
 
 static void
-fuse_fstat(void *fs_ctx,
-           void *handle,
-           event_handler_t cb, void *cb_ud) {
-  UTHR_CALL5(_fuse_fstat_uthr, FuseFstatCtx,
-             .fs_ctx = (FuseFsCtx *) fs_ctx,
-             .handle = (FuseHandle *) handle,
-             .cb = cb,
-             .cb_ud = cb_ud);
-}
-
-typedef struct {
-  UTHR_CTX_BASE;
-  /* args */
-  FuseFsCtx *fs_ctx;
-  FuseHandle *handle;
-  void *buf;
-  size_t nbyte;
-  event_handler_t cb;
-  void *cb_ud;
-  /* ctx */
-  struct fuse_file_info fi;
-} FuseReadCtx;
-
-static
-UTHR_DEFINE(_fuse_read_uthr) {
-  UTHR_HEADER(FuseReadCtx, ctx);
-
-  assert(all_null(&ctx->fi, sizeof(ctx->fi)));
-  ctx->fi.fh = ctx->handle->fh;
-
-  /* XXX: paranoid assert against the webdav server
-     calling read on the same file handle in parallel,
-     shouldn't happen in practice */
-  assert(!ctx->handle->object_state.file.pos_being_modified);
-  ctx->handle->object_state.file.pos_being_modified = true;
-  UTHR_YIELD(ctx,
-             async_fuse_fs_read(ctx->fs_ctx->fuse_fs,
-                                ctx->handle->file_path,
-                                ctx->buf, ctx->nbyte, ctx->handle->object_state.file.pos,
-                                &ctx->fi,
-                                _fuse_read_uthr, ctx));
-  UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_READ_DONE_EVENT,
-                     FuseFsOpDoneEvent, op_done_ev);
-  ctx->handle->object_state.file.pos_being_modified = false;
-
-  WebdavReadDoneEvent ev;
-  if (op_done_ev->ret < 0) {
-    ev.error = WEBDAV_ERROR_GENERAL;
-    goto done;
-  }
-
-  ctx->handle->object_state.file.pos += op_done_ev->ret;
-
-  ev = (WebdavReadDoneEvent) {
-    .error = WEBDAV_ERROR_NONE,
-    .nbyte = op_done_ev->ret,
-  };
-
- done:
-  UTHR_RETURN(ctx,
-              ctx->cb(WEBDAV_READ_DONE_EVENT, &ev, ctx->cb_ud));
-
-  UTHR_FOOTER();
-}
-
-static void
-fuse_read(void *fs_ctx,
-          void *handle,
-          void *buf, size_t nbyte,
-          event_handler_t cb, void *cb_ud) {
-  UTHR_CALL5(_fuse_read_uthr, FuseReadCtx,
-             .fs_ctx = (FuseFsCtx *) fs_ctx,
-             .handle = (FuseHandle *) handle,
-             .buf = buf,
-             .nbyte = nbyte,
-             .cb = cb,
-             .cb_ud = cb_ud);
-}
-
-typedef struct {
-  UTHR_CTX_BASE;
-  /* args */
-  FuseFsCtx *fs_ctx;
-  FuseHandle *handle;
-  const void *buf;
-  size_t nbyte;
-  event_handler_t cb;
-  void *cb_ud;
-  /* ctx */
-  struct fuse_file_info fi;
-} FuseWriteCtx;
-
-static
-UTHR_DEFINE(_fuse_write_uthr) {
-  UTHR_HEADER(FuseWriteCtx, ctx);
-
-  assert(all_null(&ctx->fi, sizeof(ctx->fi)));
-  ctx->fi.fh = ctx->handle->fh;
-
-  /* XXX: paranoid assert against the webdav server
-     calling read on the same file handle in parallel,
-     shouldn't happen in practice */
-  assert(!ctx->handle->object_state.file.pos_being_modified);
-  ctx->handle->object_state.file.pos_being_modified = true;
-  UTHR_YIELD(ctx,
-             async_fuse_fs_write(ctx->fs_ctx->fuse_fs,
-                                 ctx->handle->file_path,
-                                 ctx->buf, ctx->nbyte, ctx->handle->object_state.file.pos,
-                                 &ctx->fi,
-                                _fuse_write_uthr, ctx));
-  UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_WRITE_DONE_EVENT,
-                     FuseFsOpDoneEvent, op_done_ev);
-  ctx->handle->object_state.file.pos_being_modified = false;
-
-  WebdavWriteDoneEvent ev;
-  if (op_done_ev->ret < 0) {
-    ev.error = WEBDAV_ERROR_GENERAL;
-    goto done;
-  }
-
-  ev = (WebdavWriteDoneEvent) {
-    .error = WEBDAV_ERROR_NONE,
-    .nbyte = op_done_ev->ret,
-  };
-
- done:
-  UTHR_RETURN(ctx,
-              ctx->cb(WEBDAV_WRITE_DONE_EVENT, &ev, ctx->cb_ud));
-
-  UTHR_FOOTER();
-}
-
-static void
-fuse_write(void *fs_ctx,
-           void *handle,
-           const void *buf, size_t nbyte,
-           event_handler_t cb, void *cb_ud) {
-  UTHR_CALL5(_fuse_write_uthr, FuseWriteCtx,
-             .fs_ctx = (FuseFsCtx *) fs_ctx,
-             .handle = (FuseHandle *) handle,
-             .buf = buf,
-             .nbyte = nbyte,
-             .cb = cb,
-             .cb_ud = cb_ud);
-}
-
-static void
-fuse_readcol(void *fs_ctx,
-             void *handle,
-             WebdavCollectionEntry *ce, size_t nentries,
-             event_handler_t cb, void *ud) {
-  UNUSED(fs_ctx);
-  UNUSED(handle);
-  UNUSED(ce);
-  UNUSED(nentries);
-  UNUSED(cb);
-  UNUSED(ud);
-}
-
-static void
-fuse_close(void *fs_ctx,
-           void *handle,
-           event_handler_t cb, void *ud) {
-  UNUSED(fs_ctx);
-  UNUSED(handle);
-  UNUSED(cb);
-  UNUSED(ud);
-}
-
-static void
-fuse_mkcol(void *fs_ctx, const char *relative_uri,
-           event_handler_t cb, void *ud) {
-  UNUSED(fs_ctx);
-  UNUSED(relative_uri);
-  UNUSED(cb);
-  UNUSED(ud);
-}
-
-static void
-fuse_delete(void *fs_ctx,
-            const char *relative_uri,
-            event_handler_t cb, void *ud) {
-  UNUSED(fs_ctx);
-  UNUSED(relative_uri);
-  UNUSED(cb);
-  UNUSED(ud);
-}
-
-static void
-fuse_copy(void *fs_ctx,
+fuse_copy(void *backend_ctx,
           const char *src_relative_uri, const char *dst_relative_uri,
           bool overwrite, webdav_depth_t depth,
-          event_handler_t cb, void *ud) {
-  UNUSED(fs_ctx);
-  UNUSED(src_relative_uri);
-  UNUSED(dst_relative_uri);
-  UNUSED(overwrite);
-  UNUSED(depth);
-  UNUSED(cb);
-  UNUSED(ud);
+          event_handler_t cb, void *cb_ud) {
+  UTHR_CALL8(_fuse_copy_move_uthr, FuseCopyMoveCtx,
+             .is_move = false,
+             .fbctx = backend_ctx,
+             .src_relative_uri = src_relative_uri,
+             .dst_relative_uri = dst_relative_uri,
+             .overwrite = overwrite,
+             .depth = depth,
+             .cb = cb,
+             .cb_ud = cb_ud);
 }
 
 static void
-fuse_move(void *fs_ctx,
-          const char *src_relative_uri, const char *dst_relative_uri,
-          bool overwrite,
-          event_handler_t cb, void *ud) {
-  UNUSED(fs_ctx);
-  UNUSED(src_relative_uri);
-  UNUSED(dst_relative_uri);
-  UNUSED(overwrite);
+fuse_delete(void *backend_ctx,
+            const char *relative_uri,
+            event_handler_t cb, void *ud) {
+  UNUSED(backend_ctx);
+  UNUSED(relative_uri);
   UNUSED(cb);
   UNUSED(ud);
+  abort();
 }
 
-static WebdavOperations
-fuse_operations = {
-  .open = fuse_open,
-  .fstat = fuse_fstat,
-  .read = fuse_read,
-  .write = fuse_write,
-  .readcol = fuse_readcol,
-  .close = fuse_close,
-  .mkcol = fuse_mkcol,
-  .delete = fuse_delete,
+static void
+fuse_get(void *backend_ctx,
+         const char *relative_uri,
+         webdav_get_request_ctx_t get_ctx) {
+  UNUSED(backend_ctx);
+  UNUSED(relative_uri);
+  UNUSED(get_ctx);
+  abort();
+}
+
+static void
+fuse_mkcol(void *backend_ctx, const char *relative_uri,
+           event_handler_t cb, void *ud) {
+  UNUSED(backend_ctx);
+  UNUSED(relative_uri);
+  UNUSED(cb);
+  UNUSED(ud);
+  abort();
+}
+
+static void
+fuse_move(void *backend_ctx,
+          const char *src_relative_uri, const char *dst_relative_uri,
+          bool overwrite,
+          event_handler_t cb, void *cb_ud) {
+  UTHR_CALL8(_fuse_copy_move_uthr, FuseCopyMoveCtx,
+             .is_move = true,
+             .fbctx = backend_ctx,
+             .src_relative_uri = src_relative_uri,
+             .dst_relative_uri = dst_relative_uri,
+             .overwrite = overwrite,
+             .cb = cb,
+             .cb_ud = cb_ud);
+}
+
+static void
+fuse_propfind(void *backend_ctx,
+              const char *relative_uri, webdav_depth_t depth,
+              webdav_propfind_req_type_t propfind_req_type,
+              event_handler_t cb, void *user_data) {
+  UNUSED(backend_ctx);
+  UNUSED(relative_uri);
+  UNUSED(depth);
+  UNUSED(propfind_req_type);
+  UNUSED(cb);
+  UNUSED(user_data);
+  abort();
+}
+
+static void
+fuse_put(void *backend_ctx,
+         const char *relative_uri,
+         webdav_put_request_ctx_t put_ctx) {
+  UNUSED(backend_ctx);
+  UNUSED(relative_uri);
+  UNUSED(put_ctx);
+  abort();
+}
+
+static void
+fuse_touch(void *backend_ctx,
+           const char *relative_uri,
+           event_handler_t cb, void *user_data) {
+  UNUSED(backend_ctx);
+  UNUSED(relative_uri);
+  UNUSED(cb);
+  UNUSED(user_data);
+  abort();
+}
+
+static WebdavBackendOperations
+fuse_backend_operations = {
   .copy = fuse_copy,
+  .delete = fuse_delete,
+  .get = fuse_get,
+  .mkcol = fuse_mkcol,
   .move = fuse_move,
+  .propfind = fuse_propfind,
+  .put = fuse_put,
+  .touch = fuse_touch,
 };
 
 static bool
@@ -543,7 +418,7 @@ static void *
 http_thread(void *ud) {
   HTTPThreadArguments *args = (HTTPThreadArguments *) ud;
   int server_fd = -1;
-  webdav_fs_t fs = 0;
+  webdav_backend_t webdav_backend = 0;
 
   /* create server socket */
   server_fd = create_server_socket(args->listen_str);
@@ -553,17 +428,20 @@ http_thread(void *ud) {
   }
 
   /* start webdav server */
-  FuseFsCtx ctx = {
+  FuseBackendCtx ctx = {
     .fuse_fs = args->async_fuse_fs,
   };
 
-  fs = webdav_fs_new(&fuse_operations, sizeof(fuse_operations), &ctx);
-  if (!fs) {
-    log_critical("Couldn't create WebDAV file system");
+  webdav_backend = webdav_backend_new(&fuse_backend_operations,
+                                      sizeof(fuse_backend_operations), &ctx);
+  if (!webdav_backend) {
+    log_critical("Couldn't create WebDAV backend");
     goto done;
   }
 
-  webdav_server_t wd_serv = webdav_server_start(args->loop, server_fd, args->public_prefix, fs);
+  webdav_server_t wd_serv = webdav_server_start(args->loop,
+                                                server_fd, args->public_prefix,
+                                                webdav_backend);
   /* the server owns the fd now */
   server_fd = -1;
   if (!wd_serv) {
@@ -579,8 +457,8 @@ http_thread(void *ud) {
   log_info("Ending WebDAV server loop");
 
  done:
-  if (fs) {
-    webdav_fs_destroy(fs);
+  if (webdav_backend) {
+    webdav_backend_destroy(webdav_backend);
   }
 
   if (server_fd >= 0) {

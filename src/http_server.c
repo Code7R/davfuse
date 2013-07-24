@@ -65,7 +65,7 @@ http_server_start(HTTPServer *http,
     1. you can call accept() on it
     2. you can get read readiness info on it
 
-    at this point we own the fd
+    (we don't own the fd, so the user must close it)
   */
   assert(http);
   assert(loop);
@@ -100,7 +100,6 @@ http_server_start(HTTPServer *http,
   return true;
 
  error:
-  close_or_abort(fd);
   http->watch_key = FD_EVENT_INVALID_WATCH_KEY;
   return false;
 }
@@ -113,9 +112,6 @@ http_server_stop(HTTPServer *http,
   ASSERT_TRUE(remove_watch_ret);
 
   http->watch_key = FD_EVENT_INVALID_WATCH_KEY;
-
-  /* this can't fail */
-  close_or_abort(http->fd);
 
   http->shutting_down = true;
   http->stop_cb = cb;
@@ -692,7 +688,7 @@ EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
 
  error:
   if (client_fd >= 0) {
-    close(client_fd);
+    close_or_abort(client_fd);
   }
 }
 
@@ -807,7 +803,7 @@ UTHR_DEFINE(client_coroutine) {
   }
 
   log_debug("Client done, closing descriptor %d", cc->f.fd);
-  close(cc->f.fd);
+  close_or_abort(cc->f.fd);
   /* NB: ordinarily we'd call UTHR_RETURN, but we need
      to free the memory first before calling the stop handler */
   HTTPServer *server = cc->server;

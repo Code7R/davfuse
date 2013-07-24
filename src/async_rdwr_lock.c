@@ -8,26 +8,6 @@
 
 #include "async_rdwr_lock.h"
 
-typedef struct {
-  event_handler_t cb;
-  void *cb_ud;
-} Callback;
-
-static Callback *
-callback_new(event_handler_t cb, void *cb_ud) {
-  Callback *toret = malloc(sizeof(*toret));
-  if (!toret) {
-    return NULL;
-  }
-
-  *toret = (Callback) {
-    .cb = cb,
-    .cb_ud = cb_ud,
-  };
-
-  return toret;
-}
-
 struct async_rdwr_lock {
   bool has_write_lock;
   int num_readers;
@@ -49,6 +29,36 @@ _is_valid_state(struct async_rdwr_lock *lock) {
   }
 
   return true;
+}
+
+static void
+_call_write_callback(struct async_rdwr_lock *lock, Callback *write_callback) {
+  event_handler_t cb;
+  void *ud;
+  callback_deconstruct(write_callback, &cb, &ud);
+  AsyncRdwrWriteLockDoneEvent ev = {.success = true};
+  lock->has_write_lock = true;
+  return cb(ASYNC_RDWR_WRITE_LOCK_DONE_EVENT, &ev, ud);
+}
+
+static void
+_call_read_callback(struct async_rdwr_lock *lock, Callback *read_callback) {
+  event_handler_t cb;
+  void *ud;
+  callback_deconstruct(read_callback, &cb, &ud);
+  AsyncRdwrReadLockDoneEvent ev = {.success = true};
+  lock->num_readers += 1;
+  return cb(ASYNC_RDWR_READ_LOCK_DONE_EVENT, &ev, ud);
+}
+
+
+static void
+_call_destroy_callback(struct async_rdwr_lock *lock) {
+  event_handler_t cb = lock->waiting_for_destroy_ud;
+  assert(cb);
+  void *ud = lock->waiting_for_destroy_ud;
+  free(lock);
+  return cb(ASYNC_RDWR_DESTROY_DONE_EVENT, NULL, ud);
 }
 
 async_rdwr_lock_t
@@ -85,7 +95,7 @@ async_rdwr_write_lock(async_rdwr_lock_t lock,
 
   if (lock->has_write_lock ||
       lock->num_readers) {
-    Callback *callback = callback_new(cb, ud);
+    Callback *callback = callback_construct(cb, ud);
     if (!callback) {
       ev.success = false;
       goto out;
@@ -120,33 +130,19 @@ async_rdwr_write_unlock(async_rdwr_lock_t lock) {
   lock->waiting_on_read_lock =
     linked_list_popleft(lock->waiting_on_read_lock, (void **) &read_callback);
   if (read_callback) {
-    event_handler_t cb = read_callback->cb;
-    void *ud = read_callback->cb_ud;
-    free(read_callback);
-    AsyncRdwrReadLockDoneEvent ev = {.success = true};
-    lock->num_readers += 1;
-    return cb(ASYNC_RDWR_READ_LOCK_DONE_EVENT, &ev, ud);
+    return _call_read_callback(lock, read_callback);
   }
 
   Callback *write_callback;
   lock->waiting_on_write_lock =
     linked_list_popleft(lock->waiting_on_write_lock, (void **) &write_callback);
-
   if (write_callback) {
-    event_handler_t cb = write_callback->cb;
-    void *ud = write_callback->cb_ud;
-    free(write_callback);
-    AsyncRdwrWriteLockDoneEvent ev = {.success = true};
-    lock->has_write_lock = true;
-    return cb(ASYNC_RDWR_WRITE_LOCK_DONE_EVENT, &ev, ud);
+    return _call_write_callback(lock, write_callback);
   }
 
   /* nothing was waiting on the lock, call the destroy callback */
-  event_handler_t cb = lock->waiting_for_destroy_cb;
-  void *ud = lock->waiting_for_destroy_ud;
-  if (cb) {
-    free(lock);
-    return cb(ASYNC_RDWR_DESTROY_DONE_EVENT, NULL, ud);
+  if (lock->waiting_for_destroy_cb) {
+    return _call_destroy_callback(lock);
   }
 }
 
@@ -160,7 +156,7 @@ async_rdwr_read_lock(async_rdwr_lock_t lock,
       /* add to waiting list if ppl are waiting on the write lock,
          just so we don't starve writers */
       lock->waiting_on_write_lock) {
-    Callback *callback = callback_new(cb, ud);
+    Callback *callback = callback_construct(cb, ud);
     if (!callback) {
       ev.success = false;
       goto out;
@@ -195,22 +191,14 @@ async_rdwr_read_unlock(async_rdwr_lock_t lock) {
       linked_list_popleft(lock->waiting_on_write_lock, (void **) &write_callback);
 
     if (write_callback) {
-      event_handler_t cb = write_callback->cb;
-      void *ud = write_callback->cb_ud;
-      free(write_callback);
-      AsyncRdwrWriteLockDoneEvent ev = {.success = true};
-      lock->has_write_lock = true;
-      return cb(ASYNC_RDWR_WRITE_LOCK_DONE_EVENT, &ev, ud);
+      return _call_write_callback(lock, write_callback);
     }
 
     /* nothing was waiting on the lock, call the destroy callback */
     assert(!lock->waiting_on_read_lock);
 
-    event_handler_t cb = lock->waiting_for_destroy_cb;
-    void *ud = lock->waiting_for_destroy_ud;
-    if (cb) {
-      free(lock);
-      return cb(ASYNC_RDWR_DESTROY_DONE_EVENT, NULL, ud);
+    if (lock->waiting_for_destroy_cb) {
+      return _call_destroy_callback(lock);
     }
   }
 }

@@ -1,8 +1,17 @@
+#define _ISOC99_SOURCE
+#define _POSIX_C_SOURCE 199309L
+#define _BSD_SOURCE
+
 #include <unistd.h>
 
 #include <assert.h>
 #include <errno.h>
 #include <limits.h>
+#include <time.h>
+
+#define FUSE_USE_VERSION 26
+#include "fuse.h"
+#undef FUSE_USE_VERSION
 
 #include "fdevent.h"
 #include "fd_utils.h"

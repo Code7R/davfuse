@@ -63,4 +63,9 @@
 
 #define UTHR_RECEIVE_EVENT(ev_type, type, name) type *name = (assert(ev_type == UTHR_EVENT_TYPE()), UTHR_EVENT())
 
+#define UTHR_SUBCALL(ctx, fn, ev_type, type, name) \
+  UTHR_YIELD(ctx, fn);                             \
+  UTHR_RECEIVE_EVENT(ev_type, type, name)
+
+
 #endif /* UTHREAD_H */

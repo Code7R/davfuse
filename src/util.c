@@ -140,4 +140,3 @@ strndup_x(const char *s, size_t n) {
   toret[len] = '\0';
   return toret;
 }
-

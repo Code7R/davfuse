@@ -27,8 +27,10 @@ LDFLAGS += $(patsubst %,-L%,${LIBS})
 CC ?= cc
 
 # for mac os x
-LINK_COMMAND = gcc -dynamiclib -dylinker_install_name /usr/local/lib/libfuse4x.2.dylib -compatibility_version 11.0.0 -current_version 11.7.0
+LINK_COMMAND_MACOSX = gcc -dynamiclib -dylinker_install_name /usr/local/lib/libfuse4x.2.dylib -compatibility_version 11.0.0 -current_version 11.7.0
 
 # $^ = input files
 # $@ = output file
-# LINK_COMMAND = ld -shared --version-script fuse_versionscript -soname $@ -o $@ $^
+LINK_COMMAND_LINUX = ld -shared --version-script fuse_versionscript -soname libfuse.so.2
+
+LINK_COMMAND = ${LINK_COMMAND_LINUX}

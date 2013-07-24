@@ -40,15 +40,6 @@ typedef struct {
   size_t base_path_len;
 } PosixBackendCtx;
 
-static void *
-malloc_or_abort(size_t n) {
-  int saved_errno = errno;
-  void *ret = malloc(n);
-  ASSERT_NOT_NULL(ret);
-  errno = saved_errno;
-  return ret;
-}
-
 static char *
 path_from_uri(PosixBackendCtx *pbctx, const char *real_uri) {
   size_t uri_len = strlen(real_uri);
@@ -609,30 +600,27 @@ _posix_copy_move(void *backend_handle,
     goto done;
   }
 
-  struct stat src_st;
-  int src_ret = stat(file_path, &src_st);
-  if (src_ret < 0) {
-    if (errno != ENOENT) {
-      log_info("Error while calling stat(\"%s\"): %s",
-	       destination_path,
-	       strerror(errno));
-    }
-    err = errno == ENOENT
-      ? WEBDAV_ERROR_DOES_NOT_EXIST
-      : WEBDAV_ERROR_GENERAL;
-    goto done;
-  }
-
-  struct stat dst_st;
-  int dst_ret = stat(destination_path, &dst_st);
-  if (dst_ret && errno != ENOENT) {
-    log_info("Error while calling stat(\"%s\"): %s",
-	     destination_path,
-	     strerror(errno));
+  const int ret_src_exists = file_exists(file_path);
+  if (ret_src_exists < 0) {
+    log_info("Error while checking if \"%s\" existed: %s",
+             file_path, strerror(errno));
     err = WEBDAV_ERROR_GENERAL;
     goto done;
   }
-  bool dst_existed = !dst_ret;
+  else if (!ret_src_exists) {
+    err = WEBDAV_ERROR_DOES_NOT_EXIST;
+    goto done;
+  }
+
+  const int ret_dst_exists = file_exists(destination_path);
+  if (ret_dst_exists < 0) {
+    log_info("Error while checking if \"%s\" existed: %s",
+             destination_path, strerror(errno));
+    err = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  const bool dst_existed = ret_dst_exists;
 
   /* kill directory if we're overwriting it */
   if (dst_existed) {
@@ -801,7 +789,7 @@ main(int argc, char *argv[]) {
 
   /* create server socket */
   int server_fd = create_ipv4_bound_socket(port);
-  assert(server_fd >= 0);
+  ASSERT_TRUE(server_fd >= 0);
 
   /* create event loop */
   FDEventLoop loop;
@@ -822,11 +810,14 @@ main(int argc, char *argv[]) {
   ASSERT_TRUE(ws);
 
   log_info("Starting main loop");
+
   fdevent_main_loop(&loop);
 
   log_info("Server stopped");
 
   webdav_backend_destroy(fs);
+
+  close(server_fd);
 
   free(base_path);
 

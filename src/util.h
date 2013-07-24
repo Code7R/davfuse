@@ -1,6 +1,8 @@
 #ifndef UTIL_H
 #define UTIL_H
 
+#include <errno.h>
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -8,6 +10,7 @@
 #include <strings.h>
 
 #include "c_util.h"
+#include "events.h"
 #include "logging.h"
 
 struct _ll {
@@ -105,4 +108,39 @@ all_null(const void *buf, size_t len) {
   return true;
 }
 
+HEADER_FUNCTION void *
+malloc_or_abort(size_t n) {
+  int saved_errno = errno;
+  void *ret = malloc(n);
+  ASSERT_NOT_NULL(ret);
+  errno = saved_errno;
+  return ret;
+}
+
+typedef struct {
+  event_handler_t cb;
+  void *ud;
+} Callback;
+
+HEADER_FUNCTION Callback *
+callback_construct(event_handler_t cb, void *ud) {
+  Callback *cbud = malloc(sizeof(*cbud));
+  if (!cbud) {
+    return NULL;
+  }
+
+  *cbud = (Callback) {.cb = cb, .ud = ud};
+
+  return cbud;
+}
+
+HEADER_FUNCTION void
+callback_deconstruct(Callback *cbud,
+                     event_handler_t *cb, void **ud) {
+  *cb = cbud->cb;
+  *ud = cbud->ud;
+  free(cbud);
+}
+
 #endif /* UTIL_H */
+
