@@ -198,7 +198,7 @@ UTHR_DEFINE(_posix_put_uthr) {
 
   bool created;
   const bool success_open_create =
-    open_or_create(ctx->file_path, O_WRONLY, 0666, &ctx->fd, &created);
+    open_or_create(ctx->file_path, O_WRONLY | O_TRUNC, 0666, &ctx->fd, &created);
 
   if (!success_open_create) {
     log_info("Error opening \"%s\" (%s)",
@@ -223,6 +223,10 @@ UTHR_DEFINE(_posix_put_uthr) {
     UTHR_RECEIVE_EVENT(WEBDAV_PUT_REQUEST_READ_DONE_EVENT,
                        WebdavPutRequestReadDoneEvent,
                        read_done_ev);
+    if (read_done_ev->error) {
+      error = read_done_ev->error;
+      goto done;
+    }
 
     /* EOF */
     if (!read_done_ev->nbyte) {
@@ -271,9 +275,7 @@ posix_put(void *backend_handle, const char *relative_uri,
              .pbctx = (PosixBackendCtx *) backend_handle,
              .relative_uri = relative_uri,
              .put_ctx = put_ctx);
-
 }
-
 
 static void
 posix_mkcol(void *backend_handle, const char *relative_uri,

@@ -491,4 +491,3 @@ async_fuse_fs_copytree(async_fuse_fs_t fs,
                           is_postorder,
                           _async_fuse_fs_copytree_done, ctx);
 }
-

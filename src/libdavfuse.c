@@ -3,13 +3,14 @@
  */
 
 #define _ISOC99_SOURCE
-#define _POSIX_C_SOURCE 199309L
+#define _BSD_SOURCE
 
 #include <errno.h>
 #include <libgen.h>
 #include <pthread.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <assert.h>
@@ -741,14 +742,136 @@ fuse_propfind(void *backend_ctx,
              .cb_ud = cb_ud);
 }
 
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  FuseBackendCtx *fbctx;
+  const char *relative_uri;
+  webdav_put_request_ctx_t put_ctx;
+  /* ctx */
+  bool opened_file : 1;
+  bool resource_existed : 1;
+  webdav_error_t error;
+  struct fuse_file_info fi;
+  char *file_path;
+  size_t amount_read;
+  size_t amount_written;
+  size_t total_amount_transferred;
+  char buf[TRANSFER_BUF_SIZE];
+} FusePutCtx;
+
+UTHR_DEFINE(_fuse_put_uthr) {
+  UTHR_HEADER(FusePutCtx, ctx);
+
+  ctx->file_path = path_from_uri(ctx->fbctx, ctx->relative_uri);
+  if (!ctx->file_path) {
+    ctx->error = WEBDAV_ERROR_NO_MEM;;
+    goto done;
+  }
+
+  /* first try to create the file normally, if it already exists nbd */
+  UTHR_SUBCALL(ctx,
+               async_fuse_fs_mknod(ctx->fbctx->fuse_fs,
+                                   ctx->file_path, S_IFREG | 0666, 0,
+                                   _fuse_put_uthr, ctx),
+               ASYNC_FUSE_FS_MKNOD_DONE_EVENT,
+               FuseFsOpDoneEvent, mknod_done_ev);
+  if (mknod_done_ev->ret < 0 &&
+      -mknod_done_ev->ret != EEXIST) {
+    ctx->error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  ctx->resource_existed = mknod_done_ev->ret;
+
+  ctx->fi.flags = O_WRONLY | O_TRUNC;
+  UTHR_SUBCALL(ctx,
+               async_fuse_fs_open(ctx->fbctx->fuse_fs,
+                                  ctx->file_path, &ctx->fi,
+                                  _fuse_put_uthr, ctx),
+               ASYNC_FUSE_FS_OPEN_DONE_EVENT,
+               FuseFsOpDoneEvent, open_done_ev);
+  if (open_done_ev->ret < 0) {
+    log_info("Error opening \"%s\" (%s)",
+             ctx->file_path, strerror(-open_done_ev->ret));
+    switch (errno) {
+    case ENOENT: ctx->error = WEBDAV_ERROR_DOES_NOT_EXIST; break;
+    case ENOTDIR: ctx->error = WEBDAV_ERROR_NOT_COLLECTION; break;
+    case EISDIR: ctx->error = WEBDAV_ERROR_IS_COL; break;
+    default: ctx->error = WEBDAV_ERROR_GENERAL; break;
+    }
+    goto done;
+  }
+
+  ctx->opened_file = true;
+
+  ctx->total_amount_transferred = 0;
+  while (true) {
+    UTHR_SUBCALL(ctx,
+                 webdav_put_request_read(ctx->put_ctx,
+                                         ctx->buf, sizeof(ctx->buf),
+                                         _fuse_put_uthr, ctx),
+                 WEBDAV_PUT_REQUEST_READ_DONE_EVENT,
+                 WebdavPutRequestReadDoneEvent, read_done_ev);
+    if (read_done_ev->error) {
+      ctx->error = read_done_ev->error;
+      goto done;
+    }
+
+    /* EOF */
+    if (!read_done_ev->nbyte) {
+      break;
+    }
+
+    UTHR_SUBCALL(ctx,
+                 async_fuse_fs_write(ctx->fbctx->fuse_fs,
+                                     ctx->file_path, ctx->buf, read_done_ev->nbyte,
+                                     ctx->total_amount_transferred, &ctx->fi,
+                                     _fuse_put_uthr, ctx),
+                 ASYNC_FUSE_FS_WRITE_DONE_EVENT,
+                 FuseFsOpDoneEvent, write_done_ev);
+    if (write_done_ev->ret < 0) {
+      log_error("Couldn't write to resource \"%s\"", ctx->file_path);
+      ctx->error = WEBDAV_ERROR_GENERAL;
+      goto done;
+    }
+
+    ctx->total_amount_transferred += write_done_ev->ret;
+  }
+
+  log_info("Resource \"%s\" created with %zu bytes",
+           ctx->file_path, ctx->total_amount_transferred);
+  ctx->error = WEBDAV_ERROR_NONE;
+
+ done:
+  free(ctx->file_path);
+
+  if (ctx->opened_file) {
+    UTHR_SUBCALL(ctx,
+                 async_fuse_fs_release(ctx->fbctx->fuse_fs,
+                                       ctx->file_path, &ctx->fi,
+                                       _fuse_put_uthr, ctx),
+                 ASYNC_FUSE_FS_RELEASE_DONE_EVENT,
+                 FuseFsOpDoneEvent,
+                 release_done_ev);
+    /* the return value of release is always ignored in the FUSE API */
+    UNUSED(release_done_ev);
+  }
+
+  UTHR_RETURN(ctx,
+              webdav_put_request_end(ctx->put_ctx, ctx->error, ctx->resource_existed));
+
+  UTHR_FOOTER();
+}
+
 static void
 fuse_put(void *backend_ctx,
          const char *relative_uri,
          webdav_put_request_ctx_t put_ctx) {
-  UNUSED(backend_ctx);
-  UNUSED(relative_uri);
-  UNUSED(put_ctx);
-  abort();
+  UTHR_CALL3(_fuse_put_uthr, FusePutCtx,
+             .fbctx = backend_ctx,
+             .relative_uri = relative_uri,
+             .put_ctx = put_ctx);
 }
 
 static void
