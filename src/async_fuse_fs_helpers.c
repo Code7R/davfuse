@@ -50,6 +50,7 @@ UTHR_DEFINE(_async_fuse_remove_uthr) {
     ctx->ret = rmdir_done_ev->ret;
   }
 
+  log_debug("freein: %s", ctx->path);
   free(ctx->path);
   AsyncTreeApplyFnDoneEvent ev = {.error = ctx->ret};
   UTHR_RETURN(ctx,
@@ -89,6 +90,11 @@ _async_fuse_expand_dirfil_fn(fuse_dirh_t h,
      it's okay because nothing should be using these data structures
      on the webdav thread
    */
+  if (str_equals(name, "..") ||
+      str_equals(name, ".")) {
+    return 0;
+  }
+
   AsyncFuseExpandCtx *ctx = (AsyncFuseExpandCtx *) h;
   UNUSED(type);
   UNUSED(ino);
@@ -166,10 +172,12 @@ async_fuse_fs_rmtree(async_fuse_fs_t fs,
   ASSERT_NOT_NULL(cbud);
 
   bool is_postorder = true;
+  char *init_path = strdup_x(path);
+  ASSERT_NOT_NULL(init_path);
   return async_tree_apply(fs,
                           _async_fuse_remove,
                           _async_fuse_expand,
-                          (void *) path,
+                          (void *) init_path,
                           is_postorder,
                           _async_fuse_fs_rmtree_done, cbud);
 }
@@ -484,10 +492,12 @@ async_fuse_fs_copytree(async_fuse_fs_t fs,
   };
 
   bool is_postorder = false;
+  char *init_path = strdup_x(src);
+  ASSERT_NOT_NULL(init_path);
   return async_tree_apply(ctx,
                           _async_fuse_apply_copytree,
                           _async_fuse_expand_copytree,
-                          (void *) src,
+                          (void *) init_path,
                           is_postorder,
                           _async_fuse_fs_copytree_done, ctx);
 }

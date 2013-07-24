@@ -17,6 +17,7 @@
 #include "fd_utils.h"
 #include "logging.h"
 #include "uthread.h"
+#include "util.h"
 
 #include "async_fuse_fs.h"
 
@@ -48,11 +49,7 @@ channel_deinit(Channel *chan) {
   }
 
   if (chan->named.out >= 0) {
-    int ret_2 = close(chan->named.out);
-    if (ret_2) {
-      /* can't recover from this */
-      abort();
-    }
+    close_or_abort(chan->named.out);
   }
 
   return true;
@@ -69,7 +66,16 @@ typedef enum {
   MESSAGE_TYPE_QUIT,
   MESSAGE_TYPE_OPEN,
   MESSAGE_TYPE_READ,
+  MESSAGE_TYPE_GETATTR,
+  MESSAGE_TYPE_MKDIR,
+  MESSAGE_TYPE_MKNOD,
   MESSAGE_TYPE_REPLY,
+  MESSAGE_TYPE_GETDIR,
+  MESSAGE_TYPE_UNLINK,
+  MESSAGE_TYPE_RMDIR,
+  MESSAGE_TYPE_WRITE,
+  MESSAGE_TYPE_RELEASE,
+  MESSAGE_TYPE_FGETATTR,
 } worker_message_type_t;
 
 #define MESSAGE_HDR worker_message_type_t type
@@ -95,6 +101,64 @@ typedef struct {
 } ReadMessage;
 
 typedef struct {
+  REQUEST_MESSAGE_HDR;
+  const char *path;
+  struct stat *st;
+} GetattrMessage;
+
+typedef struct {
+  REQUEST_MESSAGE_HDR;
+  const char *path;
+  mode_t mode;
+} MkdirMessage;
+
+typedef struct {
+  REQUEST_MESSAGE_HDR;
+  const char *path;
+  mode_t mode;
+  dev_t dev;
+} MknodMessage;
+
+typedef struct {
+  REQUEST_MESSAGE_HDR;
+  const char *path;
+  fuse_dirh_t h;
+  fuse_dirfil_t fn;
+} GetdirMessage;
+
+typedef struct {
+  REQUEST_MESSAGE_HDR;
+  const char *path;
+} UnlinkMessage;
+
+typedef struct {
+  REQUEST_MESSAGE_HDR;
+  const char *path;
+} RmdirMessage;
+
+typedef struct {
+  REQUEST_MESSAGE_HDR;
+  const char *path;
+  const char *buf;
+  size_t size;
+  off_t off;
+  struct fuse_file_info *fi;
+} WriteMessage;
+
+typedef struct {
+  REQUEST_MESSAGE_HDR;
+  const char *path;
+  struct fuse_file_info *fi;
+} ReleaseMessage;
+
+typedef struct {
+  REQUEST_MESSAGE_HDR;
+  const char *path;
+  struct stat *buf;
+  struct fuse_file_info *fi;
+} FgetattrMessage;
+
+typedef struct {
   MESSAGE_HDR;
   int ret;
 } ReplyMessage;
@@ -109,7 +173,16 @@ typedef union {
   QuitMessage quit;
   OpenMessage open;
   ReadMessage read;
+  GetattrMessage getattr;
+  MkdirMessage mkdir;
+  MknodMessage mknod;
+  GetdirMessage getdir;
   ReplyMessage reply;
+  UnlinkMessage unlink;
+  RmdirMessage rmdir;
+  WriteMessage write;
+  ReleaseMessage release;
+  FgetattrMessage fgetattr;
 } Message;
 
 typedef struct {
@@ -171,6 +244,13 @@ typedef struct {
 
 static
 UTHR_DEFINE(_send_message) {
+  if (UTHR_EVENT_TYPE() == START_COROUTINE_EVENT) {
+    log_debug("Starting send message with: %p", UTHR_USER_DATA());
+  }
+  else {
+    log_debug("Entering send message with: %p", UTHR_USER_DATA());
+  }
+
   bool error;
 
   UTHR_HEADER(SendMessageCtx, ctx);
@@ -188,7 +268,7 @@ UTHR_DEFINE(_send_message) {
                                    _send_message,
                                    ctx,
                                    NULL);
-      if (!ret) { abort(); }
+      ASSERT_TRUE(ret);
       UTHR_YIELD(ctx, 0);
     }
     else {
@@ -200,6 +280,7 @@ UTHR_DEFINE(_send_message) {
   SendMessageDoneEvent ev = {
     .error = error,
   };
+  log_debug("Ending send message with: %p", UTHR_USER_DATA());
   UTHR_RETURN(ctx,
               ctx->cb(SEND_MESSAGE_DONE_EVENT, &ev, ctx->ud));
 
@@ -287,12 +368,14 @@ _async_fuse_fs_destroy(async_fuse_fs_t fs) {
   int ret_chan_deinit_1 = channel_deinit(&fs->to_worker);
   if (!ret_chan_deinit_1) {
     /* can't recover from this */
+    log_critical("Couldn't deinit \"to worker\" channel");
     abort();
   }
 
-  int ret_chan_deinit_2 = channel_deinit(&fs->to_worker);
+  int ret_chan_deinit_2 = channel_deinit(&fs->to_server);
   if (!ret_chan_deinit_2) {
     /* can't recover from this */
+    log_critical("Couldn't deinit \"to server\" channel");
     abort();
   }
 
@@ -302,7 +385,7 @@ _async_fuse_fs_destroy(async_fuse_fs_t fs) {
 async_fuse_fs_t
 async_fuse_fs_new(FDEventLoop *loop) {
   struct async_fuse_fs *toret = malloc(sizeof(*toret));
-  if (toret) {
+  if (!toret) {
     log_error("Couldn't allocate async_fuse_fs_t");
     goto error;
   }
@@ -444,13 +527,21 @@ async_fuse_fs_fgetattr(async_fuse_fs_t fs,
                        const char *path, struct stat *buf,
                        struct fuse_file_info *fi,
                        event_handler_t cb, void *cb_ud) {
-  UNUSED(fs);
-  UNUSED(path);
-  UNUSED(buf);
-  UNUSED(fi);
-  UNUSED(cb);
-  UNUSED(cb_ud);
-  abort();
+  Message msg = {
+    .fgetattr = {
+      .type = MESSAGE_TYPE_FGETATTR,
+      .path = path,
+      .buf = buf,
+      .fi = fi,
+    }
+  };
+
+  UTHR_CALL5(_send_request_uthr, SendRequestCtx,
+             .fs = fs,
+             .msg = msg,
+             .done_event_type = ASYNC_FUSE_FS_FGETATTR_DONE_EVENT,
+             .cb = cb,
+             .cb_ud = cb_ud);
 }
 
 void
@@ -482,27 +573,165 @@ async_fuse_fs_write(async_fuse_fs_t fs,
                     const char *path, const char *buf,
                     size_t size, off_t off, struct fuse_file_info *fi,
                     event_handler_t cb, void *cb_ud) {
-  UNUSED(fs);
-  UNUSED(path);
-  UNUSED(buf);
-  UNUSED(size);
-  UNUSED(off);
-  UNUSED(fi);
-  UNUSED(cb);
-  UNUSED(cb_ud);
-  abort();
+  Message msg = {
+    .write = {
+      .type = MESSAGE_TYPE_WRITE,
+      .path = path,
+      .buf = buf,
+      .size = size,
+      .off = off,
+      .fi = fi,
+    },
+  };
+
+  UTHR_CALL5(_send_request_uthr, SendRequestCtx,
+             .fs = fs,
+             .msg = msg,
+             .done_event_type = ASYNC_FUSE_FS_WRITE_DONE_EVENT,
+             .cb = cb,
+             .cb_ud = cb_ud);
 }
 
 void
-async_fuse_fs_opendir(async_fuse_fs_t fs,
+async_fuse_fs_getattr(async_fuse_fs_t fs,
+                      const char *path, struct stat *st,
+                      event_handler_t cb, void *cb_ud) {
+  Message msg = {
+    .getattr = {
+      .type = MESSAGE_TYPE_GETATTR,
+      .path = path,
+      .st = st,
+    },
+  };
+
+  UTHR_CALL5(_send_request_uthr, SendRequestCtx,
+             .fs = fs,
+             .msg = msg,
+             .done_event_type = ASYNC_FUSE_FS_GETATTR_DONE_EVENT,
+             .cb = cb,
+             .cb_ud = cb_ud);
+}
+
+void
+async_fuse_fs_mkdir(async_fuse_fs_t fs,
+                    const char *path,
+                    mode_t mode,
+                    event_handler_t cb, void *cb_ud) {
+  Message msg = {
+    .mkdir = {
+      .type = MESSAGE_TYPE_MKDIR,
+      .path = path,
+      .mode = mode,
+    },
+  };
+
+  UTHR_CALL5(_send_request_uthr, SendRequestCtx,
+             .fs = fs,
+             .msg = msg,
+             .done_event_type = ASYNC_FUSE_FS_MKDIR_DONE_EVENT,
+             .cb = cb,
+             .cb_ud = cb_ud);
+}
+
+void
+async_fuse_fs_mknod(async_fuse_fs_t fs,
+                    const char *path, mode_t mode, dev_t dev,
+                    event_handler_t cb, void *cb_ud) {
+  Message msg = {
+    .mknod = {
+      .type = MESSAGE_TYPE_MKNOD,
+      .path = path,
+      .mode = mode,
+      .dev = dev,
+    },
+  };
+
+  UTHR_CALL5(_send_request_uthr, SendRequestCtx,
+             .fs = fs,
+             .msg = msg,
+             .done_event_type = ASYNC_FUSE_FS_MKNOD_DONE_EVENT,
+             .cb = cb,
+             .cb_ud = cb_ud);
+}
+
+
+void
+async_fuse_fs_getdir(async_fuse_fs_t fs,
+                     const char *path, fuse_dirh_t h, fuse_dirfil_t fn,
+                     event_handler_t cb, void *cb_ud) {
+  Message msg = {
+    .getdir = {
+      .type = MESSAGE_TYPE_GETDIR,
+      .path = path,
+      .h = h,
+      .fn = fn,
+    },
+  };
+
+  UTHR_CALL5(_send_request_uthr, SendRequestCtx,
+             .fs = fs,
+             .msg = msg,
+             .done_event_type = ASYNC_FUSE_FS_GETDIR_DONE_EVENT,
+             .cb = cb,
+             .cb_ud = cb_ud);
+}
+
+void
+async_fuse_fs_unlink(async_fuse_fs_t fs,
+                     const char *path,
+                     event_handler_t cb, void *cb_ud) {
+  Message msg = {
+    .unlink = {
+      .type = MESSAGE_TYPE_UNLINK,
+      .path = path,
+    },
+  };
+
+  UTHR_CALL5(_send_request_uthr, SendRequestCtx,
+             .fs = fs,
+             .msg = msg,
+             .done_event_type = ASYNC_FUSE_FS_UNLINK_DONE_EVENT,
+             .cb = cb,
+             .cb_ud = cb_ud);
+}
+
+void
+async_fuse_fs_rmdir(async_fuse_fs_t fs,
+                    const char *path,
+                    event_handler_t cb, void *cb_ud) {
+  Message msg = {
+    .rmdir = {
+      .type = MESSAGE_TYPE_RMDIR,
+      .path = path,
+    },
+  };
+
+  UTHR_CALL5(_send_request_uthr, SendRequestCtx,
+             .fs = fs,
+             .msg = msg,
+             .done_event_type = ASYNC_FUSE_FS_RMDIR_DONE_EVENT,
+             .cb = cb,
+             .cb_ud = cb_ud);
+}
+
+void
+async_fuse_fs_release(async_fuse_fs_t fs,
                       const char *path, struct fuse_file_info *fi,
                       event_handler_t cb, void *cb_ud) {
-  UNUSED(fs);
-  UNUSED(path);
-  UNUSED(fi);
-  UNUSED(cb);
-  UNUSED(cb_ud);
-  abort();
+  Message msg = {
+    .release = {
+      .type = MESSAGE_TYPE_RELEASE,
+      .path = path,
+      .fi = fi,
+    },
+  };
+
+  UTHR_CALL5(_send_request_uthr, SendRequestCtx,
+             .fs = fs,
+             .msg = msg,
+             .done_event_type = ASYNC_FUSE_FS_RELEASE_DONE_EVENT,
+             .cb = cb,
+             .cb_ud = cb_ud);
 }
 
 void
@@ -510,9 +739,14 @@ async_fuse_worker_main_loop(async_fuse_fs_t fs,
                             const struct fuse_operations *op,
                             size_t op_size,
                             void *user_data) {
-  UNUSED(op);
   UNUSED(op_size);
   UNUSED(user_data);
+
+  /* call init method first */
+  fuse_get_context()->private_data = user_data;
+  struct fuse_conn_info conn;
+  void *init_ret = op->init(&conn);
+  fuse_get_context()->private_data = init_ret;
 
   while (true) {
     Message msg;
@@ -540,6 +774,34 @@ async_fuse_worker_main_loop(async_fuse_fs_t fs,
                      msg.read.buf, msg.read.size, msg.read.off,
                      msg.read.fi);
       break;
+    case MESSAGE_TYPE_GETATTR:
+      ret = op->getattr(msg.getattr.path, msg.getattr.st);
+      break;
+    case MESSAGE_TYPE_MKDIR:
+      ret = op->mkdir(msg.mkdir.path, msg.mkdir.mode);
+      break;
+    case MESSAGE_TYPE_MKNOD:
+      ret = op->mknod(msg.mknod.path, msg.mknod.mode, msg.mknod.dev);
+      break;
+    case MESSAGE_TYPE_GETDIR:
+      ret = op->getdir(msg.getdir.path, msg.getdir.h, msg.getdir.fn);
+      break;
+    case MESSAGE_TYPE_UNLINK:
+      ret = op->unlink(msg.unlink.path);
+      break;
+    case MESSAGE_TYPE_RMDIR:
+      ret = op->rmdir(msg.rmdir.path);
+      break;
+    case MESSAGE_TYPE_WRITE:
+      ret = op->write(msg.write.path, msg.write.buf, msg.write.size,
+                      msg.write.off, msg.write.fi);
+      break;
+    case MESSAGE_TYPE_RELEASE:
+      ret = op->release(msg.release.path, msg.release.fi);
+      break;
+    case MESSAGE_TYPE_FGETATTR:
+      ret = op->fgetattr(msg.fgetattr.path, msg.fgetattr.buf, msg.fgetattr.fi);
+      break;
     default:
       log_critical("Received unknown message type: %d", msg.request.type);
       abort();
@@ -559,6 +821,8 @@ async_fuse_worker_main_loop(async_fuse_fs_t fs,
       abort();
     }
   }
+
+  op->destroy(init_ret);
 
   return;
 }

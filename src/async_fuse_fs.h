@@ -63,7 +63,6 @@ async_fuse_fs_mkdir(async_fuse_fs_t fs,
                     mode_t mode,
                     event_handler_t cb, void *cb_ud);
 
-
 void
 async_fuse_fs_getattr(async_fuse_fs_t fs,
                       const char *path, struct stat *buf,

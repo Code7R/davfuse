@@ -613,6 +613,11 @@ _fuse_propfind_dirfil_fn(fuse_dirh_t h,
   UNUSED(type);
   UNUSED(ino);
 
+  if (str_equals(name, "..") ||
+      str_equals(name, ".")) {
+    return 0;
+  }
+
   FusePropfindCtx *ctx = (FusePropfindCtx *) h;
 
   size_t name_len = strlen(name);
@@ -874,15 +879,63 @@ fuse_put(void *backend_ctx,
              .put_ctx = put_ctx);
 }
 
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  FuseBackendCtx *fbctx;
+  const char *relative_uri;
+  event_handler_t cb;
+  void *cb_ud;
+  /* ctx */
+  char *file_path;
+  WebdavTouchDoneEvent ev;
+} FuseTouchCtx;
+
+UTHR_DEFINE(_fuse_touch_uthr) {
+  UTHR_HEADER(FuseTouchCtx, ctx);
+
+  ctx->file_path = path_from_uri(ctx->fbctx, ctx->relative_uri);
+  if (!ctx->file_path) {
+    ctx->ev.error = WEBDAV_ERROR_NO_MEM;;
+    goto done;
+  }
+
+  /* first try to create the file normally, if it already exists nbd */
+  UTHR_SUBCALL(ctx,
+               async_fuse_fs_mknod(ctx->fbctx->fuse_fs,
+                                   ctx->file_path, S_IFREG | 0666, 0,
+                                   _fuse_put_uthr, ctx),
+               ASYNC_FUSE_FS_MKNOD_DONE_EVENT,
+               FuseFsOpDoneEvent, mknod_done_ev);
+  if (mknod_done_ev->ret < 0 &&
+      -mknod_done_ev->ret != EEXIST) {
+    ctx->ev.error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  ctx->ev = (WebdavTouchDoneEvent) {
+    .error = WEBDAV_ERROR_NONE,
+    .resource_existed = mknod_done_ev->ret,
+  };
+
+ done:
+  free(ctx->file_path);
+
+  UTHR_RETURN(ctx,
+              ctx->cb(WEBDAV_TOUCH_DONE_EVENT, &ctx->ev, ctx->cb_ud));
+
+  UTHR_FOOTER();
+}
+
 static void
 fuse_touch(void *backend_ctx,
            const char *relative_uri,
-           event_handler_t cb, void *user_data) {
-  UNUSED(backend_ctx);
-  UNUSED(relative_uri);
-  UNUSED(cb);
-  UNUSED(user_data);
-  abort();
+           event_handler_t cb, void *cb_ud) {
+  UTHR_CALL4(_fuse_touch_uthr, FuseTouchCtx,
+             .fbctx = backend_ctx,
+             .relative_uri = relative_uri,
+             .cb = cb,
+             .cb_ud = cb_ud);
 }
 
 static WebdavBackendOperations
@@ -999,6 +1052,62 @@ http_thread(void *ud) {
   return NULL;
 }
 
+static pthread_key_t fuse_context_key;
+static pthread_mutex_t fuse_context_lock = PTHREAD_MUTEX_INITIALIZER;
+static int fuse_context_ref;
+
+struct fuse_context *
+fuse_get_context(void) {
+  struct fuse_context *c = pthread_getspecific(fuse_context_key);
+  if (!c) {
+    c = calloc(1, sizeof(*c));
+    if (!c) {
+      /* This is hard to deal with properly, so just
+         abort.  If memory is so low that the
+         context cannot be allocated, there's not
+         much hope for the filesystem anyway */
+      log_critical("fuse: failed to allocate thread specific data");
+      abort();
+    }
+    pthread_setspecific(fuse_context_key, c);
+  }
+  return c;
+}
+
+static void
+fuse_freecontext(void *data) {
+  free(data);
+}
+
+static int
+fuse_create_context_key(void) {
+  int err = 0;
+  pthread_mutex_lock(&fuse_context_lock);
+  if (!fuse_context_ref) {
+    err = pthread_key_create(&fuse_context_key, fuse_freecontext);
+    if (err) {
+      fprintf(stderr, "fuse: failed to create thread specific key: %s\n",
+              strerror(err));
+      pthread_mutex_unlock(&fuse_context_lock);
+      return -1;
+    }
+  }
+  fuse_context_ref++;
+  pthread_mutex_unlock(&fuse_context_lock);
+  return 0;
+}
+
+static void
+fuse_delete_context_key(void) {
+  pthread_mutex_lock(&fuse_context_lock);
+  fuse_context_ref--;
+  if (!fuse_context_ref) {
+    fuse_freecontext(pthread_getspecific(fuse_context_key));
+    pthread_key_delete(fuse_context_key);
+  }
+  pthread_mutex_unlock(&fuse_context_lock);
+}
+
 /* From "fuse_versionscript" the version of this symbol is FUSE_2.6 */
 int
 fuse_main_real(int argc,
@@ -1006,20 +1115,26 @@ fuse_main_real(int argc,
 	       const struct fuse_operations *op,
 	       size_t op_size,
 	       void *user_data) {
-  DavOptions dav_options;
-  FuseOptions fuse_options;
+  /* Initialize options to 0 */
+  DavOptions dav_options = { 0 };
+  FuseOptions fuse_options = { 0 };
   HTTPThreadArguments http_thread_args;
   async_fuse_fs_t async_fuse_fs = 0;
+  bool created_context_key = false;
 
   UNUSED(op);
   UNUSED(op_size);
   UNUSED(user_data);
 
-  /* Initialize options to 0 */
-  memset(&fuse_options, 0, sizeof(fuse_options));
-  memset(&dav_options, 0, sizeof(dav_options));
+  const int ret_create_context = fuse_create_context_key();
+  if (ret_create_context < 0) {
+    log_critical("Couldn't create fuse context");
+    goto error;
+  }
 
-  bool success_parse_environment = parse_environment(&dav_options);
+  created_context_key = true;
+
+  const bool success_parse_environment = parse_environment(&dav_options);
   if (!success_parse_environment) {
     log_critical("Error parsing DAVFUSE_OPTIONS environment variable");
     goto error;
@@ -1030,7 +1145,7 @@ fuse_main_real(int argc,
 
   init_logging(stderr, dav_options.log_level);
 
-  bool success_parse_command_line = parse_command_line(argc, argv, &fuse_options);
+  const bool success_parse_command_line = parse_command_line(argc, argv, &fuse_options);
   if (!success_parse_command_line) {
     log_critical("Error parsing command line");
     goto error;
@@ -1043,7 +1158,7 @@ fuse_main_real(int argc,
 
   /* create event loop */
   FDEventLoop loop;
-  bool success_fdevent_init = fdevent_init(&loop);
+  const bool success_fdevent_init = fdevent_init(&loop);
   if (!success_fdevent_init) {
     log_critical_errno("Couldn't initialize fdevent loop");
     goto error;
@@ -1061,7 +1176,7 @@ fuse_main_real(int argc,
   http_thread_args.async_fuse_fs = async_fuse_fs;
 
   pthread_t new_thread;
-  int ret_pthread_create =
+  const int ret_pthread_create =
     pthread_create(&new_thread, NULL, http_thread, &http_thread_args);
   if (ret_pthread_create) {
     log_critical("Couldn't create http thread: %s",
@@ -1089,14 +1204,11 @@ fuse_main_real(int argc,
     async_fuse_fs_destroy(async_fuse_fs);
   }
 
-  return toret;
-}
+  if (created_context_key) {
+    fuse_delete_context_key();
+  }
 
-struct fuse_context *
-fuse_get_context(void) {
-  /* TODO: implement */
-  assert(false);
-  return NULL;
+  return toret;
 }
 
 void
@@ -1104,5 +1216,5 @@ fuse_unmount_compat22(const char *mountpoint, struct fuse_chan *ch) {
   /* TODO: implement */
   UNUSED(mountpoint);
   UNUSED(ch);
-  assert(false);
+  abort();
 }

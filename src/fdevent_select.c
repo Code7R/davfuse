@@ -109,18 +109,29 @@ fdevent_main_loop(FDEventLoop *loop) {
     while (ll) {
       if (!ll->active) {
         FDEventLink *tmpll = ll->next;
+        log_debug("Freeing fd watch: %d (%p)", ll->ew.fd, ll);
         _actually_free_link(loop, ll);
         ll = tmpll;
         continue;
       }
 
       if (ll->ew.events.read) {
-        log_debug("Adding fd %d to read set", ll->ew.fd);
+        if (ll->ew.fd >= FD_SETSIZE) {
+          log_critical("Totally invalid file descriptor for read! %d",
+                       ll->ew.fd);
+          abort();
+        }
+        log_debug("Adding fd %d (%p) to read set", ll->ew.fd, ll);
 	FD_SET(ll->ew.fd, &readfds);
       }
 
       if (ll->ew.events.write) {
-        log_debug("Adding fd %d to write set", ll->ew.fd);
+        if (ll->ew.fd >= FD_SETSIZE) {
+          log_critical("Totally invalid file descriptor for write! %d",
+                       ll->ew.fd);
+          abort();
+        }
+        log_debug("Adding fd %d (%p) to write set", ll->ew.fd, ll);
 	FD_SET(ll->ew.fd, &writefds);
       }
 

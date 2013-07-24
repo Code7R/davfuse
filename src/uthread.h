@@ -10,6 +10,7 @@
 #define UTHR_DECLARE(name) UTHR_DEFINE(name)
 #define UTHR_EVENT_TYPE() __ev_type
 #define UTHR_EVENT() __ev
+#define UTHR_USER_DATA() __tctx
 
 #define UTHR_HEADER(type, name) \
   UNUSED(__ev_type);                                                    \

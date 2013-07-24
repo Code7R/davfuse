@@ -13,7 +13,8 @@ typedef struct {
   async_tree_apply_fn_t apply_fn;
   async_tree_expand_fn_t expand_fn;
   void *root;
-  bool is_postorder;
+  bool is_postorder : 1;
+  bool is_preorder_node : 1;
   event_handler_t cb;
   void *cb_ud;
   /* ctx */
@@ -41,18 +42,18 @@ clear_pointer_postorder(void *p) {
 UTHR_DEFINE(_async_tree_apply_uthr) {
   UTHR_HEADER(AsyncTreeApplyCtx, ctx);
 
-  ctx->stack = linked_list_prepend(ctx->root, LINKED_LIST_INITIALIZER);
+  ctx->stack = linked_list_prepend(LINKED_LIST_INITIALIZER, ctx->root);
 
   while (ctx->stack) {
     ctx->stack = linked_list_popleft(ctx->stack, &ctx->curnode);
 
     /* first yield this node */
-    bool is_preorder_node = pointer_is_preorder(ctx->curnode);
+    ctx->is_preorder_node = pointer_is_preorder(ctx->curnode);
     ctx->next = clear_pointer_postorder(ctx->curnode);
 
     /* if this is pre-order then populate the stack with
        the post-order node and its child entries */
-    if (is_preorder_node) {
+    if (ctx->is_preorder_node) {
       if (ctx->is_postorder) {
         ctx->stack = linked_list_prepend(ctx->stack,
                                          make_pointer_postorder(ctx->curnode));
@@ -72,14 +73,14 @@ UTHR_DEFINE(_async_tree_apply_uthr) {
 
       if (ctx->old_stack == ctx->stack) {
         /* this entry didn't extend, it's just a leaf */
-        is_preorder_node = false;
+        ctx->is_preorder_node = false;
         if (ctx->is_postorder) {
           ctx->stack = linked_list_popleft(ctx->stack, NULL);
         }
       }
     }
 
-    if (!(is_preorder_node && ctx->is_postorder)) {
+    if (!(ctx->is_preorder_node && ctx->is_postorder)) {
       UTHR_YIELD(ctx,
                  ctx->apply_fn(ctx->op_ud, ctx->next,
                                _async_tree_apply_uthr, ctx));
