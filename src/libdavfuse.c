@@ -573,18 +573,172 @@ fuse_move(void *backend_ctx,
              .cb_ud = cb_ud);
 }
 
+static webdav_propfind_entry_t
+create_propfind_entry_from_stat(const char *relative_uri, struct stat *st) {
+  return webdav_new_propfind_entry(relative_uri,
+                                   st->st_mtime,
+                                   /* mod_dav from apache also uses mtime as creation time */
+                                   st->st_mtime,
+                                   S_ISDIR(st->st_mode),
+                                   st->st_size);
+}
+
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  FuseBackendCtx *fbctx;
+  const char *relative_uri;
+  webdav_depth_t depth;
+  webdav_propfind_req_type_t propfind_req_type;
+  event_handler_t cb;
+  void *cb_ud;
+  /* ctx */
+  bool is_dir : 1;
+  bool valid_handle : 1;
+  WebdavPropfindDoneEvent ev;
+  linked_list_t to_getattr;
+  linked_list_t to_getattr_iter;
+  linked_list_t entries;
+  char *file_path;
+  size_t file_path_len;
+  struct stat scratch_st;
+} FusePropfindCtx;
+
+static int
+_fuse_propfind_dirfil_fn(fuse_dirh_t h,
+                         const char *name,
+                         int type,
+                         ino_t ino) {
+  UNUSED(type);
+  UNUSED(ino);
+
+  FusePropfindCtx *ctx = (FusePropfindCtx *) h;
+
+  size_t name_len = strlen(name);
+  assert(name_len);
+
+  assert(ctx->file_path_len);
+
+  char *new_uri;
+  if (str_equals(ctx->file_path, "/")) {
+    new_uri = malloc_or_abort(1 + name_len + 1);
+    new_uri[0] = '/';
+    memcpy(&new_uri[1], name, name_len);
+    new_uri[name_len + 1] = '\0';
+  }
+  else {
+    /* NB: intentionally don't use `asprintf()` */
+    new_uri = malloc_or_abort(ctx->file_path_len + 1 + name_len + 1);
+    memcpy(new_uri, ctx->file_path, ctx->file_path_len);
+    new_uri[ctx->file_path_len] = '/';
+    memcpy(new_uri + ctx->file_path_len + 1, name, name_len);
+    new_uri[ctx->file_path_len + 1 + name_len] = '\0';
+  }
+
+  ctx->to_getattr = linked_list_prepend(ctx->to_getattr, new_uri);
+
+  return 0;
+}
+
+static
+UTHR_DEFINE(_fuse_propfind_uthr) {
+  UTHR_HEADER(FusePropfindCtx, ctx);
+
+  /* TODO: support this */
+  if (ctx->depth == DEPTH_INF) {
+    log_info("We don't support infinity propfind requests");
+    ctx->ev.error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  /* TODO: support this */
+  if (ctx->propfind_req_type != WEBDAV_PROPFIND_PROP) {
+    log_info("We only support 'prop' requests");
+    ctx->ev.error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  ctx->file_path = path_from_uri(ctx->fbctx, ctx->relative_uri);
+  if (!ctx->file_path) {
+    log_info("Couldn't make file path from \"%s\'", ctx->file_path);
+    ctx->ev.error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  ctx->file_path_len = strlen(ctx->file_path);
+
+  ctx->to_getattr = linked_list_prepend(ctx->to_getattr, ctx->file_path);
+
+  if (ctx->depth == DEPTH_1) {
+    /* add more things to ctx->to_getattr if the client is
+       interested in more depth */
+    UTHR_SUBCALL(ctx,
+                 async_fuse_fs_getdir(ctx->fbctx->fuse_fs,
+                                      ctx->file_path, (void *) ctx,
+                                      _fuse_propfind_dirfil_fn,
+                                      _fuse_propfind_uthr, ctx),
+                 ASYNC_FUSE_FS_GETDIR_DONE_EVENT,
+                 FuseFsOpDoneEvent,
+                 getdir_done_ev);
+    if (getdir_done_ev->ret < 0 && -getdir_done_ev->ret != ENOTDIR) {
+      ctx->ev.error = WEBDAV_ERROR_GENERAL;
+      goto done;
+    }
+  }
+
+  /* now for every path in ctx->to_getattr, add the info */
+  for (ctx->to_getattr_iter = ctx->to_getattr; ctx->to_getattr_iter;
+       ctx->to_getattr_iter = ctx->to_getattr_iter->next) {
+    UTHR_SUBCALL(ctx,
+                 async_fuse_fs_getattr(ctx->fbctx->fuse_fs,
+                                       ctx->to_getattr_iter->elt,
+                                       &ctx->scratch_st,
+                                       _fuse_propfind_uthr, ctx),
+                 ASYNC_FUSE_FS_GETATTR_DONE_EVENT,
+                 FuseFsOpDoneEvent,
+                 getattr_done_ev);
+    if (getattr_done_ev->ret < 0) {
+      ctx->ev.error = WEBDAV_ERROR_GENERAL;
+      goto done;
+    }
+
+    webdav_propfind_entry_t pfe =
+      create_propfind_entry_from_stat(ctx->to_getattr_iter->elt,
+                                      &ctx->scratch_st);
+    ASSERT_TRUE(pfe);
+    ctx->ev.entries = linked_list_prepend(ctx->ev.entries, pfe);
+  }
+
+  ctx->ev.error = WEBDAV_ERROR_NONE;
+
+ done:
+  linked_list_free(ctx->to_getattr, free);
+
+  if (ctx->ev.error) {
+    linked_list_free(ctx->ev.entries,
+                     (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
+  }
+
+  free(ctx->file_path);
+
+  UTHR_RETURN(ctx,
+              ctx->cb(WEBDAV_PROPFIND_DONE_EVENT, &ctx->ev, ctx->cb_ud));
+
+  UTHR_FOOTER();
+}
+
 static void
 fuse_propfind(void *backend_ctx,
               const char *relative_uri, webdav_depth_t depth,
               webdav_propfind_req_type_t propfind_req_type,
-              event_handler_t cb, void *user_data) {
-  UNUSED(backend_ctx);
-  UNUSED(relative_uri);
-  UNUSED(depth);
-  UNUSED(propfind_req_type);
-  UNUSED(cb);
-  UNUSED(user_data);
-  abort();
+              event_handler_t cb, void *cb_ud) {
+  UTHR_CALL6(_fuse_propfind_uthr, FusePropfindCtx,
+             .fbctx = backend_ctx,
+             .relative_uri = relative_uri,
+             .depth = depth,
+             .propfind_req_type = propfind_req_type,
+             .cb = cb,
+             .cb_ud = cb_ud);
 }
 
 static void
