@@ -281,15 +281,74 @@ fuse_copy(void *backend_ctx,
              .cb_ud = cb_ud);
 }
 
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  FuseBackendCtx *fbctx;
+  const char *relative_uri;
+  event_handler_t cb;
+  void *ud;
+  /* ctx */
+  struct stat st;
+  WebdavDeleteDoneEvent ev;
+  char *file_path;
+} FuseDeleteCtx;
+
+static
+UTHR_DEFINE(_fuse_delete_uthr) {
+  UTHR_HEADER(FuseDeleteCtx, ctx);
+
+
+  ctx->file_path = path_from_uri(ctx->fbctx, ctx->relative_uri);
+  if (!ctx->file_path) {
+    ctx->ev.error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  UTHR_SUBCALL(ctx,
+               async_fuse_fs_getattr(ctx->fbctx->fuse_fs,
+                                     ctx->file_path, &ctx->st,
+                                     _fuse_delete_uthr, ctx),
+               ASYNC_FUSE_FS_GETATTR_DONE_EVENT,
+               FuseFsOpDoneEvent,
+               getattr_done_ev);
+  if (getattr_done_ev->ret < 0) {
+    ctx->ev.error = -getattr_done_ev->ret == ENOENT
+      ? WEBDAV_ERROR_DOES_NOT_EXIST
+      : WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
+  UTHR_SUBCALL(ctx,
+               async_fuse_fs_rmtree(ctx->fbctx->fuse_fs,
+                                    ctx->file_path,
+                                    _fuse_delete_uthr, ctx),
+               ASYNC_FUSE_FS_RMTREE_DONE_EVENT, void, _throw_away_ev);
+  UNUSED(_throw_away_ev);
+
+  ctx->ev = (WebdavDeleteDoneEvent) {
+    .error = WEBDAV_ERROR_NONE,
+    .failed_to_delete = LINKED_LIST_INITIALIZER,
+  };
+
+ done:
+  free(ctx->file_path);
+
+  UTHR_RETURN(ctx,
+              ctx->cb(WEBDAV_DELETE_DONE_EVENT, &ctx->ev, ctx->ud));
+
+  UTHR_FOOTER();
+}
+
 static void
 fuse_delete(void *backend_ctx,
             const char *relative_uri,
             event_handler_t cb, void *ud) {
-  UNUSED(backend_ctx);
-  UNUSED(relative_uri);
-  UNUSED(cb);
-  UNUSED(ud);
-  abort();
+  UTHR_CALL4(_fuse_delete_uthr, FuseDeleteCtx,
+             .fbctx = backend_ctx,
+             .relative_uri = relative_uri,
+             .cb = cb,
+             .ud = ud);
 }
 
 static void
