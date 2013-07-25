@@ -4,6 +4,8 @@
 
 #include <sys/stat.h>
 
+#include <string.h>
+
 #define FUSE_USE_VERSION 26
 #include "fuse.h"
 #undef FUSE_USE_VERSION
@@ -50,7 +52,11 @@ UTHR_DEFINE(_async_fuse_remove_uthr) {
     ctx->ret = rmdir_done_ev->ret;
   }
 
-  log_debug("freein: %s", ctx->path);
+  if (ctx->ret < 0) {
+    log_debug("Error while deleting \"%s\": \%s",
+              ctx->path, strerror(-ctx->ret));
+  }
+
   free(ctx->path);
   AsyncTreeApplyFnDoneEvent ev = {.error = ctx->ret};
   UTHR_RETURN(ctx,
@@ -233,6 +239,7 @@ UTHR_DEFINE(_async_fuse_fs_copyfile_uthr) {
     goto done;
   }
 
+  ctx->fi_dst.flags = O_WRONLY;
   UTHR_SUBCALL(ctx,
                async_fuse_fs_open(ctx->fs,
                                   ctx->dst, &ctx->fi_dst,
@@ -291,7 +298,14 @@ UTHR_DEFINE(_async_fuse_fs_copyfile_uthr) {
                  ASYNC_FUSE_FS_RELEASE_DONE_EVENT,
                  FuseFsOpDoneEvent,
                  release_done_ev);
-    /* the return value of release is always ignored in the FUSE API */
+    if (release_done_ev->ret < 0) {
+      /* the return value of release is always ignored in the FUSE API,
+         but we log on it, just in case
+       */
+      log_warning("Error while releasing \"%s\": %s",
+                  ctx->src, strerror(-release_done_ev->ret));
+    }
+
     UNUSED(release_done_ev);
   }
 
@@ -304,11 +318,14 @@ UTHR_DEFINE(_async_fuse_fs_copyfile_uthr) {
                  FuseFsOpDoneEvent,
                  release_done_ev);
     /* the return value of release is always ignored in the FUSE API */
-    UNUSED(release_done_ev);
+    if (release_done_ev->ret < 0) {
+      log_warning("Error while releasing \"%s\": %s",
+                  ctx->dst, strerror(-release_done_ev->ret));
+    }
   }
 
   UTHR_RETURN(ctx,
-              ctx->cb(ASYNC_FUSE_FS_COPYTREE_DONE_EVENT,
+              ctx->cb(ASYNC_FUSE_FS_COPYFILE_DONE_EVENT,
                       &ctx->ev,
                       ctx->cb_ud));
 
@@ -412,7 +429,7 @@ UTHR_DEFINE(_async_fuse_apply_copytree_uthr) {
                  async_fuse_fs_copyfile(ctx->top->fs,
                                         ctx->path, ctx->dest_path,
                                         _async_fuse_apply_copytree_uthr, ctx),
-                 ASYNC_FUSE_FS_COPYTREE_DONE_EVENT,
+                 ASYNC_FUSE_FS_COPYFILE_DONE_EVENT,
                  FuseFsOpDoneEvent,
                  copyfile_done_ev);
     ctx->ev.error = copyfile_done_ev->ret < 0;

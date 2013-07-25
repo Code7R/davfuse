@@ -797,7 +797,7 @@ generate_propfind_response(struct handler_context *hc,
   xmlDocSetRootElement(xml_response, multistatus_elt);
 
   xmlNsPtr dav_ns = xmlNewNs(multistatus_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
-  assert(dav_ns);
+  ASSERT_NOT_NULL(dav_ns);
   xmlSetNs(multistatus_elt, dav_ns);
 
   /* TODO: deal with the case where entries == NULL */

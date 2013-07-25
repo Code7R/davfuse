@@ -76,6 +76,7 @@ typedef enum {
   MESSAGE_TYPE_WRITE,
   MESSAGE_TYPE_RELEASE,
   MESSAGE_TYPE_FGETATTR,
+  MESSAGE_TYPE_RENAME,
 } worker_message_type_t;
 
 #define MESSAGE_HDR worker_message_type_t type
@@ -159,6 +160,12 @@ typedef struct {
 } FgetattrMessage;
 
 typedef struct {
+  REQUEST_MESSAGE_HDR;
+  const char *src;
+  const char *dst;
+} RenameMessage;
+
+typedef struct {
   MESSAGE_HDR;
   int ret;
 } ReplyMessage;
@@ -183,6 +190,7 @@ typedef union {
   WriteMessage write;
   ReleaseMessage release;
   FgetattrMessage fgetattr;
+  RenameMessage rename;
 } Message;
 
 typedef struct {
@@ -244,13 +252,6 @@ typedef struct {
 
 static
 UTHR_DEFINE(_send_message) {
-  if (UTHR_EVENT_TYPE() == START_COROUTINE_EVENT) {
-    log_debug("Starting send message with: %p", UTHR_USER_DATA());
-  }
-  else {
-    log_debug("Entering send message with: %p", UTHR_USER_DATA());
-  }
-
   bool error;
 
   UTHR_HEADER(SendMessageCtx, ctx);
@@ -280,7 +281,6 @@ UTHR_DEFINE(_send_message) {
   SendMessageDoneEvent ev = {
     .error = error,
   };
-  log_debug("Ending send message with: %p", UTHR_USER_DATA());
   UTHR_RETURN(ctx,
               ctx->cb(SEND_MESSAGE_DONE_EVENT, &ev, ctx->ud));
 
@@ -735,6 +735,26 @@ async_fuse_fs_release(async_fuse_fs_t fs,
 }
 
 void
+async_fuse_fs_rename(async_fuse_fs_t fs,
+                     const char *src, const char *dst,
+                     event_handler_t cb, void *cb_ud) {
+  Message msg = {
+    .rename = {
+      .type = MESSAGE_TYPE_RENAME,
+      .src = src,
+      .dst = dst,
+    },
+  };
+
+  UTHR_CALL5(_send_request_uthr, SendRequestCtx,
+             .fs = fs,
+             .msg = msg,
+             .done_event_type = ASYNC_FUSE_FS_RENAME_DONE_EVENT,
+             .cb = cb,
+             .cb_ud = cb_ud);
+}
+
+void
 async_fuse_worker_main_loop(async_fuse_fs_t fs,
                             const struct fuse_operations *op,
                             size_t op_size,
@@ -744,7 +764,12 @@ async_fuse_worker_main_loop(async_fuse_fs_t fs,
 
   /* call init method first */
   fuse_get_context()->private_data = user_data;
-  struct fuse_conn_info conn;
+  struct fuse_conn_info conn = {
+    .proto_major = 2,
+    .proto_minor = 6,
+    .async_read = 0,
+    /* TODO */
+  };
   void *init_ret = op->init(&conn);
   fuse_get_context()->private_data = init_ret;
 
@@ -801,6 +826,9 @@ async_fuse_worker_main_loop(async_fuse_fs_t fs,
       break;
     case MESSAGE_TYPE_FGETATTR:
       ret = op->fgetattr(msg.fgetattr.path, msg.fgetattr.buf, msg.fgetattr.fi);
+      break;
+    case MESSAGE_TYPE_RENAME:
+      ret = op->rename(msg.rename.src, msg.rename.dst);
       break;
     default:
       log_critical("Received unknown message type: %d", msg.request.type);

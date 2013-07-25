@@ -198,8 +198,7 @@ UTHR_DEFINE(_fuse_copy_move_uthr) {
                                          ctx->destination_path, 0777,
                                          _fuse_copy_move_uthr, ctx),
                      ASYNC_FUSE_FS_MKDIR_DONE_EVENT,
-                     FuseFsOpDoneEvent,
-                     mkdir_done_ev);
+                     FuseFsOpDoneEvent, mkdir_done_ev);
 	if (mkdir_done_ev->ret < 0) {
 	  log_info("Failure to mkdir(\"%s\"): %s",
 		   ctx->destination_path, strerror(-mkdir_done_ev->ret));
@@ -213,8 +212,7 @@ UTHR_DEFINE(_fuse_copy_move_uthr) {
                                             ctx->file_path, ctx->destination_path,
                                             _fuse_copy_move_uthr, ctx),
                      ASYNC_FUSE_FS_COPYFILE_DONE_EVENT,
-                     FuseFsOpDoneEvent,
-                     copyfile_done_ev);
+                     FuseFsOpDoneEvent, copyfile_done_ev);
 	if (copyfile_done_ev->ret < 0) {
 	  log_info("Failure to copyfile(\"%s\", \"%s\"): %s",
 		   ctx->file_path, ctx->destination_path,
@@ -231,8 +229,7 @@ UTHR_DEFINE(_fuse_copy_move_uthr) {
                                           ctx->is_move,
                                           _fuse_copy_move_uthr, ctx),
                    ASYNC_FUSE_FS_COPYTREE_DONE_EVENT,
-                   AsyncFuseFsCopytreeDoneEvent,
-                   copytree_done_ev);
+                   AsyncFuseFsCopytreeDoneEvent, copytree_done_ev);
       /* we don't handle errors here yet */
       ASSERT_TRUE(!copytree_done_ev->error);
     }
@@ -370,6 +367,7 @@ typedef struct {
   struct stat st;
   char buf[TRANSFER_BUF_SIZE];
   off_t offset;
+  int amount_read;
 } FuseGetCtx;
 
 static
@@ -414,8 +412,9 @@ UTHR_DEFINE(_fuse_get_uthr) {
     goto done;
   }
 
+  log_debug("We plan to send %d bytes during GET", ctx->st.st_size);
   UTHR_SUBCALL(ctx,
-               webdav_get_request_size_hint(ctx->get_ctx, ctx->st.st_mode,
+               webdav_get_request_size_hint(ctx->get_ctx, ctx->st.st_size,
                                             _fuse_get_uthr, ctx),
                WEBDAV_GET_REQUEST_SIZE_HINT_DONE_EVENT,
                WebdavGetRequestSizeHintDoneEvent, size_hint_done_ev);
@@ -434,6 +433,7 @@ UTHR_DEFINE(_fuse_get_uthr) {
                                     _fuse_get_uthr, ctx),
                  ASYNC_FUSE_FS_READ_DONE_EVENT,
                  FuseFsOpDoneEvent, read_done_ev);
+    log_debug("During get, read got %d bytes", read_done_ev->ret);
     if (read_done_ev->ret < 0) {
       ctx->error = WEBDAV_ERROR_GENERAL;
       goto done;
@@ -442,9 +442,10 @@ UTHR_DEFINE(_fuse_get_uthr) {
       break;
     }
 
+    ctx->amount_read = read_done_ev->ret;
     UTHR_SUBCALL(ctx,
                  webdav_get_request_write(ctx->get_ctx,
-                                          ctx->buf, read_done_ev->ret,
+                                          ctx->buf, ctx->amount_read,
                                           _fuse_get_uthr, ctx),
                  WEBDAV_GET_REQUEST_WRITE_DONE_EVENT,
                  WebdavGetRequestWriteDoneEvent, write_done_ev);
@@ -452,6 +453,8 @@ UTHR_DEFINE(_fuse_get_uthr) {
       ctx->error = write_done_ev->error;
       goto done;
     }
+
+    ctx->offset += ctx->amount_read;
   }
 
   ctx->error = WEBDAV_ERROR_NONE;
@@ -465,8 +468,13 @@ UTHR_DEFINE(_fuse_get_uthr) {
                  ASYNC_FUSE_FS_RELEASE_DONE_EVENT,
                  FuseFsOpDoneEvent,
                  release_done_ev);
-    /* the return value of release is always ignored in the FUSE API */
-    UNUSED(release_done_ev);
+    if (release_done_ev->ret < 0) {
+      /* the return value of release is always ignored in the FUSE API,
+         but just in case
+       */
+      log_warning("Error while releasing \"%s\": %s",
+                  ctx->path, strerror(-release_done_ev->ret));
+    }
   }
 
   free(ctx->path);
@@ -566,6 +574,7 @@ fuse_move(void *backend_ctx,
           event_handler_t cb, void *cb_ud) {
   UTHR_CALL8(_fuse_copy_move_uthr, FuseCopyMoveCtx,
              .is_move = true,
+             .depth = DEPTH_INF,
              .fbctx = backend_ctx,
              .src_relative_uri = src_relative_uri,
              .dst_relative_uri = dst_relative_uri,
@@ -719,13 +728,14 @@ UTHR_DEFINE(_fuse_propfind_uthr) {
 
  done:
   linked_list_free(ctx->to_getattr, free);
+  /* don't need to do this cuz  this happens in the previous line: */
+  /*  free(ctx->file_path); */
 
   if (ctx->ev.error) {
     linked_list_free(ctx->ev.entries,
                      (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
   }
 
-  free(ctx->file_path);
 
   UTHR_RETURN(ctx,
               ctx->cb(WEBDAV_PROPFIND_DONE_EVENT, &ctx->ev, ctx->cb_ud));
@@ -849,8 +859,6 @@ UTHR_DEFINE(_fuse_put_uthr) {
   ctx->error = WEBDAV_ERROR_NONE;
 
  done:
-  free(ctx->file_path);
-
   if (ctx->opened_file) {
     UTHR_SUBCALL(ctx,
                  async_fuse_fs_release(ctx->fbctx->fuse_fs,
@@ -859,9 +867,16 @@ UTHR_DEFINE(_fuse_put_uthr) {
                  ASYNC_FUSE_FS_RELEASE_DONE_EVENT,
                  FuseFsOpDoneEvent,
                  release_done_ev);
-    /* the return value of release is always ignored in the FUSE API */
-    UNUSED(release_done_ev);
+    if (release_done_ev->ret < 0) {
+      /* the return value of release is always ignored in the FUSE API,
+         but just in case
+       */
+      log_warning("Error while releasing \"%s\": %s",
+                  ctx->file_path, strerror(-release_done_ev->ret));
+    }
   }
+
+  free(ctx->file_path);
 
   UTHR_RETURN(ctx,
               webdav_put_request_end(ctx->put_ctx, ctx->error, ctx->resource_existed));
@@ -904,7 +919,7 @@ UTHR_DEFINE(_fuse_touch_uthr) {
   UTHR_SUBCALL(ctx,
                async_fuse_fs_mknod(ctx->fbctx->fuse_fs,
                                    ctx->file_path, S_IFREG | 0666, 0,
-                                   _fuse_put_uthr, ctx),
+                                   _fuse_touch_uthr, ctx),
                ASYNC_FUSE_FS_MKNOD_DONE_EVENT,
                FuseFsOpDoneEvent, mknod_done_ev);
   if (mknod_done_ev->ret < 0 &&
