@@ -25,7 +25,7 @@ extern log_level_t _logging_cur_level;
 #define log(level, ...)				 \
   do {						 \
     if ((level) <= _logging_cur_level) {	 \
-      _log(__FILE__, level, __VA_ARGS__);	 \
+      _log(__FILE__, __LINE__, level, __VA_ARGS__);     \
     }						 \
   }						 \
   while (false)
@@ -45,6 +45,6 @@ bool
 init_logging(FILE *log_destination, log_level_t level);
 
 void
-_log(const char *filename, log_level_t level, const char *format, ...);
+_log(const char *filename, int lineno, log_level_t level, const char *format, ...);
 
 #endif

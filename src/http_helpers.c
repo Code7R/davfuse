@@ -34,11 +34,11 @@ UTHR_DEFINE(_simple_response_uthr) {
 
   /* send headers */
   bool ret = http_response_set_code(&ctx->resp, ctx->code);
-  assert(ret);
+  ASSERT_TRUE(ret);
 
   ret = http_response_add_header(&ctx->resp, HTTP_HEADER_CONTENT_LENGTH,
                                  "%zu", ctx->body_len);
-  assert(ret);
+  ASSERT_TRUE(ret);
 
   if (ctx->body_len) {
     ret = http_response_add_header(&ctx->resp, HTTP_HEADER_CONTENT_TYPE,

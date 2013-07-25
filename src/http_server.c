@@ -97,6 +97,8 @@ http_server_start(HTTPServer *http,
   http->shutting_down = false;
   http->num_connections = 0;
 
+  log_debug("HTTP Server listening on FD %d", fd);
+
   return true;
 
  error:
@@ -261,6 +263,7 @@ EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
                      min_size_t(tctx->input_nbyte - tctx->input_buf_offset,
                                 cctx->chunk_size - cctx->chunk_read),
                      _chunked_request_coro, ud));
+      log_debug("back chunk read");
       assert(ev_type == C_READ_DONE_EVENT);
       CReadDoneEvent *c_read_done_ev = ev;
       if (c_read_done_ev->error_number) {
@@ -322,6 +325,7 @@ EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
   }
 
   /* no more data, just keep returning EOF */
+  log_debug("Chunked request is over");
   while (true) {
     rctx->read_state = HTTP_REQUEST_READ_STATE_READ_HEADERS;
 
@@ -447,6 +451,11 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
   EMIT("\r\n");
 
  done:
+  if (myerrno) {
+    log_warning("Error while writing headers to client fd %d: %s",
+                whs->request_context->conn->f.fd, strerror(myerrno));
+  }
+
   whs->request_context->write_state = HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS;
   HTTPRequestWriteHeadersDoneEvent write_headers_ev = {
     .request_handle = whs->request_context,
@@ -561,6 +570,12 @@ EVENT_HANDLER_DEFINE(_handle_write_done, ev_type, ev, ud) {
   assert(ev_type == C_WRITEALL_DONE_EVENT);
   CWriteAllDoneEvent *write_all_done_event = ev;
 
+  if (write_all_done_event->error_number) {
+    log_warning("ON FD: %d, http_request_write failed: %s",
+                rws->request_context->conn->f.fd,
+                strerror(write_all_done_event->error_number));
+  }
+
   rws->request_context->write_state = HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS;
   HTTPRequestWriteDoneEvent write_ev = {
     .request_handle = rws->request_context,
@@ -586,6 +601,8 @@ http_request_write(http_request_handle_t rh,
     /* TODO: right now have no facility to do short writes,
        could return write amount when done
     */
+    log_warning("ON FD: %d, http_request_write will not do a short write, request to write less",
+                rctx->conn->f.fd);
     goto error;
   }
 
@@ -1063,10 +1080,10 @@ UTHR_DEFINE(c_get_request) {
         http_response_init(state->response_headers);
         bool ret = http_response_set_code(state->response_headers,
                                           HTTP_STATUS_CODE_EXPECTATION_FAILED);
-        assert(ret);
+        ASSERT_TRUE(ret);
         ret = http_response_add_header(state->response_headers,
                                        HTTP_HEADER_CONTENT_LENGTH, "%d", 0);
-        assert(ret);
+        ASSERT_TRUE(ret);
 
         UTHR_YIELD(state,
                    http_request_write_headers(state->rh, state->response_headers,

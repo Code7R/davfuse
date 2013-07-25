@@ -138,12 +138,6 @@ struct handler_context {
   HTTPRequestHeaders rhs;
   HTTPResponseHeaders resp;
   http_request_handle_t rh;
-  enum {
-    ACQUIRE_READ_LOCK,
-    ACQUIRE_WRITE_LOCK,
-    ACQUIRE_NO_LOCK,
-  } lock_to_acquire;
-  bool lock_was_acquired;
   event_handler_t handler;
   union {
     struct copy_context {
@@ -1217,7 +1211,7 @@ static
 UTHR_DEFINE(request_proc) {
   UTHR_HEADER(struct handler_context, hc);
 
-  log_info("New request!");
+  log_info("New request! %p", hc);
 
   /* read out headers */
   UTHR_YIELD(hc,
@@ -1280,72 +1274,23 @@ UTHR_DEFINE(request_proc) {
     hc->handler = NULL;
   }
 
-  /* NB: we limit request concurrency based on whether or not
-     the method can modify the path namespace
-     TODO: make this more granular */
-  if (hc->handler == handle_get_request ||
-      hc->handler == handle_propfind_request ||
-      hc->handler == handle_lock_request ||
-      hc->handler == handle_unlock_request) {
-    hc->lock_to_acquire = ACQUIRE_READ_LOCK;
-  }
-  else if (hc->handler != handle_options_request &&
-           hc->handler != handle_post_request) {
-    hc->lock_to_acquire = ACQUIRE_WRITE_LOCK;
-  }
-  else {
-    hc->lock_to_acquire = ACQUIRE_NO_LOCK;
-  }
-
-  if (hc->lock_to_acquire == ACQUIRE_READ_LOCK) {
-    UTHR_YIELD(hc, async_rdwr_read_lock(hc->serv->lock, request_proc, hc));
-    UTHR_RECEIVE_EVENT(ASYNC_RDWR_READ_LOCK_DONE_EVENT, AsyncRdwrReadLockDoneEvent, read_lock_done_ev);
-    hc->lock_was_acquired = read_lock_done_ev->success;
-  }
-  else if (hc->lock_to_acquire == ACQUIRE_WRITE_LOCK) {
-    UTHR_YIELD(hc, async_rdwr_write_lock(hc->serv->lock, request_proc, hc));
-    UTHR_RECEIVE_EVENT(ASYNC_RDWR_WRITE_LOCK_DONE_EVENT, AsyncRdwrWriteLockDoneEvent, write_lock_done_ev);
-    hc->lock_was_acquired = write_lock_done_ev->success;
-  }
-  else {
-    hc->lock_was_acquired = true;
-  }
-
   bool ret = http_response_init(&hc->resp);
   ASSERT_TRUE(ret);
 
-  if (!hc->lock_was_acquired) {
-    UTHR_YIELD(hc,
-               http_request_string_response(hc->rh,
-                                            HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR, "",
-                                            request_proc, hc));
+  if (hc->handler) {
+    UTHR_YIELD(hc, hc->handler(GENERIC_EVENT, NULL, hc));
   }
   else {
-    if (hc->handler) {
-      UTHR_YIELD(hc, hc->handler(GENERIC_EVENT, NULL, hc));
-    }
-    else {
-      UTHR_YIELD(hc,
-                 http_request_string_response(hc->rh,
-                                              HTTP_STATUS_CODE_NOT_IMPLEMENTED, "Not Implemented",
-                                              request_proc, hc));
-    }
+    UTHR_YIELD(hc,
+               http_request_string_response(hc->rh,
+                                            HTTP_STATUS_CODE_NOT_IMPLEMENTED, "Not Implemented",
+                                            request_proc, hc));
   }
 
  done:
-  log_info("request done!");
+  log_info("Request done! %p", hc);
 
   http_request_end(hc->rh);
-
-  if (hc->lock_was_acquired) {
-    /* these could block for while */
-    if (hc->lock_to_acquire == ACQUIRE_READ_LOCK) {
-      async_rdwr_read_unlock(hc->serv->lock);
-    }
-    else if (hc->lock_to_acquire == ACQUIRE_WRITE_LOCK) {
-      async_rdwr_write_unlock(hc->serv->lock);
-    }
-  }
 
   UTHR_RETURN(hc, 0);
 
@@ -2332,17 +2277,17 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
   bool ret;
 
   ret = http_response_set_code(&hc->resp, HTTP_STATUS_CODE_OK);
-  assert(ret);
+  ASSERT_TRUE(ret);
 
   ret = http_response_add_header(&hc->resp, "DAV", "1,2");
-  assert(ret);
+  ASSERT_TRUE(ret);
 
   ret = http_response_add_header(&hc->resp, "Allow",
                                  "GET,HEAD,PUT,DELETE,MKCOL,COPY,MOVE,PROPFIND,LOCK,OPTIONS");
-  assert(ret);
+  ASSERT_TRUE(ret);
 
   ret = http_response_add_header(&hc->resp, HTTP_HEADER_CONTENT_LENGTH, "0");
-  assert(ret);
+  ASSERT_TRUE(ret);
 
   http_request_write_headers(hc->rh, &hc->resp,
                              request_proc, ud);
@@ -3040,7 +2985,9 @@ webdav_server_start(FDEventLoop *loop,
   free(serv);
   free(public_prefix_copy);
   if (lock) {
-    async_rdwr_destroy(lock, NULL, NULL);
+    bool success_destroy = async_rdwr_destroy_sync(lock);
+    /* this can't fail */
+    ASSERT_TRUE(success_destroy);
   }
   return NULL;
 }

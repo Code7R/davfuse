@@ -22,6 +22,10 @@ void
 async_rdwr_destroy(async_rdwr_lock_t lock,
                    event_handler_t cb, void *ud);
 
+bool
+async_rdwr_destroy_sync(async_rdwr_lock_t lock);
+
+
 void
 async_rdwr_write_lock(async_rdwr_lock_t lock,
                       event_handler_t cb, void *ud);

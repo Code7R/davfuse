@@ -97,6 +97,16 @@ ASSERT_TRUE(bool foo) {
   }
 }
 
+/* TODO: make this varargs */
+HEADER_FUNCTION void
+ASSERT_TRUE_MSG(bool foo, const char *msg) {
+  if (!foo) {
+    log_critical("%s", msg);
+    abort();
+  }
+}
+
+
 HEADER_FUNCTION bool
 all_null(const void *buf, size_t len) {
   for (size_t i = 0; i < len; ++i) {

@@ -391,9 +391,14 @@ UTHR_DEFINE(_fuse_get_uthr) {
                ASYNC_FUSE_FS_OPEN_DONE_EVENT,
                FuseFsOpDoneEvent, open_done_ev);
   if (open_done_ev->ret < 0) {
-    ctx->error = -open_done_ev->ret == ENOENT
-      ? WEBDAV_ERROR_DOES_NOT_EXIST
-      : WEBDAV_ERROR_GENERAL;
+    if (-open_done_ev->ret != ENOENT) {
+      log_warning("Error during open(\"%s\"): %s",
+                  ctx->path, strerror(-open_done_ev->ret));
+      ctx->error = WEBDAV_ERROR_GENERAL;
+    }
+    else {
+      ctx->error =WEBDAV_ERROR_DOES_NOT_EXIST;
+    }
     goto done;
   }
 
@@ -407,6 +412,8 @@ UTHR_DEFINE(_fuse_get_uthr) {
                ASYNC_FUSE_FS_FGETATTR_DONE_EVENT,
                FuseFsOpDoneEvent, fgetattr_done_ev);
   if (fgetattr_done_ev->ret < 0) {
+    log_warning("Error during fgetattr(\"%s\"): %s",
+                ctx->path, strerror(-fgetattr_done_ev->ret));
     ctx->error = WEBDAV_ERROR_GENERAL;
     goto done;
   }
@@ -416,7 +423,9 @@ UTHR_DEFINE(_fuse_get_uthr) {
     goto done;
   }
 
-  log_debug("We plan to send %d bytes during GET", ctx->st.st_size);
+  log_debug("We plan to send %jd bytes during GET",
+            (intmax_t) ctx->st.st_size);
+  assert(ctx->st.st_size >= 0);
   UTHR_SUBCALL(ctx,
                webdav_get_request_size_hint(ctx->get_ctx, ctx->st.st_size,
                                             _fuse_get_uthr, ctx),
@@ -439,6 +448,8 @@ UTHR_DEFINE(_fuse_get_uthr) {
                  FuseFsOpDoneEvent, read_done_ev);
     log_debug("During get, read got %d bytes", read_done_ev->ret);
     if (read_done_ev->ret < 0) {
+      log_warning("Error while doing read from fuse file system: %s",
+                  strerror(-read_done_ev->ret));
       ctx->error = WEBDAV_ERROR_GENERAL;
       goto done;
     }
@@ -454,6 +465,7 @@ UTHR_DEFINE(_fuse_get_uthr) {
                  WEBDAV_GET_REQUEST_WRITE_DONE_EVENT,
                  WebdavGetRequestWriteDoneEvent, write_done_ev);
     if (write_done_ev->error) {
+      log_warning("Error while sending data to client");
       ctx->error = write_done_ev->error;
       goto done;
     }
@@ -461,6 +473,7 @@ UTHR_DEFINE(_fuse_get_uthr) {
     ctx->offset += ctx->amount_read;
   }
 
+  log_debug("We sent a total of %jd bytes", (intmax_t) ctx->offset);
   ctx->error = WEBDAV_ERROR_NONE;
 
  done:
@@ -480,6 +493,8 @@ UTHR_DEFINE(_fuse_get_uthr) {
                   ctx->path, strerror(-release_done_ev->ret));
     }
   }
+
+  log_debug("Fuse Put Request is over: %s", ctx->path);
 
   free(ctx->path);
 
@@ -700,29 +715,64 @@ UTHR_DEFINE(_fuse_propfind_uthr) {
                  FuseFsOpDoneEvent,
                  getdir_done_ev);
     if (getdir_done_ev->ret < 0 && -getdir_done_ev->ret != ENOTDIR) {
-      ctx->ev.error = WEBDAV_ERROR_GENERAL;
+      log_info("Couldn't do getdir on \"%s\": %s",
+               ctx->file_path, strerror(-getdir_done_ev->ret));
+      ctx->ev.error = -getdir_done_ev->ret == ENOENT
+        ? WEBDAV_ERROR_DOES_NOT_EXIST
+        : WEBDAV_ERROR_GENERAL;
       goto done;
     }
-  }
 
-  /* now for every path in ctx->to_getattr, add the info */
-  for (ctx->to_getattr_iter = ctx->to_getattr; ctx->to_getattr_iter;
-       ctx->to_getattr_iter = ctx->to_getattr_iter->next) {
+    /* now everything in `to_getattr` should exist,
+       errors while doing getattr are unexpected */
+
+    /* now for every path in ctx->to_getattr, add the info */
+    for (ctx->to_getattr_iter = ctx->to_getattr; ctx->to_getattr_iter;
+         ctx->to_getattr_iter = ctx->to_getattr_iter->next) {
+      UTHR_SUBCALL(ctx,
+                   async_fuse_fs_getattr(ctx->fbctx->fuse_fs,
+                                         ctx->to_getattr_iter->elt,
+                                         &ctx->scratch_st,
+                                         _fuse_propfind_uthr, ctx),
+                   ASYNC_FUSE_FS_GETATTR_DONE_EVENT,
+                   FuseFsOpDoneEvent,
+                   getattr_done_ev);
+      if (getattr_done_ev->ret < 0) {
+        log_info("Couldn't do getattr on \"%s\": %s",
+                 (char *) ctx->to_getattr_iter->elt,
+                 strerror(-getattr_done_ev->ret));
+        ctx->ev.error = WEBDAV_ERROR_GENERAL;
+        goto done;
+      }
+
+      webdav_propfind_entry_t pfe =
+        create_propfind_entry_from_stat(ctx->to_getattr_iter->elt,
+                                        &ctx->scratch_st);
+      ASSERT_TRUE(pfe);
+      ctx->ev.entries = linked_list_prepend(ctx->ev.entries, pfe);
+    }
+  }
+  else {
+    /* if no depth is request, then just check this one path */
     UTHR_SUBCALL(ctx,
                  async_fuse_fs_getattr(ctx->fbctx->fuse_fs,
-                                       ctx->to_getattr_iter->elt,
+                                       ctx->file_path,
                                        &ctx->scratch_st,
                                        _fuse_propfind_uthr, ctx),
                  ASYNC_FUSE_FS_GETATTR_DONE_EVENT,
                  FuseFsOpDoneEvent,
                  getattr_done_ev);
     if (getattr_done_ev->ret < 0) {
-      ctx->ev.error = WEBDAV_ERROR_GENERAL;
+      log_info("Couldn't do getattr on \"%s\": %s",
+               ctx->file_path, strerror(-getattr_done_ev->ret));
+      ctx->ev.error = -getattr_done_ev->ret == ENOENT
+        ? WEBDAV_ERROR_DOES_NOT_EXIST
+        : WEBDAV_ERROR_GENERAL;
       goto done;
     }
 
     webdav_propfind_entry_t pfe =
-      create_propfind_entry_from_stat(ctx->to_getattr_iter->elt,
+      create_propfind_entry_from_stat(ctx->file_path,
                                       &ctx->scratch_st);
     ASSERT_TRUE(pfe);
     ctx->ev.entries = linked_list_prepend(ctx->ev.entries, pfe);
@@ -826,6 +876,7 @@ UTHR_DEFINE(_fuse_put_uthr) {
 
   ctx->total_amount_transferred = 0;
   while (true) {
+    log_debug("put: waiting on read");
     UTHR_SUBCALL(ctx,
                  webdav_put_request_read(ctx->put_ctx,
                                          ctx->buf, sizeof(ctx->buf),
@@ -833,6 +884,7 @@ UTHR_DEFINE(_fuse_put_uthr) {
                  WEBDAV_PUT_REQUEST_READ_DONE_EVENT,
                  WebdavPutRequestReadDoneEvent, read_done_ev);
     if (read_done_ev->error) {
+      log_error("Error while reading the webdav request!");
       ctx->error = read_done_ev->error;
       goto done;
     }
@@ -842,6 +894,7 @@ UTHR_DEFINE(_fuse_put_uthr) {
       break;
     }
 
+    log_debug("put: waiting on write");
     UTHR_SUBCALL(ctx,
                  async_fuse_fs_write(ctx->fbctx->fuse_fs,
                                      ctx->file_path, ctx->buf, read_done_ev->nbyte,
@@ -850,7 +903,8 @@ UTHR_DEFINE(_fuse_put_uthr) {
                  ASYNC_FUSE_FS_WRITE_DONE_EVENT,
                  FuseFsOpDoneEvent, write_done_ev);
     if (write_done_ev->ret < 0) {
-      log_error("Couldn't write to resource \"%s\"", ctx->file_path);
+      log_error("Couldn't write to resource \"%s\": %s",
+                ctx->file_path, strerror(-write_done_ev->ret));
       ctx->error = WEBDAV_ERROR_GENERAL;
       goto done;
     }
@@ -928,6 +982,8 @@ UTHR_DEFINE(_fuse_touch_uthr) {
                FuseFsOpDoneEvent, mknod_done_ev);
   if (mknod_done_ev->ret < 0 &&
       -mknod_done_ev->ret != EEXIST) {
+    log_info("Error doing mknode \"%s\" (%s)",
+             ctx->file_path, strerror(-mknod_done_ev->ret));
     ctx->ev.error = WEBDAV_ERROR_GENERAL;
     goto done;
   }
@@ -1172,6 +1228,7 @@ fuse_main_real(int argc,
     goto error;
   }
 
+  /* parse command line */
   const bool success_parse_command_line = parse_command_line(argc, argv, &fuse_options);
   if (!success_parse_command_line) {
     log_critical("Error parsing command line");
@@ -1199,6 +1256,7 @@ fuse_main_real(int argc,
     goto error;
   }
 
+  /* create webdav server thread */
   http_thread_args.loop = &loop;
   http_thread_args.async_fuse_fs = async_fuse_fs;
 
@@ -1211,8 +1269,8 @@ fuse_main_real(int argc,
     goto error;
   }
 
+  /* start fuse worker thread */
   log_info("Starting async FUSE worker main loop");
-
   async_fuse_worker_main_loop(async_fuse_fs, op, op_size, user_data);
 
   /* wait on server thread to complete */

@@ -24,7 +24,9 @@ _is_valid_state(struct async_rdwr_lock *lock) {
     return false;
   }
 
-  if (lock->waiting_on_read_lock && !lock->waiting_on_write_lock) {
+  if (lock->num_readers &&
+      !lock->waiting_on_write_lock &&
+      lock->waiting_on_read_lock) {
     return false;
   }
 
@@ -66,6 +68,19 @@ async_rdwr_new() {
   return calloc(1, sizeof(struct async_rdwr_lock));
 }
 
+bool
+async_rdwr_destroy_sync(async_rdwr_lock_t lock) {
+  assert(_is_valid_state(lock));
+
+  if (lock->has_write_lock || lock->num_readers > 0) {
+    return false;
+  }
+
+  free(lock);
+
+  return true;
+}
+
 void
 async_rdwr_destroy(async_rdwr_lock_t lock,
                    event_handler_t cb, void *ud) {
@@ -93,8 +108,7 @@ async_rdwr_write_lock(async_rdwr_lock_t lock,
   assert(_is_valid_state(lock));
   AsyncRdwrWriteLockDoneEvent ev;
 
-  if (lock->has_write_lock ||
-      lock->num_readers) {
+  if (lock->has_write_lock || lock->num_readers) {
     Callback *callback = callback_construct(cb, ud);
     if (!callback) {
       ev.success = false;
@@ -194,9 +208,9 @@ async_rdwr_read_unlock(async_rdwr_lock_t lock) {
       return _call_write_callback(lock, write_callback);
     }
 
-    /* nothing was waiting on the lock, call the destroy callback */
     assert(!lock->waiting_on_read_lock);
 
+    /* nothing was waiting on the lock, call the destroy callback */
     if (lock->waiting_for_destroy_cb) {
       return _call_destroy_callback(lock);
     }

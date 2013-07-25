@@ -13,6 +13,7 @@
 #include "fuse.h"
 #undef FUSE_USE_VERSION
 
+#include "async_rdwr_lock.h"
 #include "fdevent.h"
 #include "fd_utils.h"
 #include "logging.h"
@@ -58,8 +59,9 @@ channel_deinit(Channel *chan) {
 struct async_fuse_fs {
   Channel to_worker;
   Channel to_server;
-  bool from_in_use;
   FDEventLoop *loop;
+  /* TODO: get rid of this */
+  async_rdwr_lock_t to_server_lock;
 };
 
 typedef enum {
@@ -365,6 +367,13 @@ static bool
 _async_fuse_fs_destroy(async_fuse_fs_t fs) {
   assert(fs);
 
+  if (fs->to_server_lock) {
+    bool success_destroy =
+      async_rdwr_destroy_sync(fs->to_server_lock);
+    /* this can't fail */
+    ASSERT_TRUE_MSG(success_destroy, "Couldn't destroy read write lock");
+  }
+
   int ret_chan_deinit_1 = channel_deinit(&fs->to_worker);
   if (!ret_chan_deinit_1) {
     /* can't recover from this */
@@ -389,6 +398,12 @@ async_fuse_fs_new(FDEventLoop *loop) {
   struct async_fuse_fs *toret = malloc(sizeof(*toret));
   if (!toret) {
     log_error("Couldn't allocate async_fuse_fs_t");
+    goto error;
+  }
+
+  toret->to_server_lock = async_rdwr_new();
+  if (!toret->to_server_lock) {
+    log_error("Couldn't create async read write lock");
     goto error;
   }
 
@@ -422,7 +437,6 @@ async_fuse_fs_new(FDEventLoop *loop) {
     goto error;
   }
 
-  toret->from_in_use = false;
   toret->loop = loop;
 
   return toret;
@@ -455,13 +469,16 @@ UTHR_DEFINE(_send_request_uthr) {
 
   ctx->set_in_use = false;
 
-  /* fail fast if we have no more reply channels */
-  if (ctx->fs->from_in_use) {
+  UTHR_SUBCALL(ctx,
+               async_rdwr_write_lock(ctx->fs->to_server_lock,
+                                     _send_request_uthr, ctx),
+               ASYNC_RDWR_WRITE_LOCK_DONE_EVENT,
+               AsyncRdwrWriteLockDoneEvent, lock_done_ev);
+  if (!lock_done_ev->success) {
     ev.ret = -ENOMEM;
     goto done;
   }
 
-  ctx->fs->from_in_use = true;
   ctx->set_in_use = true;
 
   ctx->msg.request.reply_chan = &ctx->fs->to_server;
@@ -493,13 +510,26 @@ UTHR_DEFINE(_send_request_uthr) {
 
   ev.ret = receive_reply_message_done_ev->msg.ret;
 
+  event_handler_t cb;
  done:
-  if (ctx->set_in_use) {
-    ctx->fs->from_in_use = false;
+  cb = ctx->cb;
+  void *cb_ud = ctx->cb_ud;
+  event_type_t ev_type = ctx->done_event_type;
+  bool set_in_use = ctx->set_in_use;
+  async_rdwr_lock_t to_server_lock = ctx->fs->to_server_lock;
+
+  free(ctx);
+
+  cb(ev_type, &ev, cb_ud);
+
+  /* unlock after calling the callback,
+     otherwise we won't call our callback until every other locked
+     send_request method is complete */
+  if (set_in_use) {
+    async_rdwr_write_unlock(to_server_lock);
   }
 
-  UTHR_RETURN(ctx,
-              ctx->cb(ctx->done_event_type, &ev, ctx->cb_ud));
+  return;
 
   UTHR_FOOTER();
 }
@@ -794,42 +824,71 @@ async_fuse_worker_main_loop(async_fuse_fs_t fs,
     int ret;
     switch (msg.request.type) {
     case MESSAGE_TYPE_OPEN:
+      log_debug("Peforming fuse open(path=\"%s\", fi=%p)",
+                msg.open.path, msg.open.fi);
       ret = op->open(msg.open.path, msg.open.fi);
       break;
     case MESSAGE_TYPE_READ:
+      log_debug("Peforming fuse read(path=\"%s\", buf=%p, size=%ju, off=%jd, fi=%p)",
+                msg.read.path,
+                msg.read.buf,
+                (uintmax_t) msg.read.size,
+                (intmax_t) msg.read.off,
+                msg.read.fi);
       ret = op->read(msg.read.path,
                      msg.read.buf, msg.read.size, msg.read.off,
                      msg.read.fi);
       break;
     case MESSAGE_TYPE_GETATTR:
+      log_debug("Peforming fuse getattr(path=\"%s\", st=%p)",
+                msg.getattr.path, msg.getattr.st);
       ret = op->getattr(msg.getattr.path, msg.getattr.st);
       break;
     case MESSAGE_TYPE_MKDIR:
+      log_debug("Peforming fuse mkdir(path=\"%s\", mode=0%o)",
+                msg.mkdir.path, msg.mkdir.mode);
       ret = op->mkdir(msg.mkdir.path, msg.mkdir.mode);
       break;
     case MESSAGE_TYPE_MKNOD:
+      log_debug("Peforming fuse mknod(path=\"%s\", mode=0%o, dev=%d)",
+                msg.mknod.path, msg.mknod.mode, msg.mknod.dev);
       ret = op->mknod(msg.mknod.path, msg.mknod.mode, msg.mknod.dev);
       break;
     case MESSAGE_TYPE_GETDIR:
+      log_debug("Peforming fuse getdir(path=\"%s\", h=%p, fn=%p)",
+                msg.getdir.path, msg.getdir.h, msg.getdir.fn);
       ret = op->getdir(msg.getdir.path, msg.getdir.h, msg.getdir.fn);
       break;
     case MESSAGE_TYPE_UNLINK:
+      log_debug("Peforming fuse getdir(path=\"%s\")",
+                msg.unlink.path);
       ret = op->unlink(msg.unlink.path);
       break;
     case MESSAGE_TYPE_RMDIR:
+      log_debug("Peforming fuse rmdir(path=\"%s\")",
+                msg.rmdir.path);
       ret = op->rmdir(msg.rmdir.path);
       break;
     case MESSAGE_TYPE_WRITE:
+      log_debug("Peforming fuse write(path=\"%s\", buf=%p, size=%ju, off=%jd, fi=%p)",
+                msg.write.path, msg.write.buf, (uintmax_t) msg.write.size,
+                (intmax_t) msg.write.off, msg.write.fi);
       ret = op->write(msg.write.path, msg.write.buf, msg.write.size,
                       msg.write.off, msg.write.fi);
       break;
     case MESSAGE_TYPE_RELEASE:
+      log_debug("Peforming fuse release(path=\"%s\", fi=%p)",
+                msg.release.path, msg.release.fi);
       ret = op->release(msg.release.path, msg.release.fi);
       break;
     case MESSAGE_TYPE_FGETATTR:
+      log_debug("Peforming fuse fgetattr(path=\"%s\", buf=%p, fi=%p)",
+                msg.fgetattr.path, msg.fgetattr.buf, msg.fgetattr.fi);
       ret = op->fgetattr(msg.fgetattr.path, msg.fgetattr.buf, msg.fgetattr.fi);
       break;
     case MESSAGE_TYPE_RENAME:
+      log_debug("Peforming fuse rename(src=\"%s\", dst=\"%s\")",
+                msg.rename.src, msg.rename.dst);
       ret = op->rename(msg.rename.src, msg.rename.dst);
       break;
     default:
@@ -837,6 +896,14 @@ async_fuse_worker_main_loop(async_fuse_fs_t fs,
       abort();
       break;
     }
+
+    if (ret < 0) {
+      log_debug("Return code was (error) %d: %s", ret, strerror(-ret));
+    }
+    else {
+      log_debug("Return code was %d", ret);
+    }
+
 
     Message reply_msg = {
       .reply = {

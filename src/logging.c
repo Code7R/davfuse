@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "c_util.h"
 #include "util.h"
@@ -60,8 +61,10 @@ color_for_filename(const char *filename) {
 }
 
 void
-_log(const char *filename, log_level_t level, const char *format, ...) {
-  UNUSED(level);
+_log(const char *filename, int lineno, log_level_t level, const char *format, ...) {
+  /* TODO: we should be able to register log handlers,
+     to make this more extensible, for now it's formatted to look like
+     how encfs does its logging */
 
   if (!_logging_dest) {
     fprintf(stderr, "Must set _logging_dest before logging!");
@@ -76,11 +79,20 @@ _log(const char *filename, log_level_t level, const char *format, ...) {
     basename_ += 1;
   }
 
-  /* TODO: only do this on VT100 compatible terminals */
+  /* get time */
+  time_t ut = time(NULL);
+  ASSERT_TRUE(ut >= (time_t) 0);
+  struct tm *t = localtime(&ut);
+  ASSERT_NOT_NULL(t);
+  /* TODO: print in color */
+  fprintf(_logging_dest, "%02d:%02d:%02d ",
+          t->tm_hour, t->tm_min, t->tm_sec);
+
   if (_show_colors) {
     const char *color_code = color_for_filename(basename_);
 
-    fprintf(_logging_dest, "\x1b[%sm%s\x1b[0m: ", color_code, basename_);
+    fprintf(_logging_dest, "(\x1b[%sm%s\x1b[0m:%d) ",
+            color_code, basename_, lineno);
 
     if (level == LOG_DEBUG) {
       /* display text as gray if it's debug */
@@ -91,7 +103,7 @@ _log(const char *filename, log_level_t level, const char *format, ...) {
     }
   }
   else {
-    fprintf(_logging_dest, "%s: ", basename_);
+    fprintf(_logging_dest, "(%s:%d) ", basename_, lineno);
   }
 
   va_list ap;
