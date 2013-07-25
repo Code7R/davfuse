@@ -379,6 +379,8 @@ _async_fuse_fs_destroy(async_fuse_fs_t fs) {
     abort();
   }
 
+  free(fs);
+
   return true;
 }
 

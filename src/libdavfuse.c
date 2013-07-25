@@ -5,13 +5,17 @@
 #define _ISOC99_SOURCE
 #define _BSD_SOURCE
 
-#include <errno.h>
-#include <libgen.h>
-#include <pthread.h>
-#include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+
+#include <errno.h>
+#include <libgen.h>
+#include <signal.h>
 #include <unistd.h>
+
+#include <netinet/in.h>
+
+#include <pthread.h>
 
 #include <assert.h>
 #include <limits.h>
@@ -1141,14 +1145,6 @@ fuse_main_real(int argc,
   UNUSED(op_size);
   UNUSED(user_data);
 
-  const int ret_create_context = fuse_create_context_key();
-  if (ret_create_context < 0) {
-    log_critical("Couldn't create fuse context");
-    goto error;
-  }
-
-  created_context_key = true;
-
   const bool success_parse_environment = parse_environment(&dav_options);
   if (!success_parse_environment) {
     log_critical("Error parsing DAVFUSE_OPTIONS environment variable");
@@ -1159,6 +1155,22 @@ fuse_main_real(int argc,
   http_thread_args.public_prefix = dav_options.public_prefix;
 
   init_logging(stderr, dav_options.log_level);
+
+  const int ret_create_context = fuse_create_context_key();
+  if (ret_create_context < 0) {
+    log_critical("Couldn't create fuse context");
+    goto error;
+  }
+
+  created_context_key = true;
+
+  /* ignore SIGPIPE */
+  void (*ret_signal)(int) = signal(SIGPIPE, SIG_IGN);
+  if (ret_signal == SIG_ERR) {
+    log_critical("Couldn't ignore SIGPIPE: %s",
+                 strerror(errno));
+    goto error;
+  }
 
   const bool success_parse_command_line = parse_command_line(argc, argv, &fuse_options);
   if (!success_parse_command_line) {

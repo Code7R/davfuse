@@ -488,6 +488,7 @@ EVENT_HANDLER_DEFINE(_async_fuse_fs_copytree_done, ev_type, ev, ud) {
   AsyncFuseFsCopytreeCtx *ctx = ud;
   event_handler_t cb = ctx->cb;
   void *cb_ud = ctx->cb_ud;
+  free(ctx);
   /* TODO: fix error return */
   AsyncFuseFsCopytreeDoneEvent out_ev = {.error = false};
   cb(ASYNC_FUSE_FS_COPYTREE_DONE_EVENT, &out_ev, cb_ud);
