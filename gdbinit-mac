@@ -1,0 +1,9 @@
+def wdinit
+    set environment DYLD_LIBRARY_PATH /Users/rian/myrepos/webdav-fuse/out/
+    handle SIGPIPE nostop noprint pass
+    file /usr/local/bin/encfs
+end
+
+def wdrun
+    r -S -f -v /Users/rian/testenc /Users/rian/testdenc < /Users/rian/myrepos/webdav-fuse/pass
+end
