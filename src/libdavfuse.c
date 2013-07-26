@@ -1190,10 +1190,9 @@ fuse_main_real(int argc,
 	       const struct fuse_operations *op,
 	       size_t op_size,
 	       void *user_data) {
-  /* Initialize options to 0 */
-  DavOptions dav_options = { 0 };
-  FuseOptions fuse_options = { 0 };
-  HTTPThreadArguments http_thread_args;
+  DavOptions dav_options = { .log_level = 0, };
+  FuseOptions fuse_options = { .singlethread = 0 };
+  HTTPThreadArguments http_thread_args = { .async_fuse_fs = 0, };
   async_fuse_fs_t async_fuse_fs = 0;
   bool created_context_key = false;
 
