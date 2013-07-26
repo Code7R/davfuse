@@ -802,8 +802,12 @@ async_fuse_worker_main_loop(async_fuse_fs_t fs,
     .async_read = 0,
     /* TODO */
   };
-  void *init_ret = op->init(&conn);
-  fuse_get_context()->private_data = init_ret;
+
+  void *init_ret = NULL;
+  if (op->init) {
+    init_ret = op->init(&conn);
+    fuse_get_context()->private_data = init_ret;
+  }
 
   while (true) {
     Message msg;
@@ -919,7 +923,9 @@ async_fuse_worker_main_loop(async_fuse_fs_t fs,
     }
   }
 
-  op->destroy(init_ret);
+  if (op->destroy) {
+    op->destroy(init_ret);
+  }
 
   return;
 }
