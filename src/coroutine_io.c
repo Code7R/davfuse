@@ -81,7 +81,9 @@ UTHR_DEFINE(_c_getwhile) {
     C_FBGETC(state, state->loop, state->f, &state->peeked_char,
 	     _c_getwhile, state);
     if (state->peeked_char == EOF) {
-      log_error_errno("Error while expecting a character");
+      if (errno) {
+        log_error_errno("Error while expecting a character");
+      }
       break;
     }
 
@@ -134,7 +136,7 @@ UTHR_DEFINE(_c_read) {
       ssize_t ret;
       _FILL_BUF(state, state->loop, state->f, &ret, _c_read, state);
       if (ret <= 0) {
-        myerrno = (ret < 0) ? errno : 0;
+        myerrno = errno;
         break;
       }
       myerrno = 0;
