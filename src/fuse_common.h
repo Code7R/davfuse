@@ -28,10 +28,9 @@
 #define FUSE_MAKE_VERSION(maj, min)  ((maj) * 10 + (min))
 #define FUSE_VERSION FUSE_MAKE_VERSION(FUSE_MAJOR_VERSION, FUSE_MINOR_VERSION)
 
+#define _STATIC_ASSERT(cond)
 /* This interface uses 64 bit off_t */
-#if _FILE_OFFSET_BITS != 64
-#error Please add -D_FILE_OFFSET_BITS=64 to your compile flags!
-#endif
+_STATIC_ASSERT(sizeof(off_t) == 8)
 
 #ifdef __cplusplus
 extern "C" {
