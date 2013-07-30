@@ -21,59 +21,6 @@ enum {
   TRANSFER_BUF_SIZE = 4096,
 };
 
-typedef struct {
-  UTHR_CTX_BASE;
-  /* args */
-  async_fuse_fs_t fuse_fs;
-  char *path;
-  event_handler_t cb;
-  void *ud;
-  /* ctx */
-  int ret;
-} AsyncFuseRemoveCtx;
-
-static
-UTHR_DEFINE(_async_fuse_remove_uthr) {
-  UTHR_HEADER(AsyncFuseRemoveCtx, ctx);
-
-  UTHR_YIELD(ctx,
-             async_fuse_fs_unlink(ctx->fuse_fs, ctx->path,
-                                  _async_fuse_remove_uthr, ctx));
-  UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_UNLINK_DONE_EVENT,
-                     FuseFsOpDoneEvent, unlink_done_ev);
-  ctx->ret = unlink_done_ev->ret;
-  if (-ctx->ret == EISDIR) {
-    /* failed cuz it was a directory, try rmdir */
-    UTHR_YIELD(ctx,
-               async_fuse_fs_rmdir(ctx->fuse_fs, ctx->path,
-                                   _async_fuse_remove_uthr, ctx));
-    UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_RMDIR_DONE_EVENT,
-                       FuseFsOpDoneEvent, rmdir_done_ev);
-    ctx->ret = rmdir_done_ev->ret;
-  }
-
-  if (ctx->ret < 0) {
-    log_debug("Error while deleting \"%s\": \%s",
-              ctx->path, strerror(-ctx->ret));
-  }
-
-  free(ctx->path);
-  AsyncTreeApplyFnDoneEvent ev = {.error = ctx->ret};
-  UTHR_RETURN(ctx,
-              ctx->cb(ASYNC_TREE_APPLY_FN_DONE_EVENT, &ev, ctx->ud));
-
-  UTHR_FOOTER();
-}
-
-static void
-_async_fuse_remove(void *user_data, void *elt,
-                   event_handler_t cb, void *ud) {
-  UTHR_CALL4(_async_fuse_remove_uthr, AsyncFuseRemoveCtx,
-             .fuse_fs = user_data,
-             .path = elt,
-             .cb = cb,
-             .ud = ud);
-}
 
 typedef struct {
   UTHR_CTX_BASE;
@@ -159,33 +106,118 @@ _async_fuse_expand(void *user_data, linked_list_t stack, void *elt,
              .ud = ud);
 }
 
+typedef struct {
+  async_fuse_fs_t fuse_fs;
+  linked_list_t failed_to_delete;
+  event_handler_t cb;
+  void *cb_ud;
+} AsyncFuseFsRmtreeCtx;
+
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  AsyncFuseFsRmtreeCtx *top;
+  char *path;
+  event_handler_t cb;
+  void *ud;
+  /* ctx */
+  int ret;
+} AsyncFuseApplyRmtreeCtx;
+
+static
+UTHR_DEFINE(_async_fuse_apply_rmtree_uthr) {
+  UTHR_HEADER(AsyncFuseApplyRmtreeCtx, ctx);
+
+  UTHR_YIELD(ctx,
+             async_fuse_fs_unlink(ctx->top->fuse_fs, ctx->path,
+                                  _async_fuse_apply_rmtree_uthr, ctx));
+  UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_UNLINK_DONE_EVENT,
+                     FuseFsOpDoneEvent, unlink_done_ev);
+  ctx->ret = unlink_done_ev->ret;
+  if (-ctx->ret == EPERM ||
+      /* posix says to return EPERM when unlink() is called on a directory
+         linux returns EISDIR */
+      -ctx->ret == EISDIR) {
+    /* failed cuz it was a directory, try rmdir */
+    UTHR_YIELD(ctx,
+               async_fuse_fs_rmdir(ctx->top->fuse_fs, ctx->path,
+                                   _async_fuse_apply_rmtree_uthr, ctx));
+    UTHR_RECEIVE_EVENT(ASYNC_FUSE_FS_RMDIR_DONE_EVENT,
+                       FuseFsOpDoneEvent, rmdir_done_ev);
+    ctx->ret = rmdir_done_ev->ret;
+  }
+
+  if (ctx->ret < 0) {
+    ctx->top->failed_to_delete =
+      linked_list_prepend(ctx->top->failed_to_delete,
+                          ctx->path);
+    log_debug("Error while deleting \"%s\": \%s",
+              ctx->path, strerror(-ctx->ret));
+  }
+  else {
+    free(ctx->path);
+  }
+
+  AsyncTreeApplyFnDoneEvent ev = {.error = ctx->ret};
+  UTHR_RETURN(ctx,
+              ctx->cb(ASYNC_TREE_APPLY_FN_DONE_EVENT, &ev, ctx->ud));
+
+  UTHR_FOOTER();
+}
+
+static void
+_async_fuse_apply_rmtree(void *user_data, void *elt,
+                         event_handler_t cb, void *ud) {
+  UTHR_CALL4(_async_fuse_apply_rmtree_uthr, AsyncFuseApplyRmtreeCtx,
+             .top = user_data,
+             .path = elt,
+             .cb = cb,
+             .ud = ud);
+}
+
+static void
+_async_fuse_expand_rmtree(void *user_data, linked_list_t stack, void *elt,
+                          event_handler_t cb, void *ud) {
+  AsyncFuseFsRmtreeCtx *ctx = user_data;
+  return _async_fuse_expand(ctx->fuse_fs, stack, elt, cb, ud);
+}
+
 static
 EVENT_HANDLER_DEFINE(_async_fuse_fs_rmtree_done, ev_type, ev, ud) {
   UNUSED(ev);
   UNUSED(ev_type);
   assert(ev_type == ASYNC_TREE_APPLY_DONE_EVENT);
-  event_handler_t cb;
-  void *cb_ud;
-  callback_deconstruct((Callback *) ud, &cb, &cb_ud);
-  cb(ASYNC_FUSE_FS_RMTREE_DONE_EVENT, NULL, cb_ud);
+  AsyncFuseFsRmtreeCtx *ctx = ud;
+  event_handler_t cb = ctx->cb;
+  void *cb_ud = ctx->cb_ud;
+  AsyncFuseFsRmtreeDoneEvent ev_out = {
+    .failed_to_delete = ctx->failed_to_delete,
+  };
+  free(ctx);
+  cb(ASYNC_FUSE_FS_RMTREE_DONE_EVENT, &ev_out, cb_ud);
 }
 
 void
 async_fuse_fs_rmtree(async_fuse_fs_t fs,
                      const char *path,
-                     event_handler_t cb, void *ud) {
-  Callback *cbud = callback_construct(cb, ud);
-  ASSERT_NOT_NULL(cbud);
+                     event_handler_t cb, void *cb_ud) {
+  AsyncFuseFsRmtreeCtx *ctx = malloc_or_abort(sizeof(*ctx));
+  *ctx = (AsyncFuseFsRmtreeCtx) {
+    .fuse_fs = fs,
+    .failed_to_delete = LINKED_LIST_INITIALIZER,
+    .cb = cb,
+    .cb_ud = cb_ud,
+  };
 
   bool is_postorder = true;
   char *init_path = strdup_x(path);
   ASSERT_NOT_NULL(init_path);
-  return async_tree_apply(fs,
-                          _async_fuse_remove,
-                          _async_fuse_expand,
+  return async_tree_apply(ctx,
+                          _async_fuse_apply_rmtree,
+                          _async_fuse_expand_rmtree,
                           (void *) init_path,
                           is_postorder,
-                          _async_fuse_fs_rmtree_done, cbud);
+                          _async_fuse_fs_rmtree_done, ctx);
 }
 
 typedef struct {

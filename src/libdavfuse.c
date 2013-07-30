@@ -329,12 +329,13 @@ UTHR_DEFINE(_fuse_delete_uthr) {
                async_fuse_fs_rmtree(ctx->fbctx->fuse_fs,
                                     ctx->file_path,
                                     _fuse_delete_uthr, ctx),
-               ASYNC_FUSE_FS_RMTREE_DONE_EVENT, void, _throw_away_ev);
-  UNUSED(_throw_away_ev);
-
+               ASYNC_FUSE_FS_RMTREE_DONE_EVENT,
+               AsyncFuseFsRmtreeDoneEvent, rmtree_done_ev);
   ctx->ev = (WebdavDeleteDoneEvent) {
-    .error = WEBDAV_ERROR_NONE,
-    .failed_to_delete = LINKED_LIST_INITIALIZER,
+    .error = (rmtree_done_ev->failed_to_delete
+              ? WEBDAV_ERROR_GENERAL
+              : WEBDAV_ERROR_NONE),
+    .failed_to_delete = rmtree_done_ev->failed_to_delete,
   };
 
  done:

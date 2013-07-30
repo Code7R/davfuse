@@ -11,6 +11,10 @@ typedef struct {
   linked_list_t failed_to_copy;
 } AsyncFuseFsCopytreeDoneEvent;
 
+typedef struct {
+  linked_list_t failed_to_delete;
+} AsyncFuseFsRmtreeDoneEvent;
+
 void
 async_fuse_fs_rmtree(async_fuse_fs_t fs,
                      const char *path,

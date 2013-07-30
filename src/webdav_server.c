@@ -1470,6 +1470,13 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   ctx->response_body = NULL;
   ctx->response_body_len = 0;
 
+  webdav_depth_t depth = webdav_get_depth(&hc->rhs);
+  if (depth != DEPTH_INF) {
+    log_info("Invalid ctx->depth sent %d", depth);
+    status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+    goto done;
+  }
+
   ctx->request_relative_uri = path_from_uri(hc, hc->rhs.uri);
   if (!ctx->request_relative_uri) {
     log_info("Couldn't make file path from %s", hc->rhs.uri);
