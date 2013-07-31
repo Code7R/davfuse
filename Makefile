@@ -15,9 +15,9 @@ MINOR_VERSION := 1
 VERSION := ${MAJOR_VERSION}.${MINOR_VERSION}
 
 # TODO: configure this with a flag
-CFLAGS += ${CC_DEBUG_FLAG}
-#CFLAGS += -O3
-#CPPFLAGS += -DNDEBUG
+CFLAGS += ${CFLAGS_DEBUG}
+#CFLAGS += ${CFLAGS_RELEASE}
+#CPPFLAGS += ${CPPFLAGS_RELEASE}
 
 # Cross-platform essential build flags
 CPPFLAGS += -DVERSION=\"${VERSION}\" -I${GENHROOT} -I${SRCROOT}
@@ -30,14 +30,16 @@ MAKEFILES := config.mk Makefile
 
 # Files in $SRCROOT
 HTTP_SERVER_SRC_ := ${FDEVENT_MODULE}.c http_server.c logging.c fd_utils.c coroutine_io.c util.c http_helpers.c file_utils.c dfs.c
-TARGET_SRC_ := posix_fs_webdav_server.c webdav_server.c async_fuse_fs.c async_fuse_fs_helpers.c async_rdwr_lock.c async_tree.c test_http_server.c libdavfuse.c ${FSTATAT_MODULE}.c
-ALL_SRC_ := ${TARGET_SRC_} ${HTTP_SERVER_SRC_}
+WEBDAV_SERVER_SRC_ := ${HTTP_SERVER_SRC_} webdav_server.c webdav_server_xml.c webdav_server_common.c
+TARGET_SRC_ := ${WEBDAV_SERVER_SRC_} posix_fs_webdav_server.c async_fuse_fs.c async_fuse_fs_helpers.c async_rdwr_lock.c async_tree.c test_http_server.c libdavfuse.c ${FSTATAT_MODULE}.c
+ALL_SRC_ := ${TARGET_SRC_} ${WEBDAV_SERVER_SRC_}
 
 # Object files that should be in $OBJROOT
 HTTP_SERVER_OBJ_ := $(patsubst %.c,%.o,${HTTP_SERVER_SRC_})
-POSIX_FS_WEBDAV_SERVER_OBJ_ := posix_fs_webdav_server.o webdav_server.o async_rdwr_lock.o ${HTTP_SERVER_OBJ_} ${FSTATAT_MODULE}.o
+WEBDAV_SERVER_OBJ_ := $(patsubst %.c,%.o,${WEBDAV_SERVER_SRC_})
+POSIX_FS_WEBDAV_SERVER_OBJ_ := posix_fs_webdav_server.o webdav_server.o async_rdwr_lock.o ${WEBDAV_SERVER_OBJ_} ${FSTATAT_MODULE}.o
 TEST_HTTP_SERVER_OBJ_ := test_http_server.o ${HTTP_SERVER_OBJ_}
-LIBFUSE_OBJ_ := libdavfuse.o async_fuse_fs.o webdav_server.o async_rdwr_lock.o async_fuse_fs_helpers.o async_tree.o ${HTTP_SERVER_OBJ_}
+LIBFUSE_OBJ_ := libdavfuse.o async_fuse_fs.o async_rdwr_lock.o async_fuse_fs_helpers.o async_tree.o ${WEBDAV_SERVER_OBJ_}
 ALL_OBJ_ := $(patsubst %.c,%.o,${ALL_SRC_})
 
 # Absolute locations of the sources
@@ -125,7 +127,7 @@ ${POSIX_FS_WEBDAV_SERVER_TARGET}: ${POSIX_FS_WEBDAV_SERVER_OBJ}
 ${LIBFUSE_TARGET}: ${LIBFUSE_OBJ}
 	@mkdir -p $(dir $@)
 	@echo Linking $(notdir $@)
-	@${LINK_COMMAND} ${LINK_FLAG_NAME} $(notdir $@) $(if ${LINK_FLAG_VERSION_SCRIPT}, ${LINK_FLAG_VERSION_SCRIPT} fuse_versionscript) -o $@ $^${LDFLAGS}
+	@${LINK_COMMAND} ${LINK_FLAG_NAME} $(notdir $@) $(if ${LINK_FLAG_VERSION_SCRIPT}, ${LINK_FLAG_VERSION_SCRIPT} fuse_versionscript) -o $@ $^ ${LDFLAGS}
 
 # for dependency auto generateion
 DEPDIR := .deps

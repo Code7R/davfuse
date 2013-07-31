@@ -19,9 +19,6 @@
 #include <strings.h>
 #include <time.h>
 
-#include <libxml/parser.h>
-#include <libxml/tree.h>
-
 #include "async_rdwr_lock.h"
 #include "events.h"
 #include "http_helpers.h"
@@ -29,13 +26,12 @@
 #include "logging.h"
 #include "uthread.h"
 #include "util.h"
+#include "webdav_server_common.h"
+#include "webdav_server_xml.h"
+#include "_webdav_server_types.h"
+#include "_webdav_server_private_types.h"
 
 #include "webdav_server.h"
-
-#define XMLSTR(a) ((const xmlChar *) (a))
-#define STR(a) ((const char *) (a))
-
-static const char *const DAV_XML_NS = "DAV:";
 
 static const char *const WEBDAV_HEADER_DEPTH = "Depth";
 static const char *const WEBDAV_HEADER_DESTINATION = "Destination";
@@ -43,176 +39,6 @@ static const char *const WEBDAV_HEADER_IF = "If";
 static const char *const WEBDAV_HEADER_LOCK_TOKEN = "Lock-Token";
 static const char *const WEBDAV_HEADER_OVERWRITE = "Overwrite";
 static const char *const WEBDAV_HEADER_TIMEOUT = "Timeout";
-
-typedef xmlNodePtr owner_xml_t;
-
-static void
-owner_xml_free(owner_xml_t a) {
-  xmlFreeNode(a);
-}
-
-static owner_xml_t
-owner_xml_copy(owner_xml_t a) {
-  return xmlCopyNode(a, 1);
-}
-
-/* define opaque structures */
-
-struct webdav_propfind_entry {
-  char *relative_uri;
-  webdav_file_time_t modified_time;
-  webdav_file_time_t creation_time;
-  bool is_collection;
-  size_t length;
-};
-
-struct webdav_backend {
-  const WebdavBackendOperations *op;
-  void *user_data;
-};
-
-struct webdav_server {
-  HTTPServer http;
-  FDEventLoop *loop;
-  linked_list_t locks;
-  webdav_backend_t fs;
-  char *public_prefix;
-  async_rdwr_lock_t lock;
-  event_handler_t stop_cb;
-  void *stop_ud;
-};
-
-enum {
-  BUF_SIZE=4096,
-};
-
-typedef enum {
-  XML_PARSE_ERROR_NONE,
-  XML_PARSE_ERROR_SYNTAX,
-  XML_PARSE_ERROR_STRUCTURE,
-  XML_PARSE_ERROR_INTERNAL,
-} xml_parse_code_t;
-
-typedef unsigned webdav_timeout_t;
-
-typedef struct {
-  char *element_name;
-  char *ns_href;
-} WebdavProperty;
-
-typedef struct {
-  char *path;
-  webdav_depth_t depth;
-  bool is_exclusive;
-  owner_xml_t owner_xml;
-  char *lock_token;
-  webdav_timeout_t timeout_in_seconds;
-} WebdavLockDescriptor;
-
-typedef struct {
-  const void *buf;
-  size_t nbyte;
-  event_handler_t cb;
-  void *cb_ud;
-} WebdavGetRequestWriteEvent;
-
-typedef struct {
-  webdav_error_t error;
-} WebdavGetRequestEndEvent;
-
-typedef struct {
-  void *buf;
-  size_t nbyte;
-  event_handler_t cb;
-  void *cb_ud;
-} WebdavPutRequestReadEvent;
-
-typedef struct {
-  webdav_error_t error;
-  bool resource_existed;
-} WebdavPutRequestEndEvent;
-
-struct handler_context {
-  UTHR_CTX_BASE;
-  struct webdav_server *serv;
-  HTTPRequestHeaders rhs;
-  HTTPResponseHeaders resp;
-  http_request_handle_t rh;
-  event_handler_t handler;
-  union {
-    struct copy_context {
-      coroutine_position_t pos;
-      bool is_move;
-      webdav_depth_t depth;
-      char *response_body;
-      size_t response_body_len;
-      char *dst_relative_uri;
-      char *src_relative_uri;
-      bool dst_existed;
-    } copy;
-    struct delete_context {
-      coroutine_position_t pos;
-      char *response_body;
-      size_t response_body_len;
-      char *request_relative_uri;
-    } delete;
-    struct get_context {
-      coroutine_position_t pos;
-      char *resource_uri;
-      bool set_size_hint;
-      bool sent_headers;
-      WebdavGetRequestWriteEvent rwev;
-    } get;
-    struct lock_context {
-      coroutine_position_t pos;
-      char *response_body;
-      size_t response_body_len;
-      char *request_body;
-      size_t request_body_len;
-      linked_list_t headers;
-      char *file_path;
-      owner_xml_t owner_xml;
-      char *resource_tag;
-      char *resource_tag_path;
-      char *refresh_uri;
-      bool is_locked;
-      const char *lock_token;
-      const char *status_path;
-      bool is_exclusive;
-      webdav_depth_t depth;
-      bool created;
-      webdav_timeout_t timeout_in_seconds;
-    } lock;
-    struct mkcol_context {
-      coroutine_position_t pos;
-      char *request_relative_uri;
-    } mkcol;
-    struct propfind_context {
-      coroutine_position_t pos;
-      char *request_relative_uri;
-      char *buf;
-      size_t buf_used, buf_size;
-      char *out_buf;
-      size_t out_buf_size;
-      linked_list_t props_to_get;
-      webdav_propfind_req_type_t propfind_req_type;
-    } propfind;
-    struct proppatch_context {
-      coroutine_position_t pos;
-      char *request_body;
-      size_t request_body_size;
-      char *response_body;
-      size_t response_body_size;
-    } proppatch;
-    struct put_context {
-      coroutine_position_t pos;
-      WebdavPutRequestReadEvent read_ev;
-      char *request_relative_uri;
-      char *response_body;
-      size_t response_body_len;
-    } put;
-  } sub;
-};
 
 static EVENT_HANDLER_DECLARE(handle_request);
 static EVENT_HANDLER_DECLARE(handle_copy_request);
@@ -261,23 +87,6 @@ webdav_destroy_propfind_entry(struct webdav_propfind_entry *pfe) {
   free(pfe);
 }
 
-static WebdavProperty *
-create_webdav_property(const char *element_name, const char *ns_href) {
-  EASY_ALLOC(WebdavProperty, elt);
-
-  elt->element_name = strdup_x(element_name);
-  elt->ns_href = strdup_x(ns_href);
-
-  return elt;
-}
-
-static void
-free_webdav_property(WebdavProperty *wp) {
-  free(wp->element_name);
-  free(wp->ns_href);
-  free(wp);
-}
-
 static char *
 path_from_uri(struct handler_context *hc, const char *uri) {
   const char *abs_path_start;
@@ -311,58 +120,6 @@ path_from_uri(struct handler_context *hc, const char *uri) {
 
   /* path could be something like /hai%20;there/sup, this fixes that */
   return decode_urlpath(abs_path_start, abs_path_end - abs_path_start);
-}
-
-static char *
-uri_from_path(struct handler_context *hc, const char *path) {
-  /* TODO: urlencode `path` */
-  assert(str_startswith(path, "/"));
-  assert(str_equals(path, "/") || !str_endswith(path, "/"));
-
-  char *encoded_path = encode_urlpath(path, strlen(path));
-
-  const char *request_uri = hc->rhs.uri;
-
-  /* NB: we should always be generating urls for paths
-     that are descendants of the request uri */
-
-  char *prefix = hc->serv->public_prefix;
-  char *real_uri;
-  if (str_startswith(request_uri, "/")) {
-    /* request uri was in relative format, generate a relative uri */
-    char *slashslash = strstr(hc->serv->public_prefix, "//");
-    prefix = strchr(slashslash + 2, '/');
-  }
-
-  size_t prefix_len = strlen(prefix);
-  size_t path_len = strlen(encoded_path);
-
-  /* make extra space for a trailing space */
-  real_uri = malloc(prefix_len - 1 + path_len + 1 + 1);
-  if (!real_uri) {
-    goto done;
-  }
-
-  memcpy(real_uri, prefix, prefix_len - 1);
-  memcpy(real_uri + prefix_len - 1, encoded_path, path_len);
-  real_uri[prefix_len - 1 + path_len] = '/';
-  real_uri[prefix_len - 1 + path_len + 1] = '\0';
-
-  if (!str_equals(request_uri, real_uri)) {
-    real_uri[prefix_len - 1 + path_len] = '\0';
-  }
-
-  if (false) {
-    /* if (false) for now, copy/move might need to transform a path
-       that's not a child of the request uri */
-    /* 8.3 URL Handling, RFC 4918 */
-    assert(str_startswith(real_uri, request_uri));
-  }
-
- done:
-  free(encoded_path);
-
-  return real_uri;
 }
 
 static webdav_depth_t
@@ -671,279 +428,6 @@ are_any_descendants_locked(struct webdav_server *ws,
   return true;
 }
 
-static PURE_FUNCTION bool
-ns_equals(xmlNodePtr elt, const char *href) {
-  return (elt->ns &&
-          str_equals(STR(elt->ns->href), href));
-}
-
-static PURE_FUNCTION bool
-node_is(xmlNodePtr elt, const char *href, const char *tag) {
-  return ((elt->ns ? str_equals(STR(elt->ns->href), href) : !href) &&
-          str_equals(STR(elt->name), tag));
-}
-
-static xmlDocPtr
-parse_xml_string(const char *req_data, size_t req_data_length) {
-  xmlParserOption options = (XML_PARSE_COMPACT |
-                             XML_PARSE_NOBLANKS |
-                             XML_PARSE_NONET |
-                             XML_PARSE_PEDANTIC);
-#ifdef NDEBUG
-  options |= XML_PARSE_NOERROR | XML_PARSE_NOWARNING;
-#endif
-  xmlResetLastError();
-  xmlDocPtr doc = xmlReadMemory(req_data, req_data_length,
-                                "noname.xml", NULL, options);
-  if (!doc) {
-    /* bad xml */
-    return doc;
-  }
-
-  if (xmlGetLastError()) {
-    xmlFreeDoc(doc);
-    doc = NULL;
-  }
-
-  return doc;
-}
-
-static xml_parse_code_t
-parse_propfind_request(const char *req_data,
-                       size_t req_data_length,
-                       webdav_propfind_req_type_t *out_propfind_req_type,
-                       linked_list_t *out_props_to_get) {
-  xml_parse_code_t toret;
-  xmlDocPtr doc = NULL;
-  *out_props_to_get = LINKED_LIST_INITIALIZER;
-
-  /* process the type of prop request */
-  if (!req_data) {
-    *out_propfind_req_type = WEBDAV_PROPFIND_ALLPROP;
-  }
-  else {
-    doc = parse_xml_string(req_data, req_data_length);
-    if (!doc) {
-      /* TODO: could probably get a higher fidelity error */
-      toret = XML_PARSE_ERROR_SYNTAX;
-      goto done;
-    }
-
-    /* the root element should be DAV:propfind */
-    xmlNodePtr root_element = xmlDocGetRootElement(doc);
-    if (!(node_is(root_element, DAV_XML_NS, "propfind"))) {
-      /* root element is not propfind, this is bad */
-      log_info("root element is not DAV:, propfind");
-      toret = XML_PARSE_ERROR_STRUCTURE;
-      goto done;
-    }
-    log_debug("root element name: %s", root_element->name);
-
-    /* check if this is prop, allprop, or propname request */
-    xmlNodePtr first_child = root_element->children;
-    if (node_is(first_child, DAV_XML_NS, "propname")) {
-      *out_propfind_req_type = WEBDAV_PROPFIND_PROPNAME;
-    }
-    else if (node_is(first_child, DAV_XML_NS, "allprop")) {
-      *out_propfind_req_type = WEBDAV_PROPFIND_ALLPROP;
-    }
-    else if (node_is(first_child, DAV_XML_NS, "prop")) {
-      *out_propfind_req_type = WEBDAV_PROPFIND_PROP;
-      for (xmlNodePtr prop_elt = first_child->children;
-           prop_elt; prop_elt = prop_elt->next) {
-        *out_props_to_get = linked_list_prepend(*out_props_to_get,
-                                                create_webdav_property((const char *) prop_elt->name,
-                                                                       (const char *) prop_elt->ns->href));
-      }
-    }
-    else {
-      log_info("Invalid propname child: %s", first_child->name);
-      toret = XML_PARSE_ERROR_STRUCTURE;
-      goto done;
-    }
-  }
-
-  toret = XML_PARSE_ERROR_NONE;
-
- done:
-  if (toret) {
-    linked_list_free(*out_props_to_get, (linked_list_elt_handler_t) free_webdav_property);
-  }
-
-  if (doc) {
-    xmlFreeDoc(doc);
-  }
-
-  return toret;
-}
-
-static bool
-generate_propfind_response(struct handler_context *hc,
-                           linked_list_t props_to_get,
-                           linked_list_t entries,
-                           char **out_data,
-                           size_t *out_size,
-                           http_status_code_t *out_status_code) {
-  xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
-  ASSERT_NOT_NULL(xml_response);
-  xmlNodePtr multistatus_elt = xmlNewDocNode(xml_response, NULL, XMLSTR("multistatus"), NULL);
-  ASSERT_NOT_NULL(multistatus_elt);
-  xmlDocSetRootElement(xml_response, multistatus_elt);
-
-  xmlNsPtr dav_ns = xmlNewNs(multistatus_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
-  ASSERT_NOT_NULL(dav_ns);
-  xmlSetNs(multistatus_elt, dav_ns);
-
-  /* TODO: deal with the case where entries == NULL */
-  LINKED_LIST_FOR (struct webdav_propfind_entry, propfind_entry, entries) {
-    xmlNodePtr response_elt = xmlNewChild(multistatus_elt, dav_ns, XMLSTR("response"), NULL);
-    assert(response_elt);
-
-    char *uri = uri_from_path(hc, propfind_entry->relative_uri);
-    ASSERT_NOT_NULL(uri);
-    xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns,
-                                          XMLSTR("href"), XMLSTR(uri));
-    ASSERT_NOT_NULL(href_elt);
-    free(uri);
-
-    xmlNodePtr propstat_not_found_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
-    ASSERT_NOT_NULL(propstat_not_found_elt);
-    xmlNodePtr prop_not_found_elt = xmlNewChild(propstat_not_found_elt, dav_ns, XMLSTR("prop"), NULL);
-    ASSERT_NOT_NULL(prop_not_found_elt);
-    xmlNodePtr status_not_found_elt = xmlNewTextChild(propstat_not_found_elt, dav_ns,
-                                                      XMLSTR("status"),
-                                                      XMLSTR("HTTP/1.1 404 Not Found"));
-    ASSERT_NOT_NULL(status_not_found_elt);
-
-    xmlNodePtr propstat_success_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
-    ASSERT_NOT_NULL(propstat_success_elt);
-    xmlNodePtr prop_success_elt = xmlNewChild(propstat_success_elt, dav_ns, XMLSTR("prop"), NULL);
-    ASSERT_NOT_NULL(propstat_success_elt);
-    xmlNodePtr status_success_elt = xmlNewTextChild(propstat_success_elt, dav_ns,
-                                                    XMLSTR("status"),
-                                                    XMLSTR("HTTP/1.1 200 OK"));
-    ASSERT_NOT_NULL(status_success_elt);
-
-    xmlNodePtr propstat_failure_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("propstat"), NULL);
-    ASSERT_NOT_NULL(propstat_failure_elt);
-    xmlNodePtr prop_failure_elt = xmlNewChild(propstat_failure_elt, dav_ns, XMLSTR("prop"), NULL);
-    ASSERT_NOT_NULL(prop_failure_elt);
-    xmlNodePtr status_failure_elt = xmlNewTextChild(propstat_failure_elt, dav_ns,
-                                                    XMLSTR("status"),
-                                                    XMLSTR("HTTP/1.1 500 Internal Server Error"));
-    ASSERT_NOT_NULL(status_failure_elt);
-
-    LINKED_LIST_FOR (WebdavProperty, elt, props_to_get) {
-      bool is_get_last_modified;
-      if (str_equals(elt->ns_href, DAV_XML_NS) &&
-          ((is_get_last_modified = str_equals(elt->element_name, "getlastmodified")) ||
-           /* TODO: this should be configurable but for now we just
-              set getlastmodified and creationdate to the same date
-              because that's what apache mod_dav does */
-           str_equals(elt->element_name, "creationdate"))) {
-        time_t m_time = (time_t) propfind_entry->modified_time;
-        struct tm *tm_ = gmtime(&m_time);
-        char time_buf[400], *time_str;
-
-        char *fmt = is_get_last_modified
-          ? "%a, %d %b %Y %T GMT"
-          : "%Y-%m-%dT%H:%M:%S-00:00";
-
-        size_t num_chars = strftime(time_buf, sizeof(time_buf), fmt, tm_);
-        xmlNodePtr xml_node;
-
-        if (!num_chars) {
-          log_error("strftime failed!");
-          time_str = NULL;
-          xml_node = prop_failure_elt;
-        }
-        else {
-          time_str = time_buf;
-          xml_node = prop_success_elt;
-        }
-
-        xmlNodePtr getlastmodified_elt = xmlNewTextChild(xml_node, dav_ns,
-                                                         XMLSTR(elt->element_name), XMLSTR(time_str));
-        ASSERT_NOT_NULL(getlastmodified_elt);
-      }
-      else if (str_equals(elt->element_name, "getcontentlength") &&
-               str_equals(elt->ns_href, DAV_XML_NS) &&
-               !propfind_entry->is_collection) {
-        char length_str[400];
-        snprintf(length_str, sizeof(length_str), "%lld",
-                 (long long) propfind_entry->length);
-        xmlNodePtr getcontentlength_elt = xmlNewTextChild(prop_success_elt, dav_ns,
-                                                          XMLSTR("getcontentlength"), XMLSTR(length_str));
-        ASSERT_NOT_NULL(getcontentlength_elt);
-      }
-      else if (str_equals(elt->element_name, "resourcetype") &&
-               str_equals(elt->ns_href, DAV_XML_NS)) {
-        xmlNodePtr resourcetype_elt = xmlNewChild(prop_success_elt, dav_ns,
-                                                  XMLSTR("resourcetype"), NULL);
-        ASSERT_NOT_NULL(resourcetype_elt);
-
-        if (propfind_entry->is_collection) {
-          xmlNodePtr collection_elt = xmlNewChild(resourcetype_elt, dav_ns,
-                                                  XMLSTR("collection"), NULL);
-          ASSERT_NOT_NULL(collection_elt);
-        }
-      }
-      else {
-        xmlNodePtr random_elt = xmlNewChild(prop_not_found_elt, NULL,
-                                            XMLSTR(elt->element_name), NULL);
-        ASSERT_NOT_NULL(random_elt);
-        xmlNsPtr new_ns = xmlNewNs(random_elt, XMLSTR(elt->ns_href), NULL);
-        xmlSetNs(random_elt, new_ns);
-      }
-    }
-
-    if (!prop_not_found_elt->children) {
-      xmlUnlinkNode(propstat_not_found_elt);
-      xmlFreeNode(propstat_not_found_elt);
-    }
-
-    if (!prop_success_elt->children) {
-      xmlUnlinkNode(propstat_success_elt);
-      xmlFreeNode(propstat_success_elt);
-    }
-
-    if (!prop_failure_elt->children) {
-      xmlUnlinkNode(propstat_failure_elt);
-      xmlFreeNode(propstat_failure_elt);
-    }
-  }
-
-  /* convert doc to text and send to client */
-  xmlChar *out_buf;
-  int out_buf_size;
-  int format_xml = 1;
-  xmlDocDumpFormatMemory(xml_response, &out_buf, &out_buf_size, format_xml);
-  *out_data = (char *) out_buf;
-  assert(out_buf_size >= 0);
-  *out_size = out_buf_size;
-  *out_status_code = HTTP_STATUS_CODE_MULTI_STATUS;
-
-  if (xml_response) {
-    xmlFreeDoc(xml_response);
-  }
-
-  return true;
-}
-
-static bool
-generate_locked_response(struct handler_context *hc,
-                         const char *locked_path,
-                         http_status_code_t *status_code,
-                         char **response_body,
-                         size_t *response_body_len);
-
-static bool
-generate_locked_descendant_response(struct handler_context *hc,
-                                    const char *locked_descendant,
-                                    http_status_code_t *status_code,
-                                    char **response_body,
-                                    size_t *response_body_len);
-
 static void
 _can_modify_path(struct handler_context *hc,
                  if_lock_token_err_t if_lock_token_err,
@@ -1104,108 +588,6 @@ can_unlink_path(struct handler_context *hc,
   free(lock_token);
 }
 
-static bool
-generate_locked_response(struct handler_context *hc,
-                         const char *locked_path,
-                         http_status_code_t *status_code,
-                         char **response_body,
-                         size_t *response_body_len) {
-  xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
-  ASSERT_NOT_NULL(xml_response);
-
-  xmlNodePtr error_elt = xmlNewDocNode(xml_response, NULL, XMLSTR("error"), NULL);
-  ASSERT_NOT_NULL(error_elt);
-
-  xmlDocSetRootElement(xml_response, error_elt);
-
-  xmlNsPtr dav_ns = xmlNewNs(error_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
-  ASSERT_NOT_NULL(dav_ns);
-
-  xmlSetNs(error_elt, dav_ns);
-
-  xmlNodePtr lock_token_submitted_elt =
-    xmlNewChild(error_elt, dav_ns, XMLSTR("lock-token-submitted"), NULL);
-  ASSERT_NOT_NULL(lock_token_submitted_elt);
-
-  char *uri = uri_from_path(hc, locked_path);
-  ASSERT_NOT_NULL(uri);
-
-  xmlNodePtr href_elt =
-    xmlNewChild(error_elt, dav_ns, XMLSTR("href"), XMLSTR(uri));
-  ASSERT_NOT_NULL(href_elt);
-
-  free(uri);
-
-  xmlChar *out_buf;
-  int out_buf_size;
-  int format_xml = 1;
-  xmlDocDumpFormatMemory(xml_response, &out_buf, &out_buf_size, format_xml);
-  *response_body = (char *) out_buf;
-  assert(out_buf_size >= 0);
-  *response_body_len = out_buf_size;
-
-  xmlFreeDoc(xml_response);
-
-  *status_code = HTTP_STATUS_CODE_LOCKED;
-
-  return true;
-}
-
-static bool
-generate_locked_descendant_response(struct handler_context *hc,
-                                    const char *locked_descendant,
-                                    http_status_code_t *status_code,
-                                    char **response_body,
-                                    size_t *response_body_len) {
-  xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
-  ASSERT_NOT_NULL(xml_response);
-
-  xmlNodePtr multistatus_elt = xmlNewDocNode(xml_response, NULL, XMLSTR("multistatus"), NULL);
-  ASSERT_NOT_NULL(multistatus_elt);
-
-  xmlDocSetRootElement(xml_response, multistatus_elt);
-
-  xmlNsPtr dav_ns = xmlNewNs(multistatus_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
-  ASSERT_NOT_NULL(dav_ns);
-
-  xmlSetNs(multistatus_elt, dav_ns);
-
-  xmlNodePtr response_elt = xmlNewChild(multistatus_elt, dav_ns, XMLSTR("response"), NULL);
-  ASSERT_NOT_NULL(response_elt);
-
-  char *uri = uri_from_path(hc, locked_descendant);
-  ASSERT_NOT_NULL(uri);
-
-  xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("href"), XMLSTR(uri));
-  ASSERT_NOT_NULL(href_elt);
-
-  free(uri);
-
-  xmlNodePtr status_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("status"),
-                                          XMLSTR("HTTP/1.1 423 Locked"));
-  ASSERT_NOT_NULL(status_elt);
-
-  xmlNodePtr error_elt = xmlNewChild(response_elt, dav_ns, XMLSTR("error"), NULL);
-  ASSERT_NOT_NULL(error_elt);
-
-  xmlNodePtr lock_token_submitted_elt =
-    xmlNewChild(error_elt, dav_ns, XMLSTR("lock-token-submitted"), NULL);
-  ASSERT_NOT_NULL(lock_token_submitted_elt);
-
-  xmlChar *out_buf;
-  int out_buf_size;
-  int format_xml = 1;
-  xmlDocDumpFormatMemory(xml_response, &out_buf, &out_buf_size, format_xml);
-  *response_body = (char *) out_buf;
-  assert(out_buf_size >= 0);
-  *response_body_len = out_buf_size;
-
-  xmlFreeDoc(xml_response);
-
-  *status_code = HTTP_STATUS_CODE_MULTI_STATUS;
-
-  return true;
-}
 
 static
 UTHR_DEFINE(request_proc) {
@@ -1674,31 +1056,6 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   CREND();
 }
 
-static bool
-parse_lock_request_body(const char *body, size_t body_len,
-                        bool *is_exclusive, owner_xml_t *owner_xml);
-
-static bool
-generate_failed_lock_response_body(struct handler_context *hc,
-                                   const char *file_path,
-                                   const char *status_path,
-                                   http_status_code_t *status_code,
-                                   char **response_body,
-                                   size_t *response_body_len);
-
-static bool
-generate_success_lock_response_body(struct handler_context *hc,
-                                    const char *file_path,
-                                    webdav_timeout_t timeout_in_seconds,
-                                    webdav_depth_t depth,
-                                    bool is_exclusive,
-                                    const owner_xml_t owner_xml,
-                                    const char *lock_token,
-                                    bool created,
-                                    http_status_code_t *status_code,
-                                    char **response_body,
-                                    size_t *response_body_len);
-
 static
 EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   UNUSED(ev_type);
@@ -1950,250 +1307,6 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
            request_proc(GENERIC_EVENT, NULL, hc));
 
   CREND();
-}
-
-static bool
-parse_lock_request_body(const char *body, size_t body_len,
-                        bool *is_exclusive, owner_xml_t *owner_xml) {
-  UNUSED(body);
-  UNUSED(is_exclusive);
-  UNUSED(owner_xml);
-
-  bool toret = true;
-  bool saw_lockscope = false;
-  bool saw_locktype = false;
-
-  /* this is an optional request parameter */
-  *owner_xml = NULL;
-
-  xmlDocPtr doc = parse_xml_string(body, body_len);
-  ASSERT_NOT_NULL(doc);
-
-  xmlNodePtr root_element = xmlDocGetRootElement(doc);
-  ASSERT_NOT_NULL(root_element);
-
-  if (!node_is(root_element, DAV_XML_NS, "lockinfo")) {
-    goto error;
-  }
-
-  for (xmlNodePtr child = root_element->children;
-       child; child = child->next) {
-    if (node_is(child, DAV_XML_NS, "lockscope")) {
-      *is_exclusive = (child->children &&
-                       node_is(child->children, DAV_XML_NS, "exclusive"));
-      saw_lockscope = true;
-    }
-    /* we require a proper write lock entity */
-    else if (node_is(child, DAV_XML_NS, "locktype") &&
-             child->children &&
-             node_is(child->children, DAV_XML_NS, "write")) {
-      saw_locktype = true;
-    }
-    else if (node_is(child, DAV_XML_NS, "owner") &&
-             child->children) {
-      *owner_xml = xmlCopyNode(child->children, 1);
-    }
-  }
-
-  if (!saw_lockscope || !saw_locktype) {
-  error:
-    /* in case we found an owner */
-    if (*owner_xml) {
-      owner_xml_free(*owner_xml);
-      *owner_xml = NULL;
-    }
-    toret = false;
-  }
-
-  xmlFreeDoc(doc);
-
-  return toret;
-}
-
-static bool
-generate_failed_lock_response_body(struct handler_context *hc,
-                                   const char *file_path,
-                                   const char *status_path,
-                                   http_status_code_t *status_code,
-                                   char **response_body,
-                                   size_t *response_body_len) {
-  xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
-  ASSERT_NOT_NULL(xml_response);
-
-  xmlNodePtr multistatus_elt = xmlNewDocNode(xml_response, NULL, XMLSTR("multistatus"), NULL);
-  ASSERT_NOT_NULL(multistatus_elt);
-
-  xmlDocSetRootElement(xml_response, multistatus_elt);
-
-  xmlNsPtr dav_ns = xmlNewNs(multistatus_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
-  ASSERT_NOT_NULL(dav_ns);
-
-  xmlSetNs(multistatus_elt, dav_ns);
-
-  bool same_path = str_equals(file_path, status_path);
-  const char *locked_status = "HTTP/1.1 423 Locked";
-
-  if (!same_path) {
-    xmlNodePtr response_elt = xmlNewChild(multistatus_elt, dav_ns, XMLSTR("response"), NULL);
-    ASSERT_NOT_NULL(response_elt);
-
-    char *status_uri = uri_from_path(hc, status_path);
-    ASSERT_NOT_NULL(status_uri);
-
-    xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("href"), XMLSTR(status_uri));
-    ASSERT_NOT_NULL(href_elt);
-
-    free(status_uri);
-
-    xmlNodePtr status_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("status"),
-                                            XMLSTR(locked_status));
-    ASSERT_NOT_NULL(status_elt);
-  }
-
-  xmlNodePtr response_elt = xmlNewChild(multistatus_elt, dav_ns, XMLSTR("response"), NULL);
-  ASSERT_NOT_NULL(response_elt);
-
-  char *file_uri = uri_from_path(hc, file_path);
-  ASSERT_NOT_NULL(file_uri);
-
-  xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("href"), XMLSTR(file_uri));
-  ASSERT_NOT_NULL(href_elt);
-
-  free(file_uri);
-
-  xmlNodePtr status_elt = xmlNewTextChild(response_elt, dav_ns, XMLSTR("status"),
-                                          XMLSTR(same_path ? locked_status : "HTTP/1.1 424 Failed Dependency"));
-  ASSERT_NOT_NULL(status_elt);
-
-  xmlChar *out_buf;
-  int out_buf_size;
-  int format_xml = 1;
-  xmlDocDumpFormatMemory(xml_response, &out_buf, &out_buf_size, format_xml);
-  *response_body = (char *) out_buf;
-  assert(out_buf_size >= 0);
-  *response_body_len = out_buf_size;
-
-  xmlFreeDoc(xml_response);
-
-  *status_code = HTTP_STATUS_CODE_MULTI_STATUS;
-
-  return true;
-}
-
-static bool
-generate_success_lock_response_body(struct handler_context *hc,
-                                    const char *file_path,
-                                    webdav_timeout_t timeout_in_seconds,
-                                    webdav_depth_t depth,
-                                    bool is_exclusive,
-                                    const owner_xml_t owner_xml,
-                                    const char *lock_token,
-                                    bool created,
-                                    http_status_code_t *status_code,
-                                    char **response_body,
-                                    size_t *response_body_len) {
-  xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
-  ASSERT_NOT_NULL(xml_response);
-
-  xmlNodePtr prop_elt = xmlNewDocNode(xml_response, NULL, XMLSTR("prop"), NULL);
-  ASSERT_NOT_NULL(prop_elt);
-
-  xmlDocSetRootElement(xml_response, prop_elt);
-
-  xmlNsPtr dav_ns = xmlNewNs(prop_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
-  ASSERT_NOT_NULL(dav_ns);
-
-  xmlSetNs(prop_elt, dav_ns);
-
-  xmlNodePtr lockdiscovery_elt = xmlNewChild(prop_elt, dav_ns, XMLSTR("lockdiscovery"), NULL);
-  ASSERT_NOT_NULL(lockdiscovery_elt);
-
-  xmlNodePtr activelock_elt = xmlNewChild(lockdiscovery_elt, dav_ns, XMLSTR("activelock"), NULL);
-  ASSERT_NOT_NULL(activelock_elt);
-
-  xmlNodePtr locktype_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("locktype"), NULL);
-  ASSERT_NOT_NULL(locktype_elt);
-
-  xmlNodePtr write_elt = xmlNewChild(locktype_elt, dav_ns, XMLSTR("write"), NULL);
-  ASSERT_NOT_NULL(write_elt);
-
-  xmlNodePtr lockscope_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("lockscope"), NULL);
-  ASSERT_NOT_NULL(lockscope_elt);
-
-  if (is_exclusive) {
-    xmlNodePtr exclusive_elt = xmlNewChild(lockscope_elt, dav_ns, XMLSTR("exclusive"), NULL);
-    ASSERT_NOT_NULL(exclusive_elt);
-  }
-  else {
-    xmlNodePtr shared_elt = xmlNewChild(lockscope_elt, dav_ns, XMLSTR("shared"), NULL);
-    ASSERT_NOT_NULL(shared_elt);
-  }
-
-  assert(depth == DEPTH_0 || depth == DEPTH_INF);
-  xmlNodePtr depth_elt = xmlNewTextChild(activelock_elt, dav_ns, XMLSTR("depth"),
-                                         XMLSTR(depth == DEPTH_INF ? "infinity" : "0"));
-  ASSERT_NOT_NULL(depth_elt);
-
-  if (owner_xml) {
-    /* TODO: need to make sure owner_xml conforms to XML */
-    xmlNodePtr owner_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("owner"), NULL);
-    ASSERT_NOT_NULL(owner_elt);
-    xmlNodePtr owner_xml_2 = xmlCopyNode(owner_xml, 1);
-    xmlAddChild(owner_elt, owner_xml_2);
-    xmlReconciliateNs(xml_response, owner_xml_2);
-  }
-
-  const char *timeout_str;
-  char timeout_buf[256];
-  if (!timeout_in_seconds) {
-    timeout_str = "infinity";
-  }
-  else {
-    int len = snprintf(timeout_buf, sizeof(timeout_buf),
-                       "Second-%u", (unsigned) timeout_in_seconds);
-    if (len == sizeof(timeout_buf) - 1) {
-      /* TODO: lazy */
-      abort();
-    }
-    timeout_str = timeout_buf;
-  }
-
-  xmlNodePtr timeout_elt = xmlNewTextChild(activelock_elt, dav_ns, XMLSTR("timeout"),
-                                           XMLSTR(timeout_str));
-  ASSERT_NOT_NULL(timeout_elt);
-
-  xmlNodePtr locktoken_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("locktoken"), NULL);
-  ASSERT_NOT_NULL(locktoken_elt);
-
-  xmlNodePtr href_elt = xmlNewTextChild(locktoken_elt, dav_ns, XMLSTR("href"),
-                                        XMLSTR(lock_token));
-  ASSERT_NOT_NULL(href_elt);
-
-  xmlNodePtr lockroot_elt = xmlNewChild(activelock_elt, dav_ns, XMLSTR("lockroot"), NULL);
-  ASSERT_NOT_NULL(lockroot_elt);
-
-  char *lockroot_uri = uri_from_path(hc, file_path);
-  ASSERT_NOT_NULL(lockroot_uri);
-
-  xmlNodePtr lockroot_href_elt = xmlNewTextChild(lockroot_elt, dav_ns, XMLSTR("href"),
-                                                 XMLSTR(file_path));
-  ASSERT_NOT_NULL(lockroot_href_elt);
-
-  free(lockroot_uri);
-
-  xmlChar *out_buf;
-  int out_buf_size;
-  int format_xml = 1;
-  xmlDocDumpFormatMemory(xml_response, &out_buf, &out_buf_size, format_xml);
-  *response_body = (char *) out_buf;
-  assert(out_buf_size >= 0);
-  *response_body_len = out_buf_size;
-
-  xmlFreeDoc(xml_response);
-
-  *status_code = created ? HTTP_STATUS_CODE_CREATED : HTTP_STATUS_CODE_OK;
-
-  return true;
 }
 
 static
@@ -2505,8 +1618,6 @@ run_proppatch(struct handler_context *hc, const char *uri,
               http_status_code_t *status_code) {
   UNUSED(hc);
 
-  xmlDocPtr doc = NULL;
-
   /* NB: litmus "lock" tests fail because we don't support
      setting arbitrary properties */
   char *file_path = path_from_uri(hc, uri);
@@ -2528,107 +1639,33 @@ run_proppatch(struct handler_context *hc, const char *uri,
   assert(input_size <= INT_MAX);
   log_debug("XML request:\n%.*s", (int) input_size, input);
 
-  doc = parse_xml_string(input, input_size);
-  if (!doc) {
+  linked_list_t props_to_patch;
+  xml_parse_code_t error_parse =
+    parse_proppatch_request(input, input_size,
+                            &props_to_patch);
+  if (error_parse == XML_PARSE_ERROR_STRUCTURE ||
+      error_parse == XML_PARSE_ERROR_SYNTAX) {
     *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
   }
-
-  xmlNodePtr root_element = xmlDocGetRootElement(doc);
-  if (!(str_equals(STR(root_element->name), "propertyupdate") &&
-        ns_equals(root_element, DAV_XML_NS))) {
-    /* root element is not propertyupdate, this is bad */
-    log_info("root element is not DAV:, propertyupdate %s",
-             root_element->name);
-    *status_code = HTTP_STATUS_CODE_BAD_REQUEST;
+  else if (error_parse == XML_PARSE_ERROR_INTERNAL) {
+    *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
 
   /* build response */
-  xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
-  ASSERT_NOT_NULL(xml_response);
-  xmlNodePtr multistatus_elt = xmlNewDocNode(xml_response, NULL,
-                                             XMLSTR("multistatus"), NULL);
-  ASSERT_NOT_NULL(multistatus_elt);
-  xmlDocSetRootElement(xml_response, multistatus_elt);
-
-  xmlNsPtr dav_ns = xmlNewNs(multistatus_elt, XMLSTR(DAV_XML_NS), XMLSTR("D"));
-  ASSERT_NOT_NULL(dav_ns);
-  xmlSetNs(multistatus_elt, dav_ns);
-
-  xmlNodePtr response_elt = xmlNewChild(multistatus_elt, dav_ns,
-                                        XMLSTR("response"), NULL);
-  ASSERT_NOT_NULL(response_elt);
-
-  xmlNodePtr href_elt = xmlNewTextChild(response_elt, dav_ns,
-                                        XMLSTR("href"), XMLSTR(uri));
-  ASSERT_NOT_NULL(href_elt);
-
-  xmlNodePtr propstat_elt = xmlNewChild(response_elt, dav_ns,
-                                        XMLSTR("propstat"), NULL);
-  xmlNodePtr new_prop_elt = xmlNewChild(propstat_elt, dav_ns,
-                                        XMLSTR("prop"), NULL);
-  xmlNodePtr new_status_elt = xmlNewTextChild(propstat_elt, dav_ns,
-                                              XMLSTR("status"),
-                                              XMLSTR("HTTP/1.1 403 Forbidden"));
-  ASSERT_NOT_NULL(new_status_elt);
-
-  /* now iterate over every propertyupdate directive */
-  /* TODO: for now we don't support setting anything */
-  /* we don't support arbitrary dead properties */
-  for (xmlNodePtr cur_child = root_element->children; cur_child;
-       cur_child = cur_child->next) {
-    if (ns_equals(cur_child, DAV_XML_NS) &&
-        (str_equals(STR(cur_child->name), "set") ||
-         str_equals(STR(cur_child->name), "remove"))) {
-      /* get the prop elt */
-      xmlNodePtr prop_elt = cur_child->children;
-      for (; prop_elt; prop_elt = prop_elt->next) {
-        if (ns_equals(prop_elt, DAV_XML_NS) &&
-            str_equals(STR(prop_elt->name), "prop")) {
-          break;
-        }
-      }
-
-      /* now iterate over each prop being modified in
-         this directive (either set/remove) */
-      if (prop_elt) {
-        for (xmlNodePtr xml_prop = prop_elt->children; xml_prop;
-             xml_prop = xml_prop->next) {
-          /* add this element to the proppatch response */
-          xmlNodePtr new_xml_prop = xmlNewChild(new_prop_elt, NULL,
-                                                xml_prop->name, NULL);
-          assert(new_xml_prop);
-          if (xml_prop->ns) {
-            xmlNsPtr ns_ptr = xmlNewNs(new_xml_prop, xml_prop->ns->href, xml_prop->ns->prefix);
-            xmlSetNs(new_xml_prop, ns_ptr);
-          }
-        }
-      }
-    }
-    else {
-      /* this is just bad input XML schema */
-      /* we'll ignore it for now though, doesn't really hurt anything */
-    }
+  bool success_generate =
+    generate_proppatch_response(uri, props_to_patch,
+                                output, output_size, status_code);
+  if (!success_generate) {
+    *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
   }
 
-  int format_xml = 1;
-  int out_size;
-  xmlDocDumpFormatMemory(xml_response, (xmlChar **) output, &out_size, format_xml);
-  log_debug("XML response will be:\n%.*s", out_size, *output);
-  *output_size = out_size;
-
-  if (xml_response) {
-    xmlFreeDoc(xml_response);
-  }
-  *status_code = HTTP_STATUS_CODE_MULTI_STATUS;
+  linked_list_free(props_to_patch,
+                   (linked_list_elt_handler_t) free_webdav_proppatch_directive);
 
  done:
   free(file_path);
-
-  if (doc) {
-    xmlFreeDoc(doc);
-  }
 }
 
 void
@@ -3019,7 +2056,7 @@ EVENT_HANDLER_DEFINE(_webdav_stop_cb, ev_type, ev, ud) {
   free(serv);
 
   /* to shut down xml library (cleanup memory) */
-  xmlCleanupParser();
+  shutdown_xml_parser();
 
   if (cb) {
     return cb(GENERIC_EVENT, NULL, cb_ud);
