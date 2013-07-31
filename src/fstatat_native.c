@@ -5,5 +5,5 @@
 
 int fstatat_x(int dirfd, const char *pathname, struct stat *buf,
               int flags) {
-  return fstatat(dirfd, pathane, buf, flags);
+  return fstatat(dirfd, pathname, buf, flags);
 }

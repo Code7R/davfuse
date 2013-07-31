@@ -15,7 +15,7 @@ MINOR_VERSION := 1
 VERSION := ${MAJOR_VERSION}.${MINOR_VERSION}
 
 # TODO: configure this with a flag
-CFLAGS += -g
+CFLAGS += ${CC_DEBUG_FLAG}
 #CFLAGS += -O3
 #CPPFLAGS += -DNDEBUG
 
@@ -51,7 +51,7 @@ ALL_OBJ := $(patsubst %,${OBJROOT}/%,${ALL_OBJ_})
 
 TEST_HTTP_SERVER_TARGET := ${TARGETROOT}/test_http_server
 POSIX_FS_WEBDAV_SERVER_TARGET := ${TARGETROOT}/posix_fs_webdav_server
-LIBFUSE_TARGET := ${TARGETROOT}/libfuse.so.2
+LIBFUSE_TARGET := ${TARGETROOT}/${LIBFUSE_FILE_NAME}
 DAVFUSE_TARGET := ${TARGETROOT}/davfuse
 
 ALL_TARGETS := ${TEST_HTTP_SERVER_TARGET} ${POSIX_FS_WEBDAV_SERVER_TARGET} \
@@ -120,12 +120,12 @@ ${TEST_HTTP_SERVER_TARGET}: ${TEST_HTTP_SERVER_OBJ}
 ${POSIX_FS_WEBDAV_SERVER_TARGET}: ${POSIX_FS_WEBDAV_SERVER_OBJ}
 	@mkdir -p $(dir $@)
 	@echo Linking $(notdir $@)
-	@${CC} -o $@ $^ ${LDFLAGS} 
+	@${CC} -o $@ $^ ${LDFLAGS}
 
 ${LIBFUSE_TARGET}: ${LIBFUSE_OBJ}
 	@mkdir -p $(dir $@)
 	@echo Linking $(notdir $@)
-	@${LINK_COMMAND} -o $@ $^ ${LDFLAGS}
+	@${LINK_COMMAND} ${LINK_FLAG_NAME} $(notdir $@) $(if ${LINK_FLAG_VERSION_SCRIPT}, ${LINK_FLAG_VERSION_SCRIPT} fuse_versionscript) -o $@ $^${LDFLAGS}
 
 # for dependency auto generateion
 DEPDIR := .deps
