@@ -590,6 +590,9 @@ parse_lock_request_body(const char *body, size_t body_len,
       *owner_xml = NULL;
     }
   }
+  else {
+    toret = XML_PARSE_ERROR_NONE;
+  }
 
   return toret;
 }
