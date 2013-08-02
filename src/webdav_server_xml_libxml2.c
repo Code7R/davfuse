@@ -6,7 +6,6 @@
 #include <libxml/tree.h>
 
 #include "webdav_server_common.h"
-#include "_webdav_server_types.h"
 #include "_webdav_server_private_types.h"
 
 #include "webdav_server_xml.h"
