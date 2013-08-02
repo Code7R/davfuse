@@ -1,6 +1,10 @@
 #ifndef EVENTS_H
 #define EVENTS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* all events types go here,
    the benefits of writing all your own code */
 
@@ -64,5 +68,9 @@ typedef enum {
 #define EVENT_HANDLER_DECLARE(handler) EVENT_HANDLER_DEFINE(handler, a, b, c)
 
 typedef EVENT_HANDLER_DECLARE((*event_handler_t));
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* EVENTS_H */

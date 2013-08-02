@@ -54,7 +54,7 @@ typedef struct {
 	       const char *src_uri, const char *dst_uri,
 	       bool overwrite, webdav_depth_t depth,
 	       event_handler_t cb, void *ud);
-  void (*delete)(void *backend_user_data,
+  void (*delete_x)(void *backend_user_data,
                  const char *relative_uri,
                  event_handler_t cb, void *ud);
   void (*get)(void *backend_user_data,

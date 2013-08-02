@@ -1,16 +1,17 @@
 #ifndef __WEBDAV_SERVER_PRIVATE_TYPES_H
 #define __WEBDAV_SERVER_PRIVATE_TYPES_H
 
-#include "async_rdwr_lock.h"
 #include "http_server.h"
 #include "uthread.h"
 #include "util.h"
 #include "_webdav_server_types.h"
-#include "_webdav_server_xml_types.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* this can be implemented in any way, that's why it's a void * */
+typedef void *owner_xml_t;
 
 typedef unsigned webdav_timeout_t;
 
@@ -88,7 +89,6 @@ struct webdav_server {
   linked_list_t locks;
   webdav_backend_t fs;
   char *public_prefix;
-  async_rdwr_lock_t lock;
   event_handler_t stop_cb;
   void *stop_ud;
 };
@@ -116,7 +116,7 @@ struct handler_context {
       char *response_body;
       size_t response_body_len;
       char *request_relative_uri;
-    } delete;
+    } delete_x;
     struct get_context {
       coroutine_position_t pos;
       char *resource_uri;

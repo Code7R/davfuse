@@ -28,6 +28,7 @@
 #include "fd_utils.h"
 #include "logging.h"
 #include "webdav_server.h"
+#include "webdav_server_xml.h"
 #include "uthread.h"
 #include "util.h"
 
@@ -723,7 +724,7 @@ posix_move(void *backend_handle,
 static WebdavBackendOperations
 posix_backend_operations = {
   .copy = posix_copy,
-  .delete = posix_delete,
+  .delete_x = posix_delete,
   .get = posix_get,
   .propfind = posix_propfind,
   .put = posix_put,
@@ -785,6 +786,8 @@ main(int argc, char *argv[]) {
   bool ret = fdevent_init(&loop);
   ASSERT_TRUE(ret);
 
+  init_xml_parser();
+
   /* start webdav server */
   PosixBackendCtx pbctx = {
     .base_path = base_path,
@@ -804,10 +807,16 @@ main(int argc, char *argv[]) {
 
   log_info("Server stopped");
 
+  log_info("Destroying backend");
   webdav_backend_destroy(fs);
 
-  close(server_fd);
+  log_info("Shutting down xml parser");
+  shutdown_xml_parser();
 
+  log_info("Closing server fs");
+  close_or_abort(server_fd);
+
+  log_info("Freeing base path");
   free(base_path);
 
   return 0;

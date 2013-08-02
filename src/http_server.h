@@ -10,6 +10,10 @@
 #include "fdevent.h"
 #include "uthread.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef _IS_HTTP_SERVER__C
 extern const char *const HTTP_HEADER_CONTENT_LENGTH;
 extern const char *const HTTP_HEADER_CONTENT_TYPE;
@@ -314,5 +318,9 @@ http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
   return true;
 #undef SET_MSG
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* HTTP_SERVER_H */

@@ -13,6 +13,10 @@
 #include "events.h"
 #include "logging.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct _ll {
   void *elt;
   struct _ll *next;
@@ -23,7 +27,12 @@ typedef void (*linked_list_elt_handler_t)(void *);
 typedef void (*linked_list_elt_handler_ud_t)(void *, void *);
 #define __APP(x, y) x ## y
 #define _APP(x, y) __APP(x, y)
-#define LINKED_LIST_FOR(type, elt_, ll) linked_list_t _APP(__ll2,__LINE__) = (ll); for (type *elt_ = _APP(__ll2,__LINE__) ? _APP(__ll2,__LINE__)->elt : NULL; elt_; _APP(__ll2,__LINE__) = _APP(__ll2,__LINE__)->next, elt_ = _APP(__ll2,__LINE__) ? _APP(__ll2,__LINE__)->elt : NULL)
+#define LINKED_LIST_FOR(type, elt_, ll) \
+  linked_list_t _APP(__ll2,__LINE__) = (ll);\
+  for (type *elt_ = (type *) (_APP(__ll2,__LINE__) ? _APP(__ll2,__LINE__)->elt : NULL);\
+       elt_;\
+       _APP(__ll2,__LINE__) = _APP(__ll2,__LINE__)->next,\
+         elt_ = (type *) (_APP(__ll2,__LINE__) ? _APP(__ll2,__LINE__)->elt : NULL))
 #define LINKED_LIST_INITIALIZER NULL
 
 linked_list_t
@@ -134,7 +143,7 @@ typedef struct {
 
 HEADER_FUNCTION Callback *
 callback_construct(event_handler_t cb, void *ud) {
-  Callback *cbud = malloc(sizeof(*cbud));
+  Callback *cbud = (Callback *) malloc(sizeof(*cbud));
   if (!cbud) {
     return NULL;
   }
@@ -152,5 +161,8 @@ callback_deconstruct(Callback *cbud,
   free(cbud);
 }
 
-#endif /* UTIL_H */
+#ifdef __cplusplus
+}
+#endif
 
+#endif /* UTIL_H */

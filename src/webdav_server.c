@@ -19,7 +19,6 @@
 #include <strings.h>
 #include <time.h>
 
-#include "async_rdwr_lock.h"
 #include "events.h"
 #include "http_helpers.h"
 #include "http_server.h"
@@ -844,7 +843,7 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   UNUSED(ev);
 
   struct handler_context *hc = ud;
-  struct delete_context *ctx = &hc->sub.delete;
+  struct delete_context *ctx = &hc->sub.delete_x;
   http_status_code_t status_code = 0;
 
   CRBEGIN(ctx->pos);
@@ -1177,15 +1176,23 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   }
 
   /* parse request body */
-  bool success_parse = ctx->request_body
+  xml_parse_code_t error_parse = ctx->request_body
     ? parse_lock_request_body(ctx->request_body, ctx->request_body_len,
                               &ctx->is_exclusive, &ctx->owner_xml)
-    : false;
-  if (!success_parse) {
+    : XML_PARSE_ERROR_NONE;
+  if (error_parse == XML_PARSE_ERROR_STRUCTURE ||
+      error_parse == XML_PARSE_ERROR_SYNTAX) {
     log_debug("Bad request body");
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
   }
+  else if (error_parse) {
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  /* our XML library is having an error if owner_xml is NULL and it returns success */
+  assert(ctx->owner_xml);
 
   /* actually attempt to lock the resource */
   ctx->lock_token = NULL;
@@ -1545,8 +1552,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
                                        handle_propfind_request, hc));
 
   if (ctx->out_buf) {
-    /* TODO: use a generic returned free function */
-    xmlFree(ctx->out_buf);
+    free(ctx->out_buf);
   }
   free(ctx->buf);
   CRRETURN(ctx->pos, request_proc(GENERIC_EVENT, NULL, hc));
@@ -1602,8 +1608,7 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
                                        handle_proppatch_request, hc));
 
   if (hc->sub.proppatch.response_body) {
-    /* TODO: use a generic returned free function */
-    xmlFree(hc->sub.proppatch.response_body);
+    free(hc->sub.proppatch.response_body);
   }
   free(hc->sub.proppatch.request_body);
   CRRETURN(hc->sub.proppatch.pos, request_proc(GENERIC_EVENT, NULL, hc));
@@ -1960,7 +1965,7 @@ void
 webdav_backend_delete(webdav_backend_t fs,
                       const char *relative_uri,
                       event_handler_t cb, void *cb_ud) {
-  return fs->op->delete(fs->user_data, relative_uri, cb, cb_ud);
+  return fs->op->delete_x(fs->user_data, relative_uri, cb, cb_ud);
 }
 
 void
@@ -1992,15 +1997,9 @@ webdav_server_start(FDEventLoop *loop,
                     webdav_backend_t fs) {
   struct webdav_server *serv = NULL;
   char *public_prefix_copy = NULL;
-  async_rdwr_lock_t lock = 0;
 
   serv = malloc(sizeof(*serv));
   if (!serv) {
-    goto error;
-  }
-
-  lock = async_rdwr_new();
-  if (!lock) {
     goto error;
   }
 
@@ -2014,7 +2013,6 @@ webdav_server_start(FDEventLoop *loop,
     .locks = LINKED_LIST_INITIALIZER,
     .fs = fs,
     .public_prefix = public_prefix_copy,
-    .lock = lock,
   };
 
   bool ret = http_server_start(&serv->http, loop, server_fd,
@@ -2028,11 +2026,7 @@ webdav_server_start(FDEventLoop *loop,
  error:
   free(serv);
   free(public_prefix_copy);
-  if (lock) {
-    bool success_destroy = async_rdwr_destroy_sync(lock);
-    /* this can't fail */
-    ASSERT_TRUE(success_destroy);
-  }
+
   return NULL;
 }
 
@@ -2041,11 +2035,7 @@ EVENT_HANDLER_DEFINE(_webdav_stop_cb, ev_type, ev, ud) {
   UNUSED(ev);
   struct webdav_server *serv = ud;
 
-  if (ev_type == HTTP_SERVER_STOP_DONE_EVENT) {
-    return async_rdwr_destroy(serv->lock, _webdav_stop_cb, ud);
-  }
-
-  assert(ev_type == ASYNC_RDWR_DESTROY_DONE_EVENT);
+  assert(ev_type == HTTP_SERVER_STOP_DONE_EVENT);
 
   linked_list_free(serv->locks, free_webdav_lock_descriptor);
   free(serv->public_prefix);
@@ -2054,9 +2044,6 @@ EVENT_HANDLER_DEFINE(_webdav_stop_cb, ev_type, ev, ud) {
   void *cb_ud = serv->stop_ud;
 
   free(serv);
-
-  /* to shut down xml library (cleanup memory) */
-  shutdown_xml_parser();
 
   if (cb) {
     return cb(GENERIC_EVENT, NULL, cb_ud);

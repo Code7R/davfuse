@@ -7,6 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef enum {
   LOG_NOTHING,
   LOG_CRITICAL,
@@ -46,5 +50,9 @@ init_logging(FILE *log_destination, log_level_t level);
 
 void
 _log(const char *filename, int lineno, log_level_t level, const char *format, ...);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

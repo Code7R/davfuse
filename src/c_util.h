@@ -1,6 +1,10 @@
 #ifndef C_UTIL_H
 #define C_UTIL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define UNUSED(x) ((void)(x))
 #define NELEMS(arr) (sizeof(arr) / sizeof(arr[0]))
 
@@ -36,6 +40,10 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
+
+#ifdef __cplusplus
+}
+#endif
 
 /* C_UTIL_H */
 #endif

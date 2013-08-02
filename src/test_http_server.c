@@ -70,7 +70,7 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   /* TODO: we shouldn't have to worry about content-length or chunked
      or any of that, but for now we assume content-length */
 
-  char *content_length_str = http_get_header_value(&hc->rhs, "content-length");
+  const char *content_length_str = http_get_header_value(&hc->rhs, "content-length");
   if (content_length_str) {
     long converted_content_length = strtol(content_length_str, NULL, 10);
     assert(converted_content_length >= 0 && !errno);

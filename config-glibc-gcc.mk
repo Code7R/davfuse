@@ -7,15 +7,23 @@ FSTATAT_SOURCE = native
 # this is used on linux for seamless 64-bit filesystem usage
 # on 32-bit systems
 CPPFLAGS += -D_FORTIFY_SOURCE=2 -D_FILE_OFFSET_BITS=64
-CFLAGS += -std=c99 -Wall -Wextra -Werror
-
-# compiler and linker
-CC ?= gcc
-CFLAGS_DEBUG = -g
-CFLAGS_RELEASE = -O3
 CPPFLAGS_RELEASE = -DNDEBUG
 
-LIBFUSE_FILE_NAME = libfuse.so.2
+CFLAGS += -std=c99 -Wall -Wextra -Werror
+CFLAGS_DEBUG = -g
+CFLAGS_RELEASE = -O3
+
+CXXFLAGS += -std=c++11 -Wall -Wextra -Werror
+CXXFLAGS_DEBUG = -g
+CXXFLAGS_RELEASE = -O3
+
+# compiler and linker
+CC = gcc
+CXX = g++
 LINK_COMMAND = ld -shared
 LINK_FLAG_NAME = -soname
 LINK_FLAG_VERSION_SCRIPT = --version-script
+CXX_LDFLAGS = -lstdc++
+
+# libfuse file name
+LIBFUSE_FILE_NAME = libfuse.so.2
