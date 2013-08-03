@@ -26,7 +26,7 @@
 #undef _IS_HTTP_SERVER_C
 
 /* define opaque structures */
-struct _http_server {
+typedef struct _http_server {
   http_backend_t backend;
   event_handler_t handler;
   void *ud;
@@ -34,10 +34,9 @@ struct _http_server {
   size_t num_connections;
   event_handler_t stop_cb;
   void *stop_ud;
-};
-typedef struct _http_server HTTPServer;
+} HTTPServer;
 
-struct _http_request_context {
+typedef struct _http_request_context {
   struct _http_connection *conn;
   HTTPRequestHeaders rh;
   http_request_write_state_t write_state;
@@ -73,10 +72,9 @@ struct _http_request_context {
       size_t input_buf_offset;
     } chunked_read_ctx;
   } sub;
-};
-typedef struct _http_request_context HTTPRequestContext;
+} HTTPRequestContext;
 
-struct _http_connection {
+typedef struct _http_connection {
   UTHR_CTX_BASE;
   http_backend_handle_t handle;
   ReadBuffer f;
@@ -90,8 +88,7 @@ struct _http_connection {
     HTTPRequestHeaders req;
   } spare;
   struct _http_request_context rctx;
-};
-typedef struct _http_connection HTTPConnection;
+} HTTPConnection;
 
 const char *const HTTP_HEADER_CONNECTION = "Connection";
 const char *const HTTP_HEADER_CONTENT_LENGTH = "Content-Length";
