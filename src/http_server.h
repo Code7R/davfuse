@@ -4,10 +4,8 @@
 #include <stdint.h>
 
 #include "c_util.h"
-#include "coroutine.h"
-#include "coroutine_io.h"
 #include "events.h"
-#include "fdevent.h"
+#include "http_backend.h"
 #include "uthread.h"
 
 #ifdef __cplusplus
@@ -36,9 +34,10 @@ enum {
 
 /* forward decl */
 struct _http_server;
-typedef struct _http_server HTTPServer;
-struct _http_connection;
-typedef struct _http_connection HTTPConnection;
+struct _http_request_context;
+
+typedef struct _http_server *http_server_t;
+typedef struct _http_request_context *http_request_handle_t;
 
 struct _header_pair {
   char name[MAX_HEADER_NAME_SIZE];
@@ -86,22 +85,6 @@ typedef struct {
   struct _header_pair headers[MAX_NUM_HEADERS];
 } HTTPResponseHeaders;
 
-struct _http_request_context;
-typedef struct _http_request_context HTTPRequestContext;
-typedef HTTPRequestContext *http_request_handle_t;
-
-struct _http_server {
-  FDEventLoop *loop;
-  int fd;
-  fd_event_watch_key_t watch_key;
-  event_handler_t handler;
-  void *ud;
-  bool shutting_down;
-  size_t num_connections;
-  event_handler_t stop_cb;
-  void *stop_ud;
-};
-
 typedef struct {
   UTHR_CTX_BASE;
   /* args */
@@ -124,7 +107,7 @@ typedef struct {
   UTHR_CTX_BASE;
   /* args */
   const HTTPResponseHeaders *response_headers;
-  HTTPRequestContext *request_context;
+  struct _http_request_context *request_context;
   event_handler_t cb;
   void *cb_ud;
   /* state */
@@ -157,59 +140,6 @@ typedef enum {
   HTTP_REQUEST_WRITE_STATE_DONE,
 } http_request_write_state_t;
 
-struct _http_request_context {
-  HTTPConnection *conn;
-  HTTPRequestHeaders rh;
-  http_request_write_state_t write_state;
-  http_request_read_state_t read_state;
-  size_t out_content_length;
-  size_t bytes_written;
-  int last_error_number;
-  bool is_chunked_request;
-  union {
-    struct chunked_read_persist_ctx {
-      coroutine_position_t pos;
-      char var_buf[4096];
-      size_t chunk_size;
-      size_t chunk_read;
-      size_t amt_parsed;
-    } chunked_coro_ctx;
-    struct content_length_read_persist_ctx {
-      size_t content_length;
-      size_t bytes_read;
-    } content_length_read;
-  } persist_ctx;
-  union {
-    struct content_length_read_temp_ctx {
-      event_handler_t cb;
-      void *cb_ud;
-    } content_length_read_ctx;
-    WriteResponseState rws;
-    struct chunked_read_temp_ctx {
-      event_handler_t cb;
-      void *cb_ud;
-      void *input_buf;
-      size_t input_nbyte;
-      size_t input_buf_offset;
-    } chunked_read_ctx;
-  } sub;
-};
-
-struct _http_connection {
-  UTHR_CTX_BASE;
-  FDBuffer f;
-  HTTPServer *server;
-  /* these might become per-request,
-     right now we only do one request at a time,
-     i.e. no pipe-lining */
-  union {
-    char buffer[OUT_BUF_SIZE];
-    HTTPResponseHeaders rsp;
-    HTTPRequestHeaders req;
-  } spare;
-  HTTPRequestContext rctx;
-};
-
 typedef struct {
   http_request_handle_t request_handle;
   int err;
@@ -217,7 +147,7 @@ typedef struct {
 
 typedef struct {
   http_request_handle_t request_handle;
-  HTTPServer *server;
+  struct _http_server *server;
 } HTTPNewRequestEvent;
 
 typedef _SimpleRequestActionDoneEvent HTTPRequestReadHeadersDoneEvent;
@@ -225,20 +155,17 @@ typedef _SimpleRequestActionDoneEvent HTTPRequestWriteHeadersDoneEvent;
 typedef _SimpleRequestActionDoneEvent HTTPRequestWriteDoneEvent;
 
 typedef struct {
-  http_request_handle_t request_handle;
-  int err;
+  unsigned err;
   size_t nbyte;
 } HTTPRequestReadDoneEvent;
 
-NON_NULL_ARGS3(1, 2, 4) bool
-http_server_start(HTTPServer *http,
-		  FDEventLoop *loop,
-		  int fd,
-		  event_handler_t handler,
+NON_NULL_ARGS2(1, 2) http_server_t
+http_server_start(http_backend_t backend,
+                  event_handler_t handler,
 		  void *ud);
 
 void
-http_server_stop(HTTPServer *http,
+http_server_stop(http_server_t http,
                  event_handler_t cb, void *user_data);
 
 NON_NULL_ARGS3(1, 2, 3) void

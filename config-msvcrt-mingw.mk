@@ -1,21 +1,21 @@
 # Customize below to fit your system
 # This example is made for glibc/gcc
 FDEVENT_IMPL = select
-FSTATAT_IMPL = native
 HTTP_BACKEND_IMPL = fdevent
-HTTP_BACKEND_SOURCES = http_backend_fdevent.c fdevent_select.c
+SOCKET_IMPL = winsock
+SOCKET_LDFLAGS = -lws2_32
+HTTP_BACKEND_SOURCES = http_backend_fdevent.c fdevent_select.c socket_winsock.c
 
 # flags
 # this is used on linux for seamless 64-bit filesystem usage
 # on 32-bit systems
-CPPFLAGS += -D_FORTIFY_SOURCE=2 -D_FILE_OFFSET_BITS=64
 CPPFLAGS_RELEASE = -DNDEBUG
 
-CFLAGS += -std=c99 -Wall -Wextra -Werror -fPIC
+CFLAGS += -std=c99 -Wall -Wextra -Werror
 CFLAGS_DEBUG = -g
 CFLAGS_RELEASE = -O3
 
-CXXFLAGS += -std=c++11 -Wall -Wextra -Werror -fPIC
+CXXFLAGS += -std=c++11 -Wall -Wextra -Werror
 CXXFLAGS_DEBUG = -g
 CXXFLAGS_RELEASE = -O3
 

@@ -1,12 +1,8 @@
 #ifndef COROUTINE_IO_H
 #define COROUTINE_IO_H
 
-#include <errno.h>
-#include <sys/types.h>
-#include <sys/uio.h>
-#include <unistd.h>
-
 #include <assert.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -16,23 +12,48 @@
 #include "c_util.h"
 #include "coroutine.h"
 #include "events.h"
-#include "fdevent.h"
 #include "uthread.h"
 
 enum {
   _FD_BUFFER_BUF_SIZE=4096,
 };
 
+typedef void *read_fn_handle_t;
+
+typedef void (*read_fn_t)(read_fn_handle_t handle, void *buf, size_t nbyte,
+                          event_handler_t cb, void *ud);
+
+typedef int io_error_t;
+enum {
+  IO_ERROR_NONE,
+  IO_ERROR_GENERAL,
+};
+
 typedef struct {
-  int fd;
+  io_error_t error;
+  size_t nbyte;
+} IODoneEvent;
+
+typedef IODoneEvent ReadFnDoneEvent;
+typedef IODoneEvent WriteFnDoneEvent;
+
+/* used internally */
+typedef int io_ret_t;
+enum {
+  IO_RET_MAX=INT_MAX,
+};
+
+typedef struct {
+  read_fn_t read_fn;
+  read_fn_handle_t handle;
   char *buf_start;
   char *buf_end;
   char buf[_FD_BUFFER_BUF_SIZE];
   bool in_use;
-} FDBuffer;
+} ReadBuffer;
 
 HEADER_FUNCTION size_t
-read_from_fd_buffer(FDBuffer *f, void *buf, size_t nbyte) {
+read_from_fd_buffer(ReadBuffer *f, void *buf, size_t nbyte) {
   assert(!f->in_use);
   size_t to_copy = MIN((size_t) (f->buf_end - f->buf_start), nbyte);
   memmove(buf, f->buf_start, to_copy);
@@ -45,8 +66,7 @@ typedef struct {
   /* args */
   event_handler_t cb;
   void *ud;
-  FDEventLoop *loop;
-  FDBuffer *f;
+  ReadBuffer *f;
   int *out;
 } GetCState;
 
@@ -59,8 +79,7 @@ typedef struct {
   /* args */
   event_handler_t cb;
   void *ud;
-  FDEventLoop *loop;
-  FDBuffer *f;
+  ReadBuffer *f;
   char *buf;
   size_t buf_size;
   match_function_t match_fn;
@@ -74,8 +93,7 @@ typedef struct {
   UTHR_CTX_BASE;
   size_t amt_read;
   /* args */
-  FDEventLoop *loop;
-  FDBuffer *f;
+  ReadBuffer *f;
   size_t nbyte;
   void *buf;
   event_handler_t cb;
@@ -87,27 +105,7 @@ typedef struct {
   size_t nbyte;
 } CReadDoneEvent;
 
-typedef struct {
-  UTHR_CTX_BASE;
-  /* args */
-  FDEventLoop *loop;
-  int fd;
-  const void *buf;
-  size_t count;
-  ssize_t *ret;
-  event_handler_t cb;
-  void *ud;
-  /* state */
-  const void *buf_loc;
-  size_t count_left;
-} WriteAllState;
-
-typedef struct {
-  int error_number;
-  size_t nbyte;
-} CWriteAllDoneEvent;
-
-#define _FILL_BUF(ctx, loop, f, ret, _func, _func_ud)                   \
+#define _FILL_BUF(ctx, f, ret, _func, _func_ud)                         \
   do {                                                                  \
     assert((f)->buf_start == (f)->buf_end);                             \
     assert(sizeof((f)->buf));						\
@@ -116,29 +114,25 @@ typedef struct {
     (f)->buf_start = (f)->buf;                                          \
     (f)->buf_end = (f)->buf;                                            \
     (f)->in_use = true;                                                 \
-    while (true) {							\
-      *(ret) = read((f)->fd, (f)->buf, sizeof((f)->buf));               \
-      if (*(ret) < 0 && errno == EAGAIN) {                              \
-        bool __ret = fdevent_add_watch(loop, (f)->fd,                     \
-                                       create_stream_events(true, false), \
-                                       _func, _func_ud, NULL);          \
-        if (!__ret) { abort(); };                                       \
-        UTHR_YIELD(ctx, 0);                                             \
-        assert(UTHR_EVENT_TYPE() == FD_EVENT);                          \
-        continue;                                                       \
-      }                                                                 \
-      if (*(ret) > 0) {                                                 \
-        (f)->buf_end = (f)->buf_start + *(ret);                         \
-      }                                                                 \
-      break;								\
+    UTHR_YIELD(ctx,                                                     \
+               (f)->read_fn((f)->handle, (f)->buf, sizeof((f)->buf),    \
+                            _func, _func_ud));                          \
+    UTHR_RECEIVE_EVENT(READ_FN_DONE_EVENT, ReadFnDoneEvent,             \
+                       read_done_ev);                                   \
+    assert(read_done_ev->error || read_done_ev->nbyte < IO_RET_MAX);    \
+    *(ret) = read_done_ev->error                                        \
+      ? -read_done_ev->error                                            \
+      : (io_ret_t) read_done_ev->nbyte;                                 \
+    if (*(ret) > 0) {                                                   \
+      (f)->buf_end = (f)->buf_start + *(ret);                           \
     }                                                                   \
     (f)->in_use = false;                                                \
   }                                                                     \
   while (false)
 
-#define _C_FBPEEK(ctx, loop, f, out, _func, _func_ud, peek)		\
+#define _C_FBPEEK(ctx, f, out, _func, _func_ud, peek)                   \
   do {                                                                  \
-    ssize_t ret;                                                        \
+    io_ret_t ret;                                                       \
                                                                         \
     assert((peek) || !(f)->in_use);                                     \
                                                                         \
@@ -148,7 +142,7 @@ typedef struct {
       break;                                                            \
     }                                                                   \
                                                                         \
-    _FILL_BUF(ctx, loop, f, &ret, _func, _func_ud);                     \
+    _FILL_BUF(ctx, f, &ret, _func, _func_ud);                           \
     if (!ret) {                                                         \
       errno = 0;                                                        \
     }                                                                   \
@@ -159,10 +153,10 @@ typedef struct {
   }                                                                     \
   while (true)
 
-#define C_FBPEEK(ctx, loop, f, out, _func, _func_ud)	\
-  _C_FBPEEK(ctx, loop, f, out, _func, _func_ud, 1)
-#define C_FBGETC(ctx, loop, f, out, _func, _func_ud)	\
-  _C_FBPEEK(ctx, loop, f, out, _func, _func_ud, 0)
+#define C_FBPEEK(ctx, f, out, _func, _func_ud)	\
+  _C_FBPEEK(ctx, f, out, _func, _func_ud, 1)
+#define C_FBGETC(ctx, f, out, _func, _func_ud)	\
+  _C_FBPEEK(ctx, f, out, _func, _func_ud, 0)
 
 #define _FBPEEK(f, out, peek)                                           \
   do {                                                                  \
@@ -181,29 +175,27 @@ typedef struct {
 #define FBGETC(f, out) _FBPEEK(f, out, 0)
 
 void
-c_fbpeek(FDEventLoop *loop, FDBuffer *f, int *out,
+c_fbpeek(ReadBuffer *f, int *out,
          event_handler_t cb, void *ud);
+
 void
-c_fbgetc(FDEventLoop *loop, FDBuffer *f, int *out,
+c_fbgetc(ReadBuffer *f, int *out,
          event_handler_t handler, void *ud);
+
 int
-fbgetc(FDBuffer *f);
+fbgetc(ReadBuffer *f);
+
 int
-fbpeek(FDBuffer *f);
+fbpeek(ReadBuffer *f);
+
 void
-c_getwhile(FDEventLoop *loop, FDBuffer *f,
+c_getwhile(ReadBuffer *f,
            char *buf, size_t buf_size,
            match_function_t match_fn, size_t *parsed,
            event_handler_t cb, void *ud);
+
 void
-c_write_all(FDEventLoop *loop,
-            int fd,
-            const void *buf,
-            size_t nbyte,
-            event_handler_t cb,
-            void *cb_ud);
-void
-c_read(FDEventLoop *loop, FDBuffer *f,
+c_read(ReadBuffer *f,
        void *buf, size_t nbyte,
        event_handler_t cb, void *ud);
 

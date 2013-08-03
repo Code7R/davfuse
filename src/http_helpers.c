@@ -57,7 +57,6 @@ UTHR_DEFINE(_simple_response_uthr) {
                                         _simple_response_uthr, ctx));
   assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT);
   HTTPRequestWriteHeadersDoneEvent *write_headers_ev = UTHR_EVENT();
-  assert(write_headers_ev->request_handle == ctx->request_handle);
   if (write_headers_ev->err != HTTP_SUCCESS) {
     log_info("Writing headers failed!");
     goto error;
@@ -71,7 +70,6 @@ UTHR_DEFINE(_simple_response_uthr) {
                                   _simple_response_uthr, ctx));
     assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_WRITE_DONE_EVENT);
     HTTPRequestWriteDoneEvent *write_ev = UTHR_EVENT();
-    assert(write_ev->request_handle == ctx->request_handle);
     if (write_ev->err != HTTP_SUCCESS) {
       log_info("Writing response body failed!");
       goto error;
@@ -152,7 +150,6 @@ UTHR_DEFINE(_read_request_body) {
                                  _read_request_body, ctx));
     assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_READ_DONE_EVENT);
     HTTPRequestReadDoneEvent *read_done_ev = UTHR_EVENT();
-    assert(read_done_ev->request_handle = ctx->request_handle);
     if (!read_done_ev->nbyte) {
       /* EOF */
       break;

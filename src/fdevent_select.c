@@ -1,6 +1,3 @@
-#include <errno.h>
-#include <sys/select.h>
-
 #include <assert.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -8,18 +5,43 @@
 #include "c_util.h"
 #include "events.h"
 #include "logging.h"
+#include "socket.h"
+
 #include "fdevent_select.h"
 
-NON_NULL_ARGS0() bool
-fdevent_init(FDEventLoop *loop) {
-  assert(loop);
+/* opaque structures */
+typedef struct {
+  fd_t fd;
+  void *ud;
+  StreamEvents events;
+  event_handler_t handler;
+} FDEventWatcher;
+
+typedef struct _fdevent_link {
+  FDEventWatcher ew;
+  struct _fdevent_link *prev;
+  struct _fdevent_link *next;
+  bool active;
+} FDEventLink;
+
+typedef struct _fd_event_loop {
+  FDEventLink *ll;
+} FDEventLoop;
+
+NON_NULL_ARGS0() fdevent_loop_t
+fdevent_new(void) {
+  FDEventLoop *loop = malloc(sizeof(*loop));
+  if (!loop) {
+    return NULL;
+  }
+
   loop->ll = NULL;
-  return true;
+  return loop;
 }
 
 NON_NULL_ARGS2(1, 4) bool
-fdevent_add_watch(FDEventLoop *loop,
-                  int fd,
+fdevent_add_watch(fdevent_loop_t loop,
+                  fd_t fd,
                   StreamEvents events,
                   event_handler_t handler,
                   void *ud,
@@ -59,7 +81,7 @@ fdevent_add_watch(FDEventLoop *loop,
 }
 
 NON_NULL_ARGS0() bool
-fdevent_remove_watch(FDEventLoop *loop,
+fdevent_remove_watch(fdevent_loop_t loop,
                      fd_event_watch_key_t key) {
   UNUSED(loop);
 
@@ -94,11 +116,12 @@ _actually_free_link(FDEventLoop *loop, FDEventLink *ll) {
 }
 
 bool
-fdevent_main_loop(FDEventLoop *loop) {
-
+fdevent_main_loop(fdevent_loop_t loop) {
   while (true) {
     fd_set readfds, writefds;
     int nfds = -1;
+    unsigned readfds_watched = 0;
+    unsigned writefds_watched = 0;
     FDEventLink *ll = loop->ll;
 
     log_info("Looping...");
@@ -116,30 +139,34 @@ fdevent_main_loop(FDEventLoop *loop) {
       }
 
       if (ll->ew.events.read) {
-        if (ll->ew.fd >= FD_SETSIZE) {
-          log_critical("Totally invalid file descriptor for read! %d",
-                       ll->ew.fd);
-          abort();
-        }
         log_debug("Adding fd %d (%p) to read set", ll->ew.fd, ll);
 	FD_SET(ll->ew.fd, &readfds);
+        readfds_watched += 1;
       }
 
       if (ll->ew.events.write) {
-        if (ll->ew.fd >= FD_SETSIZE) {
-          log_critical("Totally invalid file descriptor for write! %d",
-                       ll->ew.fd);
-          abort();
-        }
         log_debug("Adding fd %d (%p) to write set", ll->ew.fd, ll);
 	FD_SET(ll->ew.fd, &writefds);
+        writefds_watched += 1;
       }
 
-      if (ll->ew.fd > nfds) {
+      if ((int) ll->ew.fd > nfds) {
 	nfds = ll->ew.fd;
       }
 
       ll = ll->next;
+    }
+
+    if (writefds_watched >= FD_SETSIZE) {
+      log_critical("Too many write fds being watched: %d vs MAX %d",
+                   writefds_watched, FD_SETSIZE);
+      abort();
+    }
+
+    if (readfds_watched >= FD_SETSIZE) {
+      log_critical("Too many read fds being watched: %d vs MAX %d",
+                   readfds_watched, FD_SETSIZE);
+      abort();
     }
 
     /* if there is nothing to select for, then stop the main loop */
@@ -148,7 +175,7 @@ fdevent_main_loop(FDEventLoop *loop) {
     }
 
     while (select(nfds + 1, &readfds, &writefds, NULL, NULL) < 0) {
-      if (errno != EINTR) {
+      if (last_socket_error() != SOCKET_EINTR) {
         log_error_errno("Error while doing select()");
         return false;
       }
@@ -165,7 +192,7 @@ fdevent_main_loop(FDEventLoop *loop) {
         if ((events.read && ll->ew.events.read) ||
             (events.write && ll->ew.events.write)) {
           event_handler_t h = ll->ew.handler;
-          int fd = ll->ew.fd;
+          fd_t fd = ll->ew.fd;
           void *ud = ll->ew.ud;
           FDEvent e = (FDEvent) {
             .loop = loop,

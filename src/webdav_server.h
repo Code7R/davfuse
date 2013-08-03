@@ -65,9 +65,9 @@ void
 webdav_destroy_propfind_entry(webdav_propfind_entry_t pfe);
 
 webdav_server_t
-webdav_server_start(FDEventLoop *loop,
-		    int server_fd,
-		    const char *public_prefix,
+webdav_server_start(HTTPBackendOperations *ops,
+                    void *ops_ud,
+                    const char *public_prefix,
 		    webdav_backend_t fs);
 
 void

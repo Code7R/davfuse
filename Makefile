@@ -20,13 +20,13 @@ CFLAGS += ${CFLAGS_DEBUG}
 #CFLAGS += ${CFLAGS_RELEASE}
 #CPPFLAGS += ${CPPFLAGS_RELEASE}
 # Cross-platform essential build flags
-CFLAGS += ${CPPFLAGS}
 
 CXXFLAGS += ${CXXFLAGS_DEBUG}
-CXXFLAGS += ${CPPFLAGS}
 
-FDEVENT_MODULE := fdevent_${FDEVENT_SOURCE}
-FSTATAT_MODULE := fstatat_${FSTATAT_SOURCE}
+FDEVENT_MODULE := fdevent_${FDEVENT_IMPL}
+FSTATAT_MODULE := fstatat_${FSTATAT_IMPL}
+HTTP_BACKEND_MODULE := http_backend_${HTTP_BACKEND_IMPL}
+SOCKET_MODULE := socket_${SOCKET_IMPL}
 
 # Different xml backends for the webdav server
 WEBDAV_SERVER_XML_IMPL := webdav_server_xml_tinyxml2.cpp tinyxml2.cpp
@@ -39,8 +39,8 @@ WEBDAV_LDFLAGS := ${CXX_LDFLAGS}
 MAKEFILES := config.mk Makefile
 
 # Files in $SRCROOT
-HTTP_SERVER_SRC_ := ${FDEVENT_MODULE}.c http_server.c logging.c fd_utils.c coroutine_io.c util.c http_helpers.c file_utils.c dfs.c
-TEST_HTTP_UNIQUE_SRC_ := test_http_server.c 
+HTTP_SERVER_SRC_ := http_server.c coroutine_io.c logging.c util.c http_helpers.c ${HTTP_BACKEND_SOURCES}
+TEST_HTTP_UNIQUE_SRC_ := test_http_server.c socket_utils.c
 
 WEBDAV_SERVER_SRC_ := ${HTTP_SERVER_SRC_} webdav_server.c ${WEBDAV_SERVER_XML_IMPL} webdav_server_common.c
 POSIX_FS_WEBDAV_SERVER_UNIQUE_SRC_ = posix_fs_webdav_server.c ${FSTATAT_MODULE}.c
@@ -82,11 +82,13 @@ options:
 	@echo "CFLAGS          = ${CFLAGS}"
 	@echo "CXXFLAGS        = ${CXXFLAGS}"
 	@echo "LDFLAGS         = ${LDFLAGS}"
+	@echo "SOCKET_LDFLAGS  = ${SOCKET_LDFLAGS}"
 	@echo "WEBDAV_LDFLAGS  = ${WEBDAV_LDFLAGS}"
 	@echo "CC              = ${CC}"
 	@echo "CXX             = ${CXX}"
 	@echo "LINK_COMMAND    = ${LINK_COMMAND}"
 
+test_http_server: options ${TEST_HTTP_SERVER_TARGET}
 posix_fs_webdav_server: options ${POSIX_FS_WEBDAV_SERVER_TARGET}
 libdavfuse: options ${LIBFUSE_TARGET}
 davfuse: options ${DAVFUSE_TARGET}
@@ -109,6 +111,18 @@ ${GENHROOT}/fstatat.h: ${SRCROOT}/${FSTATAT_MODULE}.h ${MAKEFILES}
 	@cp ${SRCROOT}/${FSTATAT_MODULE}.h $@
 	@echo ' Done!'
 
+${GENHROOT}/http_backend.h: ${SRCROOT}/${HTTP_BACKEND_MODULE}.h ${MAKEFILES}
+	@mkdir -p $(dir $@)
+	@echo -n Generating http_backend.h...
+	@cp ${SRCROOT}/${HTTP_BACKEND_MODULE}.h $@
+	@echo ' Done!'
+
+${GENHROOT}/socket.h: ${SRCROOT}/${SOCKET_MODULE}.h ${MAKEFILES}
+	@mkdir -p $(dir $@)
+	@echo -n Generating socket.h...
+	@cp ${SRCROOT}/${SOCKET_MODULE}.h $@
+	@echo ' Done!'
+
 ${DAVFUSE_TARGET}: generate-davfuse.sh ${MAKEFILES} ${LIBFUSE_TARGET}
 	@mkdir -p $(dir $@)
 	@echo Running generate-davfuse.sh...
@@ -120,57 +134,61 @@ ${DAVFUSE_TARGET}: generate-davfuse.sh ${MAKEFILES} ${LIBFUSE_TARGET}
 ${OBJROOT}/%.c.o: ${SRCROOT}/%.c
 	@mkdir -p ${OBJROOT}
 	@mkdir -p ${GENHROOT}
-	@[ -e ${GENHROOT}/config.h ] || cp config.def.h ${GENHROOT}/config.h
-	@[ -e ${GENHROOT}/fdevent.h ] || cp ${SRCROOT}/${FDEVENT_MODULE}.h ${GENHROOT}/fdevent.h
-	@[ -e ${GENHROOT}/fstatat.h ] || cp ${SRCROOT}/${FSTATAT_MODULE}.h ${GENHROOT}/fstatat.h
+	@[ ! "${GENHROOT}/config.h" -ot config.def.h ] || (cp config.def.h "${GENHROOT}/config.h")
+	@[ ! "${GENHROOT}/fdevent.h" -ot "${SRCROOT}/${FDEVENT_MODULE}.h" ] || (cp "${SRCROOT}/${FDEVENT_MODULE}.h" "${GENHROOT}/fdevent.h")
+	@[ ! "${GENHROOT}/fstatat.h" -ot "${SRCROOT}/${FSTATAT_MODULE}.h" ] || (cp "${SRCROOT}/${FSTATAT_MODULE}.h" "${GENHROOT}/fstatat.h")
+	@[ ! "${GENHROOT}/http_backend.h" -ot "${SRCROOT}/${HTTP_BACKEND_MODULE}.h" ] || (cp "${SRCROOT}/${HTTP_BACKEND_MODULE}.h" "${GENHROOT}/http_backend.h")
+	@[ ! "${GENHROOT}/socket.h" -ot "${SRCROOT}/${SOCKET_MODULE}.h" ] || (cp "${SRCROOT}/${SOCKET_MODULE}.h" "${GENHROOT}/socket.h")
 	@${MAKEDEPEND_CC}; \
 		cp ${df}.d ${Df}.c.P; \
 		sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
 			-e '/^$$/ d' -e 's/$$/ :/' < ${df}.d >> ${df}.c.P; \
 		rm -f ${df}.d
 	@echo CC $(notdir $<)
-	@${CC} ${CFLAGS} -c -o $@ -fPIC $<
+	@${CC} ${CPPFLAGS} ${CFLAGS} -c -o $@ $<
 
 ${OBJROOT}/%.cpp.o: ${SRCROOT}/%.cpp
 	@mkdir -p ${OBJROOT}
 	@mkdir -p ${GENHROOT}
-	@[ -e ${GENHROOT}/config.h ] || cp config.def.h ${GENHROOT}/config.h
-	@[ -e ${GENHROOT}/fdevent.h ] || cp ${SRCROOT}/${FDEVENT_MODULE}.h ${GENHROOT}/fdevent.h
-	@[ -e ${GENHROOT}/fstatat.h ] || cp ${SRCROOT}/${FSTATAT_MODULE}.h ${GENHROOT}/fstatat.h
+	@[ ! "${GENHROOT}/config.h" -ot config.def.h ] || (cp config.def.h "${GENHROOT}/config.h")
+	@[ ! "${GENHROOT}/fdevent.h" -ot "${SRCROOT}/${FDEVENT_MODULE}.h" ] || (cp "${SRCROOT}/${FDEVENT_MODULE}.h" "${GENHROOT}/fdevent.h")
+	@[ ! "${GENHROOT}/fstatat.h" -ot "${SRCROOT}/${FSTATAT_MODULE}.h" ] || (cp "${SRCROOT}/${FSTATAT_MODULE}.h" "${GENHROOT}/fstatat.h")
+	@[ ! "${GENHROOT}/http_backend.h" -ot "${SRCROOT}/${HTTP_BACKEND_MODULE}.h" ] || (cp "${SRCROOT}/${HTTP_BACKEND_MODULE}.h" "${GENHROOT}/http_backend.h")
+	@[ ! "${GENHROOT}/socket.h" -ot "${SRCROOT}/${SOCKET_MODULE}.h" ] || (cp "${SRCROOT}/${SOCKET_MODULE}.h" "${GENHROOT}/socket.h")
 	@${MAKEDEPEND_CXX}; \
 		cp ${df}.d ${df}.cpp.P; \
 		sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
 			-e '/^$$/ d' -e 's/$$/ :/' < ${df}.d >> ${df}.cpp.P; \
 		rm -f ${df}.d
 	@echo CXX $(notdir $<)
-	@${CXX} ${CXXFLAGS} -c -o $@ -fPIC $<
+	@${CXX} ${CPPFLAGS} ${CXXFLAGS} -c -o $@ $<
 
 ${ALL_OBJ}: ${MAKEFILES}
 
 ${TEST_HTTP_SERVER_TARGET}: ${TEST_HTTP_SERVER_OBJ}
 	@mkdir -p $(dir $@)
 	@echo Linking $(notdir $@)
-	@${CC} -o $@ $^ ${LDFLAGS}
+	@${CC} -o $@ $^ ${LDFLAGS} ${SOCKET_LDFLAGS}
 
 ${POSIX_FS_WEBDAV_SERVER_TARGET}: ${POSIX_FS_WEBDAV_SERVER_OBJ}
 	@mkdir -p $(dir $@)
 	@echo Linking $(notdir $@)
-	@${CC} -o $@ $^ ${LDFLAGS} ${WEBDAV_LDFLAGS}
+	@${CC} -o $@ $^ ${LDFLAGS} ${WEBDAV_LDFLAGS} ${SOCKET_LDFLAGS}
 
 ${LIBFUSE_TARGET}: ${LIBFUSE_OBJ}
 	@mkdir -p $(dir $@)
 	@echo Linking $(notdir $@)
-	@${LINK_COMMAND} ${LINK_FLAG_NAME} $(notdir $@) $(if ${LINK_FLAG_VERSION_SCRIPT}, ${LINK_FLAG_VERSION_SCRIPT} fuse_versionscript) -o $@ $^ ${LDFLAGS} ${WEBDAV_LDFLAGS}
+	@${LINK_COMMAND} ${LINK_FLAG_NAME} $(notdir $@) $(if ${LINK_FLAG_VERSION_SCRIPT}, ${LINK_FLAG_VERSION_SCRIPT} fuse_versionscript) -o $@ $^ ${LDFLAGS} ${WEBDAV_LDFLAGS} ${SOCKET_LDFLAGS}
 
 # for dependency auto generateion
 DEPDIR := .deps
 df = ${DEPDIR}/${*F}
-MAKEDEPEND_CC = mkdir -p ${DEPDIR}; gcc -M -MT $@ ${CFLAGS} -o ${df}.d $<
-MAKEDEPEND_CXX = mkdir -p ${DEPDIR}; gcc -M -MT $@ ${CXXFLAGS} -o ${df}.d $<
+MAKEDEPEND_CC = mkdir -p ${DEPDIR}; gcc -M -MT $@ ${CPPFLAGS} ${CFLAGS} -o ${df}.d $<
+MAKEDEPEND_CXX = mkdir -p ${DEPDIR}; gcc -M -MT $@ ${CPPFLAGS} ${CXXFLAGS} -o ${df}.d $<
 
 -include $(ALL_SRC:${SRCROOT}/%=$(DEPDIR)/%.P)
 
 clean:
 	-rm -rf ${DEPDIR} ${OUTROOT}
 
-.PHONY: all options clean posix_fs_webdav_server libdavfuse .make_depends_stuff
+.PHONY: all options clean posix_fs_webdav_server libdavfuse test_http_server
