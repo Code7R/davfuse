@@ -33,7 +33,6 @@ EOF
 export PARENT_PID=$$
 cat "$INTERFACE_DEF" | (
     REGEX='^ *\([a-zA-Z]\([0-9a-zA-Z_]*[0-9a-zA-Z]\)\{0,1\}\)\{0,1\} *\(# *\(.*\) *\)\{0,1\}$'
-    PRINTED_SYMBOL=0
     while read LINE; do
         if ! ( echo "$LINE" | grep "$REGEX" > /dev/null ); then
             # bad file
@@ -41,15 +40,14 @@ cat "$INTERFACE_DEF" | (
         fi
         COMMENT=$(echo "$LINE" | sed "s/${REGEX}/\4/g")
         if [ ! -z "$COMMENT" ]; then
-            if [ $PRINTED_SYMBOL -eq 1 ]; then
-                echo
-            fi
             echo "/* $COMMENT */"
         fi
 
         SYMBOL=$(echo "$LINE" | sed "s/${REGEX}/\1/g")
         if [ -z "$SYMBOL" ]; then
-            PRINTED_SYMBOL=0
+            if [ -z "$COMMENT" ]; then
+                echo
+            fi
             continue
         fi
 
