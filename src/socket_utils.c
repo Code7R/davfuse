@@ -3,6 +3,11 @@
 
 #include "socket_utils.h"
 
+const char *
+last_socket_error_message(void) {
+  return socket_error_message(last_socket_error());
+}
+
 void
 init_sockaddr_in(struct sockaddr_in *addr, port_t port) {
   memset(addr, 0, sizeof(*addr));
@@ -19,8 +24,7 @@ create_bound_socket(const struct sockaddr *addr, socklen_t addr_len) {
 
   socket_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (socket_fd == INVALID_SOCKET) {
-    log_info("what %u", WSAGetLastError());
-    log_error_errno("socket");
+    log_error("socket: %s", last_socket_error_message());
     goto error;
   }
 
@@ -35,13 +39,13 @@ create_bound_socket(const struct sockaddr *addr, socklen_t addr_len) {
 
   ret = bind(socket_fd, addr, addr_len);
   if (ret) {
-    log_error_errno("bind");
+    log_error("bind: %s", last_socket_error_message());
     goto error;
   }
 
   ret = listen(socket_fd, 5);
   if (ret) {
-    log_error_errno("listen");
+    log_error("listen: %s", last_socket_error_message());
     goto error;
   }
 

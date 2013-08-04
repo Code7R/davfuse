@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 #include "logging.h"
+
 #include "socket_winsock.h"
 
 bool

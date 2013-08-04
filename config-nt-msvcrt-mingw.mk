@@ -1,5 +1,5 @@
 # Customize below to fit your system
-# This example is made for glibc/gcc
+# This example is made for nt/msvcrt/mingw
 FDEVENT_IMPL = select
 HTTP_BACKEND_IMPL = fdevent
 SOCKET_IMPL = winsock
@@ -7,8 +7,6 @@ SOCKET_LDFLAGS = -lws2_32
 HTTP_BACKEND_SOURCES = http_backend_fdevent.c fdevent_select.c socket_winsock.c
 
 # flags
-# this is used on linux for seamless 64-bit filesystem usage
-# on 32-bit systems
 CPPFLAGS_RELEASE = -DNDEBUG
 
 CFLAGS += -std=c99 -Wall -Wextra -Werror

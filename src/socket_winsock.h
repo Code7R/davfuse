@@ -27,12 +27,12 @@ last_socket_error(void) {
   return WSAGetLastError();
 }
 
-#define _INCLUDE_SOCKET_COMMON_H
-#include "_socket_common.h"
-#undef _INCLUDE_SOCKET_COMMON_H
-
 #ifdef __cplusplus
 }
 #endif
+
+#define _INCLUDE_SOCKET_COMMON_H
+#include "_socket_common.h"
+#undef _INCLUDE_SOCKET_COMMON_H
 
 #endif

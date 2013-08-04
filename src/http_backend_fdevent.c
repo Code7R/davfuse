@@ -153,7 +153,7 @@ UTHR_DEFINE(_http_backend_read_uthr) {
   socket_ssize_t ret;
   while (true) {
     ret = recv(ctx->handle, ctx->buf, ctx->nbyte, 0);
-    if (ret == SOCKET_ERROR) {
+    if (ret != SOCKET_ERROR) {
       break;
     }
 
@@ -173,8 +173,8 @@ UTHR_DEFINE(_http_backend_read_uthr) {
       }
     }
     else {
-      log_error("Error while calling read(): %d",
-                last_socket_error());
+      log_error("Error while calling read(): %s",
+                last_socket_error_message());
       break;
     }
   }

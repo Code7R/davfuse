@@ -14,6 +14,9 @@ enum {
   MAX_PORT=UINT16_MAX,
 };
 
+const char *
+last_socket_error_message(void);
+
 void
 init_sockaddr_in(struct sockaddr_in *addr, port_t port);
 

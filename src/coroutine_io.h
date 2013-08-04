@@ -143,9 +143,6 @@ typedef struct {
     }                                                                   \
                                                                         \
     _FILL_BUF(ctx, f, &ret, _func, _func_ud);                           \
-    if (!ret) {                                                         \
-      errno = 0;                                                        \
-    }                                                                   \
     if (ret <= 0) {                                                     \
       *(out) = EOF;							\
       break;                                                            \
