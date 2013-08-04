@@ -6,6 +6,7 @@
 #include "events.h"
 #include "logging.h"
 #include "socket.h"
+#include "socket_utils.h"
 
 #include "fdevent_select.h"
 
@@ -176,7 +177,8 @@ fdevent_select_main_loop(fdevent_select_loop_t loop) {
 
     while (select(nfds + 1, &readfds, &writefds, NULL, NULL) < 0) {
       if (last_socket_error() != SOCKET_EINTR) {
-        log_error_errno("Error while doing select()");
+        log_error("Error while doing select(): %s",
+                  last_socket_error_message());
         return false;
       }
     }
