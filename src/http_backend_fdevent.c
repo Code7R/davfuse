@@ -13,7 +13,7 @@
 typedef struct _http_backend {
   fdevent_loop_t loop;
   fd_t serv_socket;
-  fd_event_watch_key_t accept_key;
+  fdevent_watch_key_t accept_key;
 } HTTPBackend;
 
 http_backend_t
@@ -97,7 +97,7 @@ UTHR_DEFINE(_http_backend_accept_uthr) {
       }
       else {
         UTHR_YIELD(ctx, 0);
-        ctx->backend->accept_key = FD_EVENT_INVALID_WATCH_KEY;
+        ctx->backend->accept_key = FDEVENT_INVALID_WATCH_KEY;
       }
     }
     else {

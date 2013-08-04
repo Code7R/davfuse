@@ -28,8 +28,8 @@ typedef struct _fd_event_loop {
   FDEventLink *ll;
 } FDEventLoop;
 
-NON_NULL_ARGS0() fdevent_loop_t
-fdevent_new(void) {
+NON_NULL_ARGS0() fdevent_select_loop_t
+fdevent_select_new(void) {
   FDEventLoop *loop = malloc(sizeof(*loop));
   if (!loop) {
     return NULL;
@@ -40,12 +40,12 @@ fdevent_new(void) {
 }
 
 NON_NULL_ARGS2(1, 4) bool
-fdevent_add_watch(fdevent_loop_t loop,
-                  fd_t fd,
-                  StreamEvents events,
-                  event_handler_t handler,
-                  void *ud,
-                  fd_event_watch_key_t *key) {
+fdevent_select_add_watch(fdevent_select_loop_t loop,
+                         fd_t fd,
+                         StreamEvents events,
+                         event_handler_t handler,
+                         void *ud,
+                         fdevent_select_watch_key_t *key) {
   FDEventLink *ew;
 
   assert(loop);
@@ -53,7 +53,7 @@ fdevent_add_watch(fdevent_loop_t loop,
 
   ew = malloc(sizeof(*ew));
   if (!ew) {
-    *key = FD_EVENT_INVALID_WATCH_KEY;
+    *key = FDEVENT_SELECT_INVALID_WATCH_KEY;
     return false;
   }
 
@@ -81,11 +81,11 @@ fdevent_add_watch(fdevent_loop_t loop,
 }
 
 NON_NULL_ARGS0() bool
-fdevent_remove_watch(fdevent_loop_t loop,
-                     fd_event_watch_key_t key) {
+fdevent_select_remove_watch(fdevent_select_loop_t loop,
+                            fdevent_select_watch_key_t key) {
   UNUSED(loop);
 
-  /* fd_event_watch_key_t types are actually pointers to FDEventLink types */
+  /* fdevent_select_watch_key_t types are actually pointers to FDEventLink types */
   FDEventLink *ll = key;
 
   assert(loop);
@@ -116,7 +116,7 @@ _actually_free_link(FDEventLoop *loop, FDEventLink *ll) {
 }
 
 bool
-fdevent_main_loop(fdevent_loop_t loop) {
+fdevent_select_main_loop(fdevent_select_loop_t loop) {
   while (true) {
     fd_set readfds, writefds;
     int nfds = -1;
@@ -194,12 +194,12 @@ fdevent_main_loop(fdevent_loop_t loop) {
           event_handler_t h = ll->ew.handler;
           fd_t fd = ll->ew.fd;
           void *ud = ll->ew.ud;
-          FDEvent e = (FDEvent) {
+          FdeventSelectEvent e = (FdeventSelectEvent) {
             .loop = loop,
             .fd = fd,
             .events = events,
           };
-          fdevent_remove_watch(loop, ll);
+          fdevent_select_remove_watch(loop, ll);
           h(FD_EVENT, &e, ud);
         }
       }

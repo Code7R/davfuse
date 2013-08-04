@@ -1,0 +1,15 @@
+# constants
+INVALID_WATCH_KEY
+
+# integral types
+loop_t
+watch_key_t
+
+# transparent struct types
+Event
+
+# functions
+new
+add_watch
+remove_watch
+main_loop

@@ -75,6 +75,9 @@ DAVFUSE_TARGET := ${TARGETROOT}/davfuse
 ALL_TARGETS := ${TEST_HTTP_SERVER_TARGET} ${POSIX_FS_WEBDAV_SERVER_TARGET} \
 	${LIBFUSE_TARGET} ${DAVFUSE_TARGET}
 
+GEN_HEADERS_ := fdevent.h fstatat.h socket.h http_backend.h
+GEN_HEADERS := $(patsubst %,${GENHROOT}/%,${GEN_HEADERS_})
+
 all: options ${ALL_TARGETS}
 
 options:
@@ -93,34 +96,10 @@ posix_fs_webdav_server: options ${POSIX_FS_WEBDAV_SERVER_TARGET}
 libdavfuse: options ${LIBFUSE_TARGET}
 davfuse: options ${DAVFUSE_TARGET}
 
-${GENHROOT}/config.h: config.def.h ${MAKEFILES}
+${GENHROOT}/%.h: ${SRCROOT}/%.idef
 	@mkdir -p $(dir $@)
-	@echo -n Generating config.h...
-	@cp config.def.h $@
-	@echo ' Done!'
-
-${GENHROOT}/fdevent.h: ${SRCROOT}/${FDEVENT_MODULE}.h ${MAKEFILES}
-	@mkdir -p $(dir $@)
-	@echo -n Generating fdevent.h...
-	@cp ${SRCROOT}/${FDEVENT_MODULE}.h $@
-	@echo ' Done!'
-
-${GENHROOT}/fstatat.h: ${SRCROOT}/${FSTATAT_MODULE}.h ${MAKEFILES}
-	@mkdir -p $(dir $@)
-	@echo -n Generating fstatat.h...
-	@cp ${SRCROOT}/${FSTATAT_MODULE}.h $@
-	@echo ' Done!'
-
-${GENHROOT}/http_backend.h: ${SRCROOT}/${HTTP_BACKEND_MODULE}.h ${MAKEFILES}
-	@mkdir -p $(dir $@)
-	@echo -n Generating http_backend.h...
-	@cp ${SRCROOT}/${HTTP_BACKEND_MODULE}.h $@
-	@echo ' Done!'
-
-${GENHROOT}/socket.h: ${SRCROOT}/${SOCKET_MODULE}.h ${MAKEFILES}
-	@mkdir -p $(dir $@)
-	@echo -n Generating socket.h...
-	@cp ${SRCROOT}/${SOCKET_MODULE}.h $@
+	@echo -n Generating $(notdir $@)
+	@FDEVENT_IMPL=${FDEVENT_IMPL} FSTATAT_IMPL=${FSTATAT_IMPL} HTTP_BACKEND_IMPL=${HTTP_BACKEND_IMPL} SOCKET_IMPL=${SOCKET_IMPL} sh generate-interface-implementation.sh $^ > $@
 	@echo ' Done!'
 
 ${DAVFUSE_TARGET}: generate-davfuse.sh ${MAKEFILES} ${LIBFUSE_TARGET}
@@ -130,15 +109,8 @@ ${DAVFUSE_TARGET}: generate-davfuse.sh ${MAKEFILES} ${LIBFUSE_TARGET}
 	@chmod a+x $@
 	@echo ' Done!'
 
-# always copy over config.h and fdevent.h before doing makedepends
 ${OBJROOT}/%.c.o: ${SRCROOT}/%.c
 	@mkdir -p ${OBJROOT}
-	@mkdir -p ${GENHROOT}
-	@[ ! "${GENHROOT}/config.h" -ot config.def.h ] || (cp config.def.h "${GENHROOT}/config.h")
-	@[ ! "${GENHROOT}/fdevent.h" -ot "${SRCROOT}/${FDEVENT_MODULE}.h" ] || (cp "${SRCROOT}/${FDEVENT_MODULE}.h" "${GENHROOT}/fdevent.h")
-	@[ ! "${GENHROOT}/fstatat.h" -ot "${SRCROOT}/${FSTATAT_MODULE}.h" ] || (cp "${SRCROOT}/${FSTATAT_MODULE}.h" "${GENHROOT}/fstatat.h")
-	@[ ! "${GENHROOT}/http_backend.h" -ot "${SRCROOT}/${HTTP_BACKEND_MODULE}.h" ] || (cp "${SRCROOT}/${HTTP_BACKEND_MODULE}.h" "${GENHROOT}/http_backend.h")
-	@[ ! "${GENHROOT}/socket.h" -ot "${SRCROOT}/${SOCKET_MODULE}.h" ] || (cp "${SRCROOT}/${SOCKET_MODULE}.h" "${GENHROOT}/socket.h")
 	@${MAKEDEPEND_CC}; \
 		cp ${df}.d ${Df}.c.P; \
 		sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
@@ -149,12 +121,6 @@ ${OBJROOT}/%.c.o: ${SRCROOT}/%.c
 
 ${OBJROOT}/%.cpp.o: ${SRCROOT}/%.cpp
 	@mkdir -p ${OBJROOT}
-	@mkdir -p ${GENHROOT}
-	@[ ! "${GENHROOT}/config.h" -ot config.def.h ] || (cp config.def.h "${GENHROOT}/config.h")
-	@[ ! "${GENHROOT}/fdevent.h" -ot "${SRCROOT}/${FDEVENT_MODULE}.h" ] || (cp "${SRCROOT}/${FDEVENT_MODULE}.h" "${GENHROOT}/fdevent.h")
-	@[ ! "${GENHROOT}/fstatat.h" -ot "${SRCROOT}/${FSTATAT_MODULE}.h" ] || (cp "${SRCROOT}/${FSTATAT_MODULE}.h" "${GENHROOT}/fstatat.h")
-	@[ ! "${GENHROOT}/http_backend.h" -ot "${SRCROOT}/${HTTP_BACKEND_MODULE}.h" ] || (cp "${SRCROOT}/${HTTP_BACKEND_MODULE}.h" "${GENHROOT}/http_backend.h")
-	@[ ! "${GENHROOT}/socket.h" -ot "${SRCROOT}/${SOCKET_MODULE}.h" ] || (cp "${SRCROOT}/${SOCKET_MODULE}.h" "${GENHROOT}/socket.h")
 	@${MAKEDEPEND_CXX}; \
 		cp ${df}.d ${df}.cpp.P; \
 		sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
@@ -163,7 +129,7 @@ ${OBJROOT}/%.cpp.o: ${SRCROOT}/%.cpp
 	@echo CXX $(notdir $<)
 	@${CXX} ${CPPFLAGS} ${CXXFLAGS} -c -o $@ $<
 
-${ALL_OBJ}: ${MAKEFILES}
+${ALL_OBJ}: ${MAKEFILES} ${GEN_HEADERS}
 
 ${TEST_HTTP_SERVER_TARGET}: ${TEST_HTTP_SERVER_OBJ}
 	@mkdir -p $(dir $@)
