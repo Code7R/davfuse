@@ -846,13 +846,7 @@ UTHR_DEFINE(c_get_request) {
     }                                                           \
     if ((char) state->c != (_c)) {                              \
       if (state->c == EOF) {                                    \
-        if (errno) {                                            \
-          log_error("ERROR, while expecting '%c': %s",          \
-                    (_c), strerror(errno));                     \
-        }                                                       \
-        else {                                                  \
-          log_error("Got EOF, while expecting '%c'", (_c));     \
-        }                                                       \
+        log_error("Got EOF, while expecting '%c'", (_c));       \
       }                                                         \
       else {                                                    \
         log_error("Didn't get the character we "                \
