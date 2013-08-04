@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "events.h"
+#include "fdevent.h"
 #include "http_backend_fdevent.h"
 #include "http_server.h"
 #include "logging.h"

@@ -1,6 +1,7 @@
 # Customize below to fit your system
 # This example is made for nt/msvcrt/mingw
 FDEVENT_IMPL = select
+FSTATAT_IMPL = none
 HTTP_BACKEND_IMPL = fdevent
 SOCKET_IMPL = winsock
 SOCKET_LDFLAGS = -lws2_32

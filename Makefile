@@ -23,10 +23,7 @@ CFLAGS += ${CFLAGS_DEBUG}
 
 CXXFLAGS += ${CXXFLAGS_DEBUG}
 
-FDEVENT_MODULE := fdevent_${FDEVENT_IMPL}
 FSTATAT_MODULE := fstatat_${FSTATAT_IMPL}
-HTTP_BACKEND_MODULE := http_backend_${HTTP_BACKEND_IMPL}
-SOCKET_MODULE := socket_${SOCKET_IMPL}
 
 # Different xml backends for the webdav server
 WEBDAV_SERVER_XML_IMPL := webdav_server_xml_tinyxml2.cpp tinyxml2.cpp

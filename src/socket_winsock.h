@@ -27,6 +27,13 @@ last_socket_error(void) {
   return WSAGetLastError();
 }
 
+HEADER_FUNCTION const char *
+socket_error_message(socket_error_t a) {
+  UNUSED(a);
+  /* TODO: write this */
+  return "";
+}
+
 #ifdef __cplusplus
 }
 #endif
