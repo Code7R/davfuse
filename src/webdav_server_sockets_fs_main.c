@@ -8,7 +8,6 @@
 #include <signal.h>
 
 #include "c_util.h"
-#include "file_utils.h"
 #include "fdevent.h"
 #include "http_backend_sockets_fdevent.h"
 #include "logging.h"

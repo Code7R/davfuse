@@ -5,8 +5,11 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "file_utils.h"
+#include <assert.h>
+#include <errno.h>
+
 #include "fs_posix.h"
+#include "util.h"
 
 enum {
   _FS_POSIX_SINGLETON=1,
@@ -57,6 +60,43 @@ fs_posix_t
 fs_posix_blank_new(void) {
   /* don't need context */
   return _FS_POSIX_SINGLETON;
+}
+
+static bool
+open_or_create(const char *file_path, int flags, mode_t mode,
+               int *fd, bool *created) {
+  assert(!(flags & O_CREAT));
+  assert(!(flags & O_EXCL));
+
+  errno = 0;
+  do {
+    *fd = open(file_path, flags);
+    if (*fd < 0 && errno == ENOENT) {
+      errno = 0;
+      *fd = open(file_path, flags | O_CREAT | O_EXCL, mode);
+
+      if (*fd < 0 && errno == EEXIST) {
+        errno = 0;
+        continue;
+      }
+
+      if (*fd >= 0) {
+        assert(!errno);
+        if (created) {
+          *created = true;
+        }
+      }
+    }
+    else if (*fd >= 0) {
+      assert(!errno);
+      if (created) {
+        *created = false;
+      }
+    }
+  }
+  while (*fd < 0 && !errno);
+
+  return !errno;
 }
 
 fs_posix_error_t
