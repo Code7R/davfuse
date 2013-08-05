@@ -1909,14 +1909,14 @@ webdav_server_start(http_backend_t http_backend,
     goto error;
   }
 
-  http = http_server_start(http_backend,
-                           handle_request, serv);
-  if (!http) {
+  serv = malloc(sizeof(*serv));
+  if (!serv) {
     goto error;
   }
 
-  serv = malloc(sizeof(*serv));
-  if (!serv) {
+  http = http_server_start(http_backend,
+                           handle_request, serv);
+  if (!http) {
     goto error;
   }
 
@@ -1930,10 +1930,10 @@ webdav_server_start(http_backend_t http_backend,
   return serv;
 
  error:
-  free(serv);
   if (http) {
     http_server_stop(http, NULL, NULL);
   }
+  free(serv);
   free(public_prefix_copy);
 
   return NULL;
