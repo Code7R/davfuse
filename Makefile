@@ -101,7 +101,7 @@ ${GENHROOT}/%.h: ${SRCROOT}/%.idef
 ${OBJROOT}/%.c.o: ${SRCROOT}/%.c
 	@mkdir -p ${OBJROOT}
 	@${MAKEDEPEND_CC}; \
-		cp ${df}.d ${Df}.c.P; \
+		cp ${df}.d ${df}.c.P; \
 		sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
 			-e '/^$$/ d' -e 's/$$/ :/' < ${df}.d >> ${df}.c.P; \
 		rm -f ${df}.d

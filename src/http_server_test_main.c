@@ -157,10 +157,10 @@ int main() {
   struct sockaddr_in listen_addr;
   init_sockaddr_in(&listen_addr, 8080);
 
-  http_backend_t http_backend =
-    http_backend_fdevent_new(loop,
-                             (struct sockaddr *) &listen_addr,
-                             sizeof(listen_addr));
+  http_backend_sockets_fdevent_t http_backend =
+    http_backend_sockets_fdevent_new(loop,
+                                     (struct sockaddr *) &listen_addr,
+                                     sizeof(listen_addr));
   ASSERT_TRUE(http_backend);
 
   /* start http server */
