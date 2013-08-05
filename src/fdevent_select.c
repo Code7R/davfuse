@@ -5,8 +5,8 @@
 #include "c_util.h"
 #include "events.h"
 #include "logging.h"
-#include "socket.h"
-#include "socket_utils.h"
+#include "sockets.h"
+#include "util_sockets.h"
 
 #include "fdevent_select.h"
 
@@ -38,6 +38,13 @@ fdevent_select_new(void) {
 
   loop->ll = NULL;
   return loop;
+}
+
+bool
+fdevent_select_destroy(fdevent_select_loop_t a) {
+  assert(!a->ll);
+  free(a);
+  return true;
 }
 
 NON_NULL_ARGS2(1, 4) bool

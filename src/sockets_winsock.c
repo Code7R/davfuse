@@ -7,7 +7,7 @@
 
 #include "logging.h"
 
-#include "socket_winsock.h"
+#include "sockets_winsock.h"
 
 bool
 init_socket_subsystem(void) {

@@ -1,0 +1,12 @@
+# types
+t
+
+# functions
+get
+put
+touch
+propfind
+mkcol
+delete
+move
+copy

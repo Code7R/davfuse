@@ -3,10 +3,10 @@
 
 #include "events.h"
 #include "fdevent.h"
-#include "socket.h"
-#include "socket_utils.h"
+#include "sockets.h"
 #include "uthread.h"
 #include "util.h"
+#include "util_sockets.h"
 
 #include "http_backend.h"
 
@@ -16,9 +16,9 @@ typedef struct _http_backend {
   fdevent_watch_key_t accept_key;
 } HTTPBackend;
 
-http_backend_t
-http_backend_fdevent_new(fdevent_loop_t loop,
-                         const struct sockaddr *addr, socklen_t addr_len) {
+http_backend_sockets_fdevent_t
+http_backend_sockets_fdevent_new(fdevent_loop_t loop,
+                                 const struct sockaddr *addr, socklen_t addr_len) {
   HTTPBackend *serv = NULL;
   fd_t serv_socket = INVALID_SOCKET;
 
@@ -59,7 +59,7 @@ http_backend_fdevent_new(fdevent_loop_t loop,
 }
 
 void
-http_backend_fdevent_destroy(http_backend_t backend) {
+http_backend_sockets_fdevent_destroy(http_backend_sockets_fdevent_t backend) {
   int ret = closesocket(backend->serv_socket);
   ASSERT_TRUE(!ret);
   free(backend);
@@ -68,13 +68,13 @@ http_backend_fdevent_destroy(http_backend_t backend) {
 typedef struct {
   UTHR_CTX_BASE;
   /* args */
-  http_backend_t backend;
+  http_backend_sockets_fdevent_t backend;
   event_handler_t cb;
   void *cb_ud;
   /* ctx */
 } HTTPBackendAcceptCtx;
 
-UTHR_DEFINE(_http_backend_accept_uthr) {
+UTHR_DEFINE(_http_backend_sockets_fdevent_accept_uthr) {
   UTHR_HEADER(HTTPBackendAcceptCtx, ctx);
 
   fd_t socket;
@@ -88,7 +88,7 @@ UTHR_DEFINE(_http_backend_accept_uthr) {
       bool success_watch = fdevent_add_watch(ctx->backend->loop,
                                              ctx->backend->serv_socket,
                                              create_stream_events(true, false),
-                                             _http_backend_accept_uthr,
+                                             _http_backend_sockets_fdevent_accept_uthr,
                                              ctx,
                                              &ctx->backend->accept_key);
       if (!success_watch) {
@@ -107,39 +107,39 @@ UTHR_DEFINE(_http_backend_accept_uthr) {
     }
   }
 
-  HTTPBackendAcceptDoneEvent ev = {
+  HttpBackendAcceptDoneEvent ev = {
     .error = (socket == INVALID_SOCKET
-              ? HTTP_BACKEND_ERROR_UNKNOWN
-              : HTTP_BACKEND_ERROR_NONE),
+              ? HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_UNKNOWN
+              : HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_NONE),
     .handle = socket,
   };
   UTHR_RETURN(ctx,
-              ctx->cb(HTTP_BACKEND_ACCEPT_DONE_EVENT,
+              ctx->cb(HTTP_BACKEND_SOCKETS_FDEVENT_ACCEPT_DONE_EVENT,
                       &ev, ctx->cb_ud));
 
   UTHR_FOOTER();
 }
 
 void
-http_backend_accept(http_backend_t backend,
-                    event_handler_t cb,
-                    void *cb_ud) {
-  UTHR_CALL3(_http_backend_accept_uthr, HTTPBackendAcceptCtx,
+http_backend_sockets_fdevent_accept(http_backend_sockets_fdevent_t backend,
+                                    event_handler_t cb,
+                                    void *cb_ud) {
+  UTHR_CALL3(_http_backend_sockets_fdevent_accept_uthr, HTTPBackendAcceptCtx,
              .backend = backend,
              .cb = cb,
              .cb_ud = cb_ud);
 }
 
 void
-http_backend_stop_accept(http_backend_t backend) {
+http_backend_sockets_fdevent_stop_accept(http_backend_sockets_fdevent_t backend) {
   UNUSED(backend);
 }
 
 typedef struct {
   UTHR_CTX_BASE;
   /* args */
-  http_backend_t backend;
-  http_backend_handle_t handle;
+  http_backend_sockets_fdevent_t backend;
+  http_backend_sockets_fdevent_handle_t handle;
   void *buf;
   size_t nbyte;
   event_handler_t cb;
@@ -147,7 +147,7 @@ typedef struct {
   /* ctx */
 } HTTPBackendReadCtx;
 
-UTHR_DEFINE(_http_backend_read_uthr) {
+UTHR_DEFINE(_http_backend_sockets_fdevent_read_uthr) {
   UTHR_HEADER(HTTPBackendReadCtx, ctx);
 
   socket_ssize_t ret;
@@ -161,7 +161,7 @@ UTHR_DEFINE(_http_backend_read_uthr) {
       bool success_watch = fdevent_add_watch(ctx->backend->loop,
                                              ctx->handle,
                                              create_stream_events(true, false),
-                                             _http_backend_read_uthr,
+                                             _http_backend_sockets_fdevent_read_uthr,
                                              ctx,
                                              NULL);
       if (!success_watch) {
@@ -179,26 +179,26 @@ UTHR_DEFINE(_http_backend_read_uthr) {
     }
   }
 
-  HTTPBackendReadDoneEvent ev = {
+  HttpBackendReadDoneEvent ev = {
     .error = (ret == SOCKET_ERROR
-              ? HTTP_BACKEND_ERROR_UNKNOWN
-              : HTTP_BACKEND_ERROR_NONE),
+              ? HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_UNKNOWN
+              : HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_NONE),
     .nbyte = (size_t) ret,
   };
   UTHR_RETURN(ctx,
-              ctx->cb(HTTP_BACKEND_READ_DONE_EVENT,
+              ctx->cb(HTTP_BACKEND_SOCKETS_FDEVENT_READ_DONE_EVENT,
                       &ev, ctx->cb_ud));
 
   UTHR_FOOTER();
 }
 
 void
-http_backend_read(http_backend_t backend,
-                  http_backend_handle_t handle,
-                  void *buf, size_t nbyte,
-                  event_handler_t cb,
-                  void *cb_ud) {
-  UTHR_CALL6(_http_backend_read_uthr, HTTPBackendReadCtx,
+http_backend_sockets_fdevent_read(http_backend_sockets_fdevent_t backend,
+                                  http_backend_sockets_fdevent_handle_t handle,
+                                  void *buf, size_t nbyte,
+                                  event_handler_t cb,
+                                  void *cb_ud) {
+  UTHR_CALL6(_http_backend_sockets_fdevent_read_uthr, HTTPBackendReadCtx,
              .backend = backend,
              .handle = handle,
              .buf = buf,
@@ -210,8 +210,8 @@ http_backend_read(http_backend_t backend,
 typedef struct {
   UTHR_CTX_BASE;
   /* args */
-  http_backend_t backend;
-  http_backend_handle_t handle;
+  http_backend_sockets_fdevent_t backend;
+  http_backend_sockets_fdevent_handle_t handle;
   const void *buf;
   size_t nbyte;
   event_handler_t cb;
@@ -221,7 +221,7 @@ typedef struct {
   size_t count_left;
 } HTTPBackendWriteCtx;
 
-UTHR_DEFINE(_http_backend_write_uthr) {
+UTHR_DEFINE(_http_backend_sockets_fdevent_write_uthr) {
   UTHR_HEADER(HTTPBackendWriteCtx, state);
 
   state->buf_loc = state->buf;
@@ -235,7 +235,7 @@ UTHR_DEFINE(_http_backend_write_uthr) {
         bool success_watch = fdevent_add_watch(state->backend->loop,
                                                state->handle,
                                                create_stream_events(false, true),
-                                               _http_backend_write_uthr,
+                                               _http_backend_sockets_fdevent_write_uthr,
                                                state,
                                                NULL);
         if (!success_watch) {
@@ -259,26 +259,26 @@ UTHR_DEFINE(_http_backend_write_uthr) {
     state->buf_loc += ret;
   }
 
-  HTTPBackendWriteDoneEvent ev = {
+  HttpBackendWriteDoneEvent ev = {
     .error = (state->count_left
-              ? HTTP_BACKEND_ERROR_UNKNOWN
-              : HTTP_BACKEND_ERROR_NONE),
+              ? HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_UNKNOWN
+              : HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_NONE),
     .nbyte = state->nbyte - state->count_left,
   };
   UTHR_RETURN(state,
-              state->cb(HTTP_BACKEND_WRITE_DONE_EVENT,
+              state->cb(HTTP_BACKEND_SOCKETS_FDEVENT_WRITE_DONE_EVENT,
                         &ev, state->cb_ud));
 
   UTHR_FOOTER();
 }
 
 void
-http_backend_write(http_backend_t backend,
-                   http_backend_handle_t handle,
-                   const void *buf, size_t nbyte,
-                   event_handler_t cb,
-                   void *cb_ud) {
-  UTHR_CALL6(_http_backend_write_uthr, HTTPBackendWriteCtx,
+http_backend_sockets_fdevent_write(http_backend_sockets_fdevent_t backend,
+                                   http_backend_sockets_fdevent_handle_t handle,
+                                   const void *buf, size_t nbyte,
+                                   event_handler_t cb,
+                                   void *cb_ud) {
+  UTHR_CALL6(_http_backend_sockets_fdevent_write_uthr, HTTPBackendWriteCtx,
              .backend = backend,
              .handle = handle,
              .buf = buf,
@@ -288,8 +288,8 @@ http_backend_write(http_backend_t backend,
 }
 
 bool
-http_backend_close(http_backend_t backend,
-                   http_backend_handle_t handle) {
+http_backend_sockets_fdevent_close(http_backend_sockets_fdevent_t backend,
+                                   http_backend_sockets_fdevent_handle_t handle) {
   UNUSED(backend);
   return !closesocket(handle);
 }

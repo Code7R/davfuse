@@ -41,6 +41,9 @@ extern "C" {
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
+/* just used for readability */
+#define OUT_VAR
+
 #ifdef __cplusplus
 }
 #endif

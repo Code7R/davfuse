@@ -2,7 +2,8 @@
 #define _SOCKET_UTILS_H
 
 #include <stdint.h>
-#include "socket.h"
+
+#include "sockets.h"
 
 #ifdef __cplusplus
 extern "C" {

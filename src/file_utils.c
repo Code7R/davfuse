@@ -100,12 +100,16 @@ open_or_create(const char *file_path, int flags, mode_t mode,
 
       if (*fd >= 0) {
         assert(!errno);
-        *created = true;
+        if (created) {
+          *created = true;
+        }
       }
     }
     else if (*fd >= 0) {
       assert(!errno);
-      *created = false;
+      if (created) {
+        *created = false;
+      }
     }
   }
   while (*fd < 0 && !errno);

@@ -13,3 +13,5 @@ new
 add_watch
 remove_watch
 main_loop
+destroy
+

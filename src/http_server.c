@@ -106,7 +106,7 @@ UTHR_DECLARE(c_get_request);
 
 
 /* small layer of indirection */
-typedef HTTPBackendWriteDoneEvent HTTPConnectionWriteDoneEvent;
+typedef HttpBackendWriteDoneEvent HTTPConnectionWriteDoneEvent;
 
 static void
 _http_connection_read(HTTPConnection *conn, void *buf, size_t nbyte,
@@ -658,7 +658,7 @@ static
 EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
   UNUSED(ev_type);
   assert(ev_type == HTTP_BACKEND_ACCEPT_DONE_EVENT);
-  HTTPBackendAcceptDoneEvent *accept_done_ev = ev;
+  HttpBackendAcceptDoneEvent *accept_done_ev = ev;
   HTTPServer *http = ud;
 
   if (accept_done_ev->error) {

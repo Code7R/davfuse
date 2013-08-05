@@ -7,12 +7,18 @@
 
 #include "logging.h"
 
-#include "socket_posix.h"
+#include "sockets_posix.h"
 
 bool
 init_socket_subsystem(void) {
   return true;
 }
+
+bool
+shutdown_socket_subsystem(void) {
+  return true;
+}
+
 
 bool
 set_socket_non_blocking(fd_t fd) {

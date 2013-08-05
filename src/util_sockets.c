@@ -1,7 +1,7 @@
-#include "socket.h"
+#include "sockets.h"
 #include "util.h"
 
-#include "socket_utils.h"
+#include "util_sockets.h"
 
 const char *
 last_socket_error_message(void) {

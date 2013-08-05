@@ -2,9 +2,12 @@
 # This example is made for xnu/bsdlibc/clang
 FDEVENT_IMPL = select
 FSTATAT_IMPL = emu
-SOCKET_IMPL = posix
-HTTP_BACKEND_IMPL = fdevent
-HTTP_BACKEND_SOURCES = http_backend_fdevent.c fdevent_select.c socket_posix.c
+SOCKETS_IMPL = posix
+FS_IMPL = posix
+WEBDAV_BACKEND_IMPL = fs
+HTTP_BACKEND_IMPL = sockets_fdevent
+HTTP_BACKEND_SOURCES = http_backend_sockets_fdevent.c fdevent_select.c sockets_posix.c util_sockets.c
+WEBDAV_BACKEND_SOURCES = webdav_backend_fs.c fs_posix.c file_utils.c dfs.c fd_utils.c util_fs.c
 
 # flags
 CPPFLAGS_RELEASE = -DNDEBUG

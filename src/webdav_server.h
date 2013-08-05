@@ -2,7 +2,9 @@
 #define WEBDAV_SERVER_H
 
 #include "events.h"
+#include "http_backend.h"
 #include "util.h"
+#include "webdav_backend.h"
 
 #include "_webdav_server_types.h"
 
@@ -53,7 +55,6 @@ typedef struct {
   size_t nbyte;
 } WebdavPutRequestReadDoneEvent;
 
-
 webdav_propfind_entry_t
 webdav_new_propfind_entry(const char *relative_uri,
                           webdav_file_time_t modified_time,
@@ -65,8 +66,7 @@ void
 webdav_destroy_propfind_entry(webdav_propfind_entry_t pfe);
 
 webdav_server_t
-webdav_server_start(HTTPBackendOperations *ops,
-                    void *ops_ud,
+webdav_server_start(http_backend_t http_backend,
                     const char *public_prefix,
 		    webdav_backend_t fs);
 
@@ -96,54 +96,5 @@ void
 webdav_put_request_end(webdav_get_request_ctx_t put_ctx,
                        webdav_error_t error,
                        bool resource_existed);
-
-webdav_backend_t
-webdav_backend_new(const WebdavBackendOperations *op, size_t op_size, void *user_data);
-
-void
-webdav_backend_destroy(webdav_backend_t);
-
-void
-webdav_backend_get(webdav_backend_t fs,
-                   const char *relative_uri,
-                   webdav_get_request_ctx_t get_ctx);
-
-void
-webdav_backend_put(webdav_backend_t fs,
-                   const char *relative_uri,
-                   webdav_put_request_ctx_t put_ctx);
-
-void
-webdav_backend_touch(webdav_backend_t fs,
-                     const char *relative_uri,
-                     event_handler_t cb, void *cb_ud);
-
-void
-webdav_backend_propfind(webdav_backend_t fs,
-                        const char *relative_uri, webdav_depth_t depth,
-                        webdav_propfind_req_type_t propfind_req_type,
-                        event_handler_t cb, void *cb_ud);
-
-void
-webdav_backend_mkcol(webdav_backend_t fs,
-                     const char *relative_uri,
-                     event_handler_t cb, void *cb_ud);
-
-void
-webdav_backend_delete(webdav_backend_t fs,
-                      const char *relative_uri,
-                      event_handler_t cb, void *cb_ud);
-
-void
-webdav_backend_move(webdav_backend_t fs,
-                    const char *src_relative_uri, const char *dst_relative_uri,
-                    bool overwrite,
-                    event_handler_t cb, void *cb_ud);
-
-void
-webdav_backend_copy(webdav_backend_t fs,
-                    const char *src_relative_uri, const char *dst_relative_uri,
-                    bool overwrite, webdav_depth_t depth,
-                    event_handler_t cb, void *cb_ud);
 
 #endif

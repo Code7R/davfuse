@@ -5,11 +5,11 @@
 
 #include "events.h"
 #include "fdevent.h"
-#include "http_backend_fdevent.h"
+#include "http_backend_sockets_fdevent.h"
 #include "http_server.h"
 #include "logging.h"
-#include "socket_utils.h"
 #include "util.h"
+#include "util_sockets.h"
 
 #define BUF_SIZE 4096
 
@@ -137,7 +137,8 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
 }
 
 int main() {
-  init_logging(stdout, LOG_DEBUG);
+  bool success_init_logging = init_logging(stdout, LOG_DEBUG);
+  ASSERT_TRUE(success_init_logging);
   log_info("Logging initted.");
 
   /* init sockets */

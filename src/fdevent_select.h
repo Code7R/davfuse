@@ -5,7 +5,7 @@
 
 #include "c_util.h"
 #include "events.h"
-#include "socket.h"
+#include "sockets.h"
 
 /* event subsystem */
 
@@ -46,8 +46,7 @@ fdevent_select_remove_watch(fdevent_select_loop_t wt,
 bool
 fdevent_select_main_loop(fdevent_select_loop_t loop);
 
-void
+bool
 fdevent_select_destroy(fdevent_select_loop_t loop);
-
 
 #endif

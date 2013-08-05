@@ -30,7 +30,7 @@ typedef enum {
 
 HEADER_FUNCTION socket_error_t
 last_socket_error(void) {
-  return errno;
+  return (socket_error_t) errno;
 }
 
 HEADER_FUNCTION const char *

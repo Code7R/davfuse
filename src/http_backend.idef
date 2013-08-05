@@ -1,0 +1,24 @@
+# integral types
+t
+handle_t
+error_t
+
+# transparent struct types 
+AcceptDoneEvent
+ReadDoneEvent
+WriteDoneEvent
+
+# constants
+ERROR_NONE
+ERROR_UNKNOWN
+
+ACCEPT_DONE_EVENT
+READ_DONE_EVENT
+WRITE_DONE_EVENT
+
+# functions
+accept
+stop_accept
+read
+write
+close

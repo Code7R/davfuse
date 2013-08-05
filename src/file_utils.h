@@ -1,11 +1,7 @@
 #ifndef FILE_UTILS_H
 #define FILE_UTILS_H
 
-#include <sys/types.h>
-#include <sys/stat.h>
-
-#include <fcntl.h>
-#include <libgen.h>
+#include <dirent.h>
 
 #include <stdbool.h>
 

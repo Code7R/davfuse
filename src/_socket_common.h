@@ -11,6 +11,9 @@ bool
 init_socket_subsystem(void);
 
 bool
+shutdown_socket_subsystem(void);
+
+bool
 set_socket_non_blocking(fd_t sock);
 
 bool

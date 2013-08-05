@@ -54,7 +54,7 @@ cat "$INTERFACE_DEF" | (
         if echo "$SYMBOL" | grep "^[A-Z_]*$" > /dev/null; then
             # it's all uppercase, generate an uppercase SYMBOL
             echo "#define ${INTERFACE_UPPER}_${SYMBOL} ${INTERFACE_UPPER}_${IMPLEMENTATION_UPPER}_${SYMBOL}"
-        elif echo "$SYMBOL" | grep "^[A-Z][a-z]\{1,\}$" > /dev/null; then
+        elif echo "$SYMBOL" | grep "^[A-Z][a-z]" > /dev/null; then
             echo "#define ${INTERFACE_TITLE}${SYMBOL} ${INTERFACE_TITLE}${IMPLEMENTATION_TITLE}${SYMBOL}"
         else
             echo "#define ${INTERFACE}_${SYMBOL} ${INTERFACE}_${IMPLEMENTATION}_${SYMBOL}"
