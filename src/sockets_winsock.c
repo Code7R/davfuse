@@ -32,6 +32,12 @@ init_socket_subsystem(void) {
 }
 
 bool
+shutdown_socket_subsystem(void) {
+  int ret_wsacleanup = WSACleanup();
+  return !ret_wsacleanup;
+}
+
+bool
 set_socket_non_blocking(fd_t sock) {
   u_long argp = 1;
   int ret_ioctl = ioctlsocket(sock, FIONBIO, &argp);

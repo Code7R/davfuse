@@ -149,7 +149,7 @@ linked_list_t
 util_fs_rmtree(fs_t fs, const char *fpath_) {
   linked_list_t failed_to_delete = LINKED_LIST_INITIALIZER;
 
-  char *fpath = strdup(fpath_);
+  char *fpath = strdup_x(fpath_);
   if (!fpath) {
     abort();
   }
@@ -263,7 +263,7 @@ reparent_path(const char *from_path, const char *to_path,
   assert(str_startswith(to_transform, "/"));
 
   if (str_equals(from_path, to_transform)) {
-    return strdup(to_path);
+    return strdup_x(to_path);
   }
 
   assert(str_startswith(to_transform, from_path));
@@ -285,7 +285,7 @@ util_fs_copytree(fs_t fs,
                  const char *from_path,
                  const char *to_path,
                  bool delete_original) {
-  char *fpath = strdup(from_path);
+  char *fpath = strdup_x(from_path);
   if (!fpath) {
     abort();
   }

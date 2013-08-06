@@ -106,6 +106,17 @@ ascii_strcaseequal(const char *a, const char *b) {
   return !ascii_strcasecmp(a, b);
 }
 
+HEADER_FUNCTION PURE_FUNCTION int
+strcasecmp(const char *a, const char *b) {
+  enum {
+    ASCII_SPACE=32,
+    ASCII_0=48,
+  };
+  /* make sure the locale is ASCII */
+  assert(isspace(ASCII_SPACE) && isdigit(ASCII_0));
+  return ascii_strcasecmp(a, b);
+}
+
 HEADER_FUNCTION PURE_FUNCTION bool
 str_equals(const char *a, const char *b) {
   return !strcmp(a, b);
@@ -113,13 +124,7 @@ str_equals(const char *a, const char *b) {
 
 HEADER_FUNCTION PURE_FUNCTION bool
 str_case_equals(const char *a, const char *b) {
-  enum {
-    ASCII_SPACE=32,
-    ASCII_0=48,
-  };
-  /* make sure the locale is ASCII */
-  assert(isspace(ASCII_SPACE) && isdigit(ASCII_0));
-  return !ascii_strcasecmp(a, b);
+  return !strcasecmp(a, b);
 }
 
 #define DEFINE_MIN(type) \

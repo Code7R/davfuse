@@ -1,16 +1,16 @@
 #ifndef _FS_POSIX_H
 #define _FS_POSIX_H
 
+#include <dirent.h>
+
+#include <stdbool.h>
+#include <stddef.h>
+
 #include "c_util.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#include <dirent.h>
-
-#include <stdbool.h>
-#include <stddef.h>
 
 typedef int fs_posix_t;
 typedef int fs_posix_file_handle_t;

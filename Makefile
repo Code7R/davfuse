@@ -23,8 +23,6 @@ CFLAGS += ${CFLAGS_DEBUG}
 
 CXXFLAGS += ${CXXFLAGS_DEBUG}
 
-FSTATAT_MODULE := fstatat_${FSTATAT_IMPL}
-
 # Different xml backends for the webdav server
 WEBDAV_SERVER_XML_IMPL := webdav_server_xml_tinyxml2.cpp tinyxml2.cpp
 WEBDAV_LDFLAGS := ${CXX_LDFLAGS}
@@ -36,10 +34,10 @@ WEBDAV_LDFLAGS := ${CXX_LDFLAGS}
 MAKEFILES := config.mk Makefile
 
 HTTP_SERVER_SRC_ := http_server.c coroutine_io.c logging.c util.c http_helpers.c ${HTTP_BACKEND_SOURCES}
-WEBDAV_SERVER_SRC_ := webdav_server.c webdav_server_common.c ${WEBDAV_SERVER_XML_IMPL} ${WEBDAV_BACKEND_SOURCES} ${HTTP_SERVER_SRC_} 
+WEBDAV_SERVER_SRC_ := webdav_server.c webdav_server_common.c ${WEBDAV_SERVER_XML_IMPL} ${WEBDAV_BACKEND_SOURCES} ${HTTP_SERVER_SRC_}
 
 HTTP_SERVER_TEST_MAIN_UNIQUE_SRC_ := http_server_test_main.c
-WEBDAV_SERVER_SOCKETS_FS_MAIN_UNIQUE_SRC_ = webdav_server_sockets_fs_main.c ${FSTATAT_MODULE}.c
+WEBDAV_SERVER_SOCKETS_FS_MAIN_UNIQUE_SRC_ = webdav_server_sockets_fs_main.c
 LIBFUSE_UNIQUE_SRC_ = libdavfuse.c async_fuse_fs.c async_fuse_fs_helpers.c async_rdwr_lock.c async_tree.c
 
 ALL_SRC_ := ${WEBDAV_SERVER_SRC_} ${WEBDAV_SERVER_SOCKETS_FS_MAIN_UNIQUE_SRC_} ${LIBFUSE_UNIQUE_SRC_} ${HTTP_SERVER_TEST_MAIN_UNIQUE_SRC_}

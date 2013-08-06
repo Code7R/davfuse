@@ -24,7 +24,7 @@ typedef enum {
 
 HEADER_FUNCTION socket_error_t
 last_socket_error(void) {
-  return WSAGetLastError();
+  return (socket_error_t) WSAGetLastError();
 }
 
 HEADER_FUNCTION const char *

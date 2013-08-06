@@ -126,7 +126,7 @@ webdav_get_depth(const HTTPRequestHeaders *rhs) {
   webdav_depth_t depth;
 
   const char *depth_str = http_get_header_value(rhs, WEBDAV_HEADER_DEPTH);
-  if (!depth_str || !strcasecmp(depth_str, "infinity")) {
+  if (!depth_str || str_case_equals(depth_str, "infinity")) {
     depth = DEPTH_INF;
   }
   else {
@@ -302,8 +302,8 @@ perform_write_lock(struct webdav_server *ws,
   }
 
   char s_lock_token[256];
-  int len = snprintf(s_lock_token, sizeof(s_lock_token), "x-this-lock-token:///%lld.%lld",
-                     (long long) curtime.tv_sec, (long long) curtime.tv_usec);
+  int len = snprintf(s_lock_token, sizeof(s_lock_token), "x-this-lock-token:///%ld.%ld",
+                     (long) curtime.tv_sec, (long) curtime.tv_usec);
   if (len == sizeof(s_lock_token) - 1) {
     /* lock token string was too long */
     return false;

@@ -5,12 +5,12 @@ INTERFACE=$(basename "$1" | sed 's/\..\{1,\}//')
 INTERFACE_UPPER=$(echo "$INTERFACE" | tr '[a-z]' '[A-Z]')
 eval "IMPLEMENTATION=\${${INTERFACE_UPPER}_IMPL}"
 
-if ! (echo "$INTERFACE" | grep "^[a-z]\([a-z_]*[a-z]\)\{0,1\}$" > /dev/null); then
+if ! (echo "$INTERFACE" | grep "^[a-z]\([a-z_0-9]*[a-z0-9]\)\{0,1\}$" > /dev/null); then
     echo "Bad interface name: $INTERFACE" > /dev/stderr
     exit -1
 fi
 
-if ! (echo "$IMPLEMENTATION" | grep "^[a-z]\([a-z_]*[a-z]\)\{0,1\}$" > /dev/null); then
+if ! (echo "$IMPLEMENTATION" | grep "^[a-z]\([a-z_0-9]*[a-z0-9]\)\{0,1\}$" > /dev/null); then
     echo "Bad implementation name: $IMPLEMENTATION" > /dev/stderr
     exit -1
 fi

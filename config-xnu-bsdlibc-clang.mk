@@ -7,7 +7,7 @@ FS_IMPL = posix
 WEBDAV_BACKEND_IMPL = fs
 HTTP_BACKEND_IMPL = sockets_fdevent
 HTTP_BACKEND_SOURCES = http_backend_sockets_fdevent.c fdevent_select.c sockets_posix.c util_sockets.c
-WEBDAV_BACKEND_SOURCES = webdav_backend_fs.c fs_posix.c dfs.c util_fs.c
+WEBDAV_BACKEND_SOURCES = webdav_backend_fs.c fs_posix.c dfs.c util_fs.c fstatat_emu.c
 
 # flags
 CPPFLAGS_RELEASE = -DNDEBUG

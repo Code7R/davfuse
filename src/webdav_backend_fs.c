@@ -92,7 +92,7 @@ UTHR_DEFINE(_webdav_backend_fs_get_uthr) {
 
   UTHR_HEADER(PosixGetCtx, ctx);
 
-  ctx->fd = -1;
+  ctx->fd = (fs_file_handle_t) 0;
 
   ctx->file_path = path_from_uri(ctx->pbctx, ctx->relative_uri);
   if (!ctx->file_path) {

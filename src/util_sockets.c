@@ -29,7 +29,8 @@ create_bound_socket(const struct sockaddr *addr, socklen_t addr_len) {
   }
 
   int reuse = 1;
-  ret = setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+  ret = setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR,
+                   (void *) &reuse, sizeof(reuse));
   if (ret) {
     log_error("setsockopt: %s", last_socket_error_message());
     goto error;

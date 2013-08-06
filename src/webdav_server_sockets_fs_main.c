@@ -44,9 +44,9 @@ main(int argc, char *argv[]) {
     ? argv[2]
     : "http://localhost:8080/";
 
-  char *base_path = argc > 3
-    ? strdup(argv[3])
-    : getcwd(NULL, 0);
+  ASSERT_TRUE(argc > 3);
+
+  char *base_path = strdup_x(argv[3]);
   ASSERT_NOT_NULL(base_path);
 
   /* init sockets */
