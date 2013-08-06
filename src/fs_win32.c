@@ -1,6 +1,7 @@
 #include <windows.h>
 
 #include <assert.h>
+#include <stdint.h>
 
 #include "fs_win32.h"
 
@@ -143,55 +144,156 @@ fs_win32_open(fs_win32_t fs,
   return FS_WIN32_ERROR_SUCCESS;
 }
 
+
+static fs_win32_time_t
+windows_time_to_fs_time(FILETIME *a) {
+  ULARGE_INTEGER uli;
+  assert(sizeof(a->dwLowDateTime) + sizeof(a->dwHighDateTime) <=
+         sizeof(fs_win32_time_t));
+  assert(sizeof(uli.QuadPart) <= sizeof(fs_win32_time_t));
+  uli.LowPart  = a->dwLowDateTime;
+  uli.HighPart = a->dwHighDateTime;
+  return ((fs_win32_time_t) (uli.QuadPart / 10000000)) - 11644473600;
+}
+
 fs_win32_error_t
 fs_win32_fgetattr(fs_win32_t fs, fs_win32_file_handle_t file_handle,
                   OUT_VAR FsWin32Attrs *attrs) {
-  UNUSED(fs);
-  UNUSED(file_handle);
-  UNUSED(attrs);
-  return FS_WIN32_ERROR_NO_MEM;
+  ASSERT_VALID_FS(fs);
+  BY_HANDLE_FILE_INFORMATION file_info;
+  const BOOL ret = GetFileInformationByHandle(file_handle, &file_info);
+  if (!ret) {
+    return windows_error_to_fs_error();
+  }
+
+  *attrs = (FsWin32Attrs) {
+    .modified_time = windows_time_to_fs_time(&file_info.ftLastWriteTime),
+    .created_time = windows_time_to_fs_time(&file_info.ftCreationTime),
+    .is_directory = file_info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY,
+    .size = ((((fs_win32_off_t) file_info.nFileSizeHigh) <<
+              (sizeof(file_info.nFileSizeLow) * 8)) |
+             file_info.nFileSizeLow),
+  };
+
+  return FS_WIN32_ERROR_SUCCESS;
+}
+
+static fs_win32_error_t
+_set_file_pointer(fs_win32_file_handle_t file_handle,
+                  fs_win32_off_t offset) {
+  if (offset >> (sizeof(LONG) * 2 * 8 - 1)) {
+    /* if the highest byte (and higher) of the second long is set
+       then the input is too large and cannot be represented in
+       two longs */
+    return FS_WIN32_ERROR_INVALID_ARG;
+  }
+
+  const LONG low_offset = offset;
+  LONG high_offset = offset >> (sizeof(low_offset) * 8);
+
+  const DWORD ret_set_pointer =
+    SetFilePointer(file_handle, low_offset, &high_offset, FILE_BEGIN);
+  if (ret_set_pointer == INVALID_SET_FILE_POINTER) {
+    return windows_error_to_fs_error();
+  }
+
+  return FS_WIN32_ERROR_SUCCESS;
 }
 
 fs_win32_error_t
 fs_win32_ftruncate(fs_win32_t fs, fs_win32_file_handle_t file_handle,
                    fs_win32_off_t offset) {
-  UNUSED(fs);
-  UNUSED(file_handle);
-  UNUSED(offset);
-  return FS_WIN32_ERROR_NO_MEM;
+  ASSERT_VALID_FS(fs);
+
+  const fs_win32_error_t ret_set_pointer =
+    _set_file_pointer(file_handle, offset);
+  if (ret_set_pointer) {
+    return ret_set_pointer;
+  }
+
+  const BOOL success_set_end = SetEndOfFile(file_handle);
+  if (!success_set_end) {
+    return windows_error_to_fs_error();
+  }
+
+  return FS_WIN32_ERROR_SUCCESS;
 }
 
 fs_win32_error_t
 fs_win32_read(fs_win32_t fs, fs_win32_file_handle_t file_handle,
-              OUT_VAR char *buf, size_t size, fs_win32_off_t off,
+              OUT_VAR char *buf, size_t size, fs_win32_off_t offset,
               OUT_VAR size_t *amt_read) {
-  UNUSED(fs);
-  UNUSED(file_handle);
-  UNUSED(buf);
-  UNUSED(size);
-  UNUSED(off);
-  UNUSED(amt_read);
-  return FS_WIN32_ERROR_NO_MEM;
+  ASSERT_VALID_FS(fs);
+
+  const fs_win32_error_t ret_set_pointer =
+    _set_file_pointer(file_handle, offset);
+  if (ret_set_pointer) {
+    return ret_set_pointer;
+  }
+
+  if (size > MAXDWORD) {
+    return FS_WIN32_ERROR_INVALID_ARG;
+  }
+
+  DWORD bytes_read;
+  if (sizeof(bytes_read) > sizeof(*amt_read)) {
+    return FS_WIN32_ERROR_INVALID_ARG;
+  }
+
+  const BOOL success_read = ReadFile(file_handle, buf, size,
+                                     &bytes_read, NULL);
+  if (!success_read) {
+    return windows_error_to_fs_error();
+  }
+
+  assert(bytes_read <= SIZE_MAX);
+  *amt_read = bytes_read;
+
+  return FS_WIN32_ERROR_SUCCESS;
 }
 
 fs_win32_error_t
 fs_win32_write(fs_win32_t fs, fs_win32_file_handle_t file_handle,
                const char *buf, size_t size, fs_win32_off_t offset,
                OUT_VAR size_t *amt_written) {
-  UNUSED(fs);
-  UNUSED(file_handle);
-  UNUSED(buf);
-  UNUSED(size);
-  UNUSED(offset);
-  UNUSED(amt_written);
-  return FS_WIN32_ERROR_NO_MEM;
+  ASSERT_VALID_FS(fs);
+
+  const fs_win32_error_t ret_set_pointer =
+    _set_file_pointer(file_handle, offset);
+  if (ret_set_pointer) {
+    return ret_set_pointer;
+  }
+
+  if (size > MAXDWORD) {
+    return FS_WIN32_ERROR_INVALID_ARG;
+  }
+
+  DWORD bytes_written;
+  if (sizeof(bytes_written) > sizeof(*amt_written)) {
+    return FS_WIN32_ERROR_INVALID_ARG;
+  }
+
+  const BOOL success_write = WriteFile(file_handle, buf, size,
+                                       &bytes_written, NULL);
+  if (!success_write) {
+    return windows_error_to_fs_error();
+  }
+
+  *amt_written = bytes_written;
+
+  return FS_WIN32_ERROR_SUCCESS;
 }
 
 fs_win32_error_t
 fs_win32_close(fs_win32_t fs, fs_win32_file_handle_t file_handle) {
-  UNUSED(fs);
-  UNUSED(file_handle);
-  return FS_WIN32_ERROR_NO_MEM;
+  ASSERT_VALID_FS(fs);
+
+  const BOOL success_close = CloseHandle(file_handle);
+  if (!success_close) {
+    return windows_error_to_fs_error();
+  }
+
+  return FS_WIN32_ERROR_SUCCESS;
 }
 
 fs_win32_error_t

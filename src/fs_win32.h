@@ -28,10 +28,11 @@ typedef enum {
   FS_WIN32_ERROR_EXISTS,
   FS_WIN32_ERROR_CROSS_DEVICE,
   FS_WIN32_ERROR_NO_MEM,
+  FS_WIN32_ERROR_INVALID_ARG,
 } fs_win32_error_t;
 
 typedef long long fs_win32_time_t;
-typedef long long fs_win32_off_t;
+typedef unsigned long long fs_win32_off_t;
 
 typedef struct {
   fs_win32_time_t modified_time;
