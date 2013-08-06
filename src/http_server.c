@@ -606,8 +606,12 @@ http_request_write(http_request_handle_t rh,
     /* TODO: right now have no facility to do short writes,
        could return write amount when done
     */
-    log_warning("ON conn: %p, http_request_write will not do a short write, request to write less",
-                rctx->conn);
+    log_warning("ON conn: %p, "
+                "http_request_write will not do a short write, "
+                "request to write less. wanted to write %d, "
+                "but there was only %d left to write",
+                rctx->conn, nbyte,
+                rctx->out_content_length - rctx->bytes_written);
     goto error;
   }
 
@@ -772,7 +776,10 @@ UTHR_DEFINE(client_coroutine) {
         static char bytes[4096];
         /* just writing bytes */
         UTHR_YIELD(cc,
-                   http_request_write(&cc->rctx, bytes, sizeof(bytes),
+                   http_request_write(&cc->rctx, bytes,
+                                      /* we must send the exact amount,
+                                         because we don't support chunked responses yet */
+                                      cc->rctx.out_content_length - cc->rctx.bytes_written,
                                       client_coroutine, cc));
         assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_WRITE_DONE_EVENT);
         HTTPRequestWriteDoneEvent *write_done_ev = UTHR_EVENT();

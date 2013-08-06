@@ -19,7 +19,6 @@ shutdown_socket_subsystem(void) {
   return true;
 }
 
-
 bool
 set_socket_non_blocking(fd_t fd) {
   int flags = fcntl(fd, F_GETFL, 0);

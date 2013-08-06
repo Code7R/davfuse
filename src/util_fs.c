@@ -2,7 +2,6 @@
 #define _BSD_SOURCE
 
 #include <assert.h>
-#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +11,24 @@
 #include "util.h"
 
 #include "util_fs.h"
+
+const char *
+util_fs_strerror(fs_error_t error) {
+#define M(v, msg) case v: return msg
+  switch (error) {
+    M(FS_ERROR_NOT_DIR, "Not a directory");
+    M(FS_ERROR_IS_DIR, "Is a directory");
+    M(FS_ERROR_DOES_NOT_EXIST, "Does not exist");
+    M(FS_ERROR_NO_SPACE, "No space left");
+    M(FS_ERROR_PERM, "Permission denied");
+    M(FS_ERROR_EXISTS, "File exists");
+    M(FS_ERROR_CROSS_DEVICE, "Different devices");
+    M(FS_ERROR_IO, "IO Error");
+  default:
+    return "Unknown error";
+  }
+#undef M
+}
 
 void
 util_fs_closedir_or_abort(fs_t fs, fs_directory_handle_t dir) {
@@ -30,7 +47,7 @@ util_fs_file_exists(fs_t fs, const char *file_path, bool *exists) {
   FsAttrs attrs;
   const fs_error_t ret = fs_getattr(fs, file_path, &attrs);
   if (ret) {
-    if (ret == ENOENT) {
+    if (ret == FS_ERROR_DOES_NOT_EXIST) {
       *exists = false;
       return FS_ERROR_SUCCESS;
     }
@@ -87,8 +104,11 @@ _rm_tree_expand(void *ud, void *node, linked_list_t ll) {
 
   fs_directory_handle_t dir_handle;
   const fs_error_t ret_opendir = fs_opendir(fs, path, &dir_handle);
-  if (!ret_opendir) {
-    log_warning("Couldn't opendir %s: %d", path, ret_opendir);
+  if (ret_opendir) {
+    if (ret_opendir != FS_ERROR_NOT_DIR) {
+      log_warning("Couldn't opendir %s: %s", path,
+                  util_fs_strerror(ret_opendir));
+    }
     return ll;
   }
 
@@ -98,6 +118,10 @@ _rm_tree_expand(void *ud, void *node, linked_list_t ll) {
     const fs_error_t ret_readdir = fs_readdir(fs, dir_handle, &name, NULL, NULL);
     if (ret_readdir) {
       log_warning("Error while doing readdir: %d", ret_readdir);
+      break;
+    }
+
+    if (!name) {
       break;
     }
 
@@ -140,7 +164,8 @@ util_fs_rmtree(fs_t fs, const char *fpath_) {
     const fs_error_t ret_remove = fs_remove(fs, path);
     if (ret_remove) {
       /* failed to delete, just move on */
-      log_debug("Failed to delete %s", path);
+      log_debug("Failed to delete %s: %s",
+                path, util_fs_strerror(ret_remove));
       failed_to_delete = linked_list_prepend(failed_to_delete, path);
       path = NULL;
     }
@@ -162,12 +187,13 @@ util_fs_copyfile(fs_t fs,
   };
   fs_file_handle_t src_handle = (fs_file_handle_t) 0;
   fs_file_handle_t dst_handle = (fs_file_handle_t) 0;
-  bool success = false;
+  fs_error_t toret;
 
   const bool create = false;
   const fs_error_t ret_open =
     fs_open(fs, from_path, create, &src_handle, NULL);
   if (ret_open) {
+    toret = ret_open;
     goto done;
   }
 
@@ -175,6 +201,7 @@ util_fs_copyfile(fs_t fs,
   const fs_error_t ret_open_2 =
     fs_open(fs, to_path, create2, &dst_handle, NULL);
   if (ret_open_2) {
+    toret = ret_open;
     goto done;
   }
 
@@ -185,6 +212,7 @@ util_fs_copyfile(fs_t fs,
     const fs_error_t ret_read =
       fs_read(fs, src_handle, buffer, sizeof(buffer), offset, &amt);
     if (ret_read) {
+      toret = ret_open;
       goto done;
     }
 
@@ -201,13 +229,16 @@ util_fs_copyfile(fs_t fs,
                  buffer + written, amt - written,
                  offset + written, &just_wrote);
       if (ret_write) {
+        toret = ret_open;
         goto done;
       }
       written += just_wrote;
     }
+
+    offset += written;
   }
 
-  success = true;
+  toret = FS_ERROR_SUCCESS;
 
  done:
   if (src_handle) {
@@ -215,10 +246,10 @@ util_fs_copyfile(fs_t fs,
   }
 
   if (dst_handle) {
-    util_fs_close_or_abort(fs, src_handle);
+    util_fs_close_or_abort(fs, dst_handle);
   }
 
-  return success;
+  return toret;
 }
 
 static char *
@@ -282,11 +313,20 @@ util_fs_copytree(fs_t fs,
     bool copy_success;
     if (is_dir) {
       const fs_error_t ret_mkdir = fs_mkdir(fs, dest_path);
+      if (ret_mkdir) {
+        log_info("Error calling fs_mkdir(\"%s\"): %s",
+                 dest_path, util_fs_strerror(ret_mkdir));
+      }
       copy_success = !ret_mkdir;
     }
     else {
       const fs_error_t ret_copyfile =
         util_fs_copyfile(fs, path, dest_path);
+      if (ret_copyfile) {
+        log_info("Error calling util_fs_copyfile(\"%s\", \"%s\"): %s",
+                 path, dest_path, util_fs_strerror(ret_copyfile));
+      }
+
       copy_success = !ret_copyfile;
       if (copy_success && delete_original) {
         /* eagerly delete this entry */
@@ -299,8 +339,6 @@ util_fs_copytree(fs_t fs,
     }
 
     if (!copy_success) {
-      log_info("Error copying %s to %s",
-               path, dest_path);
       failed_to_copy = linked_list_prepend(failed_to_copy, path);
       path = NULL;
     }

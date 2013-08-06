@@ -6,6 +6,9 @@
 #include "fs.h"
 #include "util.h"
 
+const char *
+util_fs_strerror(fs_error_t error);
+
 void
 util_fs_closedir_or_abort(fs_t fs, fs_directory_handle_t dir);
 

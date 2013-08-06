@@ -28,14 +28,12 @@ create_bound_socket(const struct sockaddr *addr, socklen_t addr_len) {
     goto error;
   }
 
-/*
   int reuse = 1;
   ret = setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
   if (ret) {
-    log_error_errno("setsockopt");
+    log_error("setsockopt: %s", last_socket_error_message());
     goto error;
   }
-*/
 
   ret = bind(socket_fd, addr, addr_len);
   if (ret) {

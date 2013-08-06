@@ -139,6 +139,9 @@ UTHR_DEFINE(_webdav_backend_fs_get_uthr) {
                                         ctx->buf, sizeof(ctx->buf), ctx->offset,
                                         &ctx->amt_read);
     if (read_ret) {
+      log_error("Error while reading from %s at offset %d: %s",
+                ctx->file_path, (int) ctx->offset,
+                util_fs_strerror(read_ret));
       error = WEBDAV_ERROR_GENERAL;
       goto done;
     }
@@ -149,7 +152,7 @@ UTHR_DEFINE(_webdav_backend_fs_get_uthr) {
     }
 
     UTHR_YIELD(ctx,
-               webdav_get_request_write(ctx->get_ctx, ctx->buf, read_ret,
+               webdav_get_request_write(ctx->get_ctx, ctx->buf, ctx->amt_read,
                                         _webdav_backend_fs_get_uthr, ctx));
     UTHR_RECEIVE_EVENT(WEBDAV_GET_REQUEST_WRITE_DONE_EVENT,
                        WebdavGetRequestWriteDoneEvent, write_done_ev);
@@ -218,7 +221,8 @@ UTHR_DEFINE(_webdav_backend_fs_put_uthr) {
   const fs_error_t ret_open =
     fs_open(ctx->pbctx->fs, ctx->file_path, true, &ctx->fd, &created);
   if (ret_open) {
-    log_info("Error opening \"%s\"", ctx->file_path);
+    log_info("Error opening \"%s\": %s", ctx->file_path,
+             util_fs_strerror(ret_open));
     switch (ret_open) {
     case FS_ERROR_DOES_NOT_EXIST: error = WEBDAV_ERROR_DOES_NOT_EXIST; break;
     case FS_ERROR_NOT_DIR: error = WEBDAV_ERROR_NOT_COLLECTION; break;
@@ -279,7 +283,7 @@ UTHR_DEFINE(_webdav_backend_fs_put_uthr) {
  done:
   free(ctx->file_path);
 
-  if (ctx->fd >= 0) {
+  if (ctx->fd) {
     const fs_error_t ret_close = fs_close(ctx->pbctx->fs, ctx->fd);
     ASSERT_TRUE(!ret_close);
   }
@@ -394,7 +398,7 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
   fs_error_t open_error = 0;
   while (!valid_handle && !open_error) {
     open_error = fs_opendir(pbctx->fs, file_path, &handle.dirp);
-    if (open_error == ENOTDIR) {
+    if (open_error == FS_ERROR_NOT_DIR) {
       open_error = fs_open(pbctx->fs, file_path, false, &handle.fd, NULL);
       if (!open_error) {
         /* check if this is a directory, if so try again... */
