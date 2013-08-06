@@ -84,13 +84,15 @@ fs_error_t
 util_fs_touch(fs_t fs, const char *file_path, bool *created) {
   bool create = true;
   fs_file_handle_t h;
-  const fs_error_t  ret_open = fs_open(fs, file_path, create,
-                                           &h, created);
+  const fs_error_t ret_open = fs_open(fs, file_path, create,
+                                      &h, created);
   if (!ret_open) {
     util_fs_close_or_abort(fs, h);
     return FS_ERROR_SUCCESS;
   }
-
+  else if (ret_open == FS_ERROR_IS_DIR) {
+    return FS_ERROR_SUCCESS;
+  }
 
   log_debug("Error while opening \"%s\" for touch", file_path);
 
