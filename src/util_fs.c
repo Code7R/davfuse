@@ -114,7 +114,6 @@ _rm_tree_expand(void *ud, void *node, linked_list_t ll) {
     return ll;
   }
 
-  size_t len_of_dirname = strlen(path);
   while (true) {
     char *name;
     const fs_error_t ret_readdir = fs_readdir(fs, dir_handle, &name, NULL, NULL);
@@ -127,13 +126,12 @@ _rm_tree_expand(void *ud, void *node, linked_list_t ll) {
       break;
     }
 
-    size_t len_of_basename = strlen(name);
-    char *new_child = malloc_or_abort(len_of_dirname + 1 + len_of_basename + 1);
-
-    memcpy(new_child, path, len_of_dirname);
-    new_child[len_of_dirname] = '/';
-    memcpy(new_child + len_of_dirname + 1, name, len_of_basename);
-    new_child[len_of_dirname + 1 + len_of_basename] = '\0';
+    char *new_child = fs_join(fs, path, name);
+    if (!new_child) {
+      log_warning("Error while creating child path: %s %s",
+                  path, name);
+      break;
+    }
 
     ll = linked_list_prepend(ll, new_child);
 
@@ -255,29 +253,18 @@ util_fs_copyfile(fs_t fs,
 }
 
 static char *
-reparent_path(const char *from_path, const char *to_path,
+reparent_path(fs_t fs,
+              const char *from_path, const char *to_path,
               const char *to_transform) {
-  /* we only accept absolute paths */
-  assert(str_startswith(from_path, "/"));
-  assert(str_startswith(to_path, "/"));
-  assert(str_startswith(to_transform, "/"));
-
-  if (str_equals(from_path, to_transform)) {
+  if (fs_path_equals(fs, from_path, to_transform)) {
     return strdup_x(to_path);
   }
 
-  assert(str_startswith(to_transform, from_path));
+  assert(fs_path_is_parent(fs, from_path, to_transform));
+
   size_t from_path_len = strlen(from_path);
-  assert(to_transform[from_path_len] == '/');
-
-  size_t to_path_len = strlen(to_path);
-  size_t appendage_len = strlen(to_transform + from_path_len);
-  char *new_str = malloc(to_path_len + appendage_len + 1);
-  memcpy(new_str, to_path, to_path_len);
-  memcpy(new_str + to_path_len, to_transform + from_path_len, appendage_len);
-  new_str[to_path_len + appendage_len] = '\0';
-
-  return new_str;
+  return fs_join(fs, to_path,
+                 to_transform + from_path_len + strlen(fs_path_sep(fs)));
 }
 
 linked_list_t
@@ -309,7 +296,7 @@ util_fs_copytree(fs_t fs,
       goto done;
     }
 
-    dest_path = reparent_path(from_path, to_path, path);
+    dest_path = reparent_path(fs, from_path, to_path, path);
     log_debug("Copying %s to %s", path, dest_path);
 
     bool copy_success;
@@ -358,7 +345,7 @@ util_fs_copytree(fs_t fs,
                      _rm_tree_expand, dfs_ignore_user_data_free,
                      (void *) fs);
     while ((path = dfs_next(dfs))) {
-      char *dest_path = reparent_path(from_path, to_path, path);
+      char *dest_path = reparent_path(fs, from_path, to_path, path);
       bool path_is_dir, dest_path_is_dir;
       const fs_error_t is_dir_ret_1 = util_fs_file_is_dir(fs, path, &path_is_dir);
       const fs_error_t is_dir_ret_2 = util_fs_file_is_dir(fs, path, &dest_path_is_dir);

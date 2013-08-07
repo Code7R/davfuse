@@ -15,7 +15,7 @@ SOCKETS_LDFLAGS = -lws2_32
 CPPFLAGS_RELEASE = -DNDEBUG
 
 # http://utf8everywhere.org/#how
-CPPFLAGS += -D_UNICODE
+CPPFLAGS += -D_UNICODE -DUNICODE
 
 CFLAGS += -std=c99 -Wall -Wextra -Werror
 CFLAGS_DEBUG = -g

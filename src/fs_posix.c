@@ -404,3 +404,60 @@ fs_posix_dirname(fs_posix_t fs,
 
   return path_parent_to_ret;
 }
+
+char *
+fs_posix_join(fs_posix_t fs, const char *path, const char *name) {
+  ASSERT_VALID_FS(fs);
+
+  size_t len_of_basename = strlen(name);
+
+  char *new_child;
+  if (str_equals(path, "/")) {
+    new_child = malloc(1 + len_of_basename + 1);
+    if (!new_child) {
+      return NULL;
+    }
+
+    new_child[0] = '/';
+    memcpy(new_child + 1, name, len_of_basename);
+    new_child[1 + len_of_basename] = '\0';
+  }
+  else {
+    size_t len_of_dirname = strlen(path);
+
+    new_child = malloc(len_of_dirname + 1 + len_of_basename + 1);
+    if (!new_child) {
+      return NULL;
+    }
+
+    memcpy(new_child, path, len_of_dirname);
+    new_child[len_of_dirname] = '/';
+    memcpy(new_child + len_of_dirname + 1, name, len_of_basename);
+    new_child[len_of_dirname + 1 + len_of_basename] = '\0';
+  }
+
+  return new_child;
+}
+
+char *
+fs_posix_path_equals(fs_posix_t fs, const char *a, const char *b) {
+  ASSERT_VALID_FS(fs);
+  return str_equals(a, b);
+}
+
+bool
+fs_posix_path_is_parent(fs_posix_t fs,
+                        const char *potential_parent,
+                        const char *potential_child) {
+  if (!str_startswith(potential_child, potential_parent)) {
+    return false;
+  }
+
+  size_t potential_parent_len = strlen(potential_parent);
+  return potential_child[potential_parent_len] == '/';
+}
+
+const char *
+fs_posix_path_sep(void) {
+  return "/";
+}

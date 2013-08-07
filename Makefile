@@ -78,6 +78,7 @@ options:
 	@echo "build options:"
 	@echo "CFLAGS          = ${CFLAGS}"
 	@echo "CXXFLAGS        = ${CXXFLAGS}"
+	@echo "CPPFLAGS        = ${CPPFLAGS}"
 	@echo "LDFLAGS         = ${LDFLAGS}"
 	@echo "SOCKETS_LDFLAGS = ${SOCKETS_LDFLAGS}"
 	@echo "WEBDAV_LDFLAGS  = ${WEBDAV_LDFLAGS}"

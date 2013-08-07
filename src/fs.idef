@@ -38,3 +38,7 @@ close
 blank_new
 destroy
 dirname
+join
+path_equals
+path_is_parent
+path_sep

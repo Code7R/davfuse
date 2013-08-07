@@ -21,25 +21,59 @@ typedef struct _webdav_backend_fs {
   size_t base_path_len;
 } WebdavBackendFs;
 
-static char *
-path_from_uri(WebdavBackendFs *pbctx, const char *real_uri) {
-  size_t uri_len = strlen(real_uri);
-  if (str_equals(real_uri, "/")) {
-    uri_len = 0;
-  }
-  /* return relative path (no leading slash), but also
-     don't include trailing slash, since posix treats that like "/." */
-  else if (real_uri[uri_len - 1] == '/') {
-    uri_len -= 1;
+static size_t
+count_chars(const char *str, char needle) {
+  size_t num_slashes = 0;
+  const char *cur_start = str;
+  while (cur_start) {
+    cur_start = strchr(cur_start, needle);
+    if (cur_start) {
+      cur_start += 1;
+      num_slashes += 1;
+    }
   }
 
-  char *toret = malloc(pbctx->base_path_len + uri_len + 1);
+  return num_slashes;
+}
+
+static char *
+path_from_uri(WebdavBackendFs *pbctx, const char *real_uri) {
+  assert(str_startswith(real_uri, "/"));
+
+  log_info("path_from_uri");
+
+  /* count all '/' in the uri str */
+  size_t num_slashes = count_chars(real_uri, '/');
+  const char *path_sep = fs_path_sep(pbctx->fs);
+  size_t path_sep_len = strlen(path_sep);
+
+  size_t uri_len = strlen(real_uri);
+  size_t new_len = uri_len + num_slashes * (path_sep_len - 1);
+
+  char *toret = malloc(pbctx->base_path_len + new_len + 1);
   if (!toret) {
     return NULL;
   }
+
   memcpy(toret, pbctx->base_path, pbctx->base_path_len);
-  memcpy(toret + pbctx->base_path_len, real_uri, uri_len);
-  toret[pbctx->base_path_len + uri_len] = '\0';
+  size_t offset = pbctx->base_path_len;
+
+  for (size_t i = 0; real_uri[i]; ++i) {
+    if (real_uri[i] == '/') {
+      if (i != uri_len - 1) {
+        /* don't include trailing slash */
+        memcpy(toret + offset, path_sep, path_sep_len);
+        offset += path_sep_len;
+      }
+    }
+    else {
+      toret[offset] = real_uri[i];
+      offset += 1;
+    }
+  }
+  toret[offset] = '\0';
+
+  log_info("leave path_from_uri: %s / %s", real_uri, toret);
 
   return toret;
 }

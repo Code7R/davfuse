@@ -12,9 +12,11 @@
 extern "C" {
 #endif
 
+struct _fs_win32_directory_handle;
+
 typedef int fs_win32_t;
 typedef HANDLE fs_win32_file_handle_t;
-typedef HANDLE fs_win32_directory_handle_t;
+typedef struct _fs_win32_directory_handle *fs_win32_directory_handle_t;
 
 /* non-opaque structures */
 typedef enum {
@@ -110,6 +112,20 @@ fs_win32_destroy(fs_win32_t fs);
 
 char *
 fs_win32_dirname(fs_win32_t fs, const char *path);
+
+char *
+fs_win32_join(fs_win32_t fs, const char *path, const char *name);
+
+bool
+fs_win32_path_equals(fs_win32_t fs, const char *a, const char *b);
+
+bool
+fs_win32_path_is_parent(fs_win32_t fs,
+                        const char *potential_parent,
+                        const char *potential_child);
+
+const char *
+fs_win32_path_sep(fs_win32_t fs);
 
 #ifdef __cplusplus
 }
