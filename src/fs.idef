@@ -37,8 +37,7 @@ rename
 close
 blank_new
 destroy
-dirname
-join
+path_is_root
 path_equals
 path_is_parent
 path_sep

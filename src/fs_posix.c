@@ -132,23 +132,37 @@ fs_posix_open(fs_posix_t fs,
               OUT_VAR fs_posix_file_handle_t *handle,
               OUT_VAR bool *created) {
   ASSERT_VALID_FS(fs);
-  bool success_open;
-  int fd;
+
+  fs_posix_error_t toret;
+  int fd = -1;
+
   if (create) {
-    success_open = open_or_create(path, O_RDWR, 0666, &fd, created);
+    const bool success_open =
+      open_or_create(path, O_RDWR, 0666, &fd, created);
+    if (!success_open) {
+      goto posix_error;
+    }
   }
   else {
     fd = open(path, O_RDWR);
-    success_open = fd >= 0;
+    if (fd < 0) {
+      goto posix_error;
+    }
   }
 
-  *handle = fd_to_file_handle(fd);
-
-  if (!success_open) {
-    return errno_to_fs_error();
+  if (false) {
+  posix_error:
+    toret = errno_to_fs_error();
+    if (fd >= 0) {
+      close_or_abort(fd);
+    }
+  }
+  else {
+    *handle = fd_to_file_handle(fd);
+    toret = FS_POSIX_ERROR_SUCCESS;
   }
 
-  return FS_POSIX_ERROR_SUCCESS;
+  return toret;
 }
 
 fs_posix_error_t

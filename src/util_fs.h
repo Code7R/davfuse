@@ -37,4 +37,11 @@ util_fs_copytree(fs_t fs,
                  const char *file_path,
                  const char *destination_path,
                  bool is_move);
+
+char *
+util_fs_path_dirname(fs_t fs, const char *path);
+
+char *
+util_fs_path_join(fs_t fs, const char *path, const char *name);
+
 #endif

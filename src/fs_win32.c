@@ -29,11 +29,13 @@ convert_error(DWORD winerror) {
   switch (winerror) {
   case 0:
     abort();
+  case ERROR_DIRECTORY:
+    return FS_WIN32_ERROR_NOT_DIR;
   case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND:
     return FS_WIN32_ERROR_DOES_NOT_EXIST;
   case ERROR_ACCESS_DENIED:
     return FS_WIN32_ERROR_PERM;
-  case ERROR_FILE_EXISTS:
+  case ERROR_FILE_EXISTS: case ERROR_ALREADY_EXISTS:
     return FS_WIN32_ERROR_EXISTS;
   default:
     return FS_WIN32_ERROR_IO;
@@ -44,6 +46,36 @@ static fs_win32_error_t
 windows_error_to_fs_error() {
   return convert_error(GetLastError());
 }
+
+static bool
+windows_is_dir(DWORD attrs) {
+  return attrs & FILE_ATTRIBUTE_DIRECTORY;
+}
+
+static fs_win32_time_t
+windows_time_to_fs_time(FILETIME *a) {
+  ULARGE_INTEGER uli;
+  assert(sizeof(a->dwLowDateTime) + sizeof(a->dwHighDateTime) <=
+         sizeof(fs_win32_time_t));
+  assert(sizeof(uli.QuadPart) <= sizeof(fs_win32_time_t));
+  uli.LowPart  = a->dwLowDateTime;
+  uli.HighPart = a->dwHighDateTime;
+  return ((fs_win32_time_t) (uli.QuadPart / 10000000)) - 11644473600;
+}
+
+static fs_win32_off_t
+windows_size_to_fs_size(DWORD low, DWORD high) {
+  return ((((fs_win32_off_t) high) << (sizeof(low) * 8)) | low);
+}
+
+#define FILL_ATTRS(file_info)                                           \
+  (FsWin32Attrs) {                                                      \
+    .modified_time = windows_time_to_fs_time(&(file_info).ftLastWriteTime), \
+      .created_time = windows_time_to_fs_time(&(file_info).ftCreationTime), \
+      .is_directory = windows_is_dir((file_info).dwFileAttributes),     \
+      .size = windows_size_to_fs_size((file_info).nFileSizeLow,         \
+                                      (file_info).nFileSizeHigh),       \
+      }
 
 static LPWSTR
 utf8_to_mb(const char *s) {
@@ -127,77 +159,48 @@ fs_win32_open(fs_win32_t fs,
   const DWORD share_mode = (FILE_SHARE_DELETE |
                             FILE_SHARE_WRITE |
                             FILE_SHARE_READ);
+  const DWORD flags = 0;
+
   HANDLE h;
-  while (true) {
+  if (create) {
     h = CreateFileW(wpath, access, share_mode,
-                    NULL, OPEN_EXISTING, 0, NULL);
-    if (create &&
-        h == INVALID_HANDLE_VALUE &&
-        GetLastError() == ERROR_FILE_NOT_FOUND) {
-      h = CreateFileW(wpath, access, share_mode,
-                      NULL, CREATE_NEW, 0, NULL);
-      if (h == INVALID_HANDLE_VALUE &&
-          GetLastError() == ERROR_FILE_EXISTS) {
-        continue;
-      }
-
-      if (h != INVALID_HANDLE_VALUE) {
-        if (created) {
-          *created = true;
-        }
-      }
-    }
-    else if (h != INVALID_HANDLE_VALUE) {
+                    NULL, OPEN_ALWAYS, flags, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
       if (created) {
-        *created = false;
+        /* NB: with OPEN_ALWAYS, GetLastError() will return
+           ERROR_ALREADY_EXISTS if the file was already there */
+        *created = !GetLastError();
       }
     }
+  }
+  else {
+    h = CreateFileW(wpath, access, share_mode,
+                    NULL, OPEN_EXISTING, flags, NULL);
+  }
 
-    break;
+  fs_win32_error_t toret;
+
+  if (h == INVALID_HANDLE_VALUE) {
+    toret = windows_error_to_fs_error();
+
+    if (GetLastError() == ERROR_ACCESS_DENIED) {
+      /* this can happen if the file is a directory, so just check that */
+      DWORD ret_get_attrs = GetFileAttributesW(wpath);
+      if (ret_get_attrs != INVALID_FILE_ATTRIBUTES &&
+          windows_is_dir(ret_get_attrs)) {
+        toret = FS_WIN32_ERROR_IS_DIR;
+      }
+    }
+  }
+  else {
+    toret = FS_WIN32_ERROR_SUCCESS;
+    *handle = h;
   }
 
   free(wpath);
 
-  if (h == INVALID_HANDLE_VALUE) {
-    return windows_error_to_fs_error();
-  }
-
-  *handle = h;
-
-  return FS_WIN32_ERROR_SUCCESS;
+  return toret;
 }
-
-static bool
-windows_is_dir(DWORD attrs) {
-  return attrs & FILE_ATTRIBUTE_DIRECTORY;
-}
-
-static fs_win32_time_t
-windows_time_to_fs_time(FILETIME *a) {
-  ULARGE_INTEGER uli;
-  assert(sizeof(a->dwLowDateTime) + sizeof(a->dwHighDateTime) <=
-         sizeof(fs_win32_time_t));
-  assert(sizeof(uli.QuadPart) <= sizeof(fs_win32_time_t));
-  uli.LowPart  = a->dwLowDateTime;
-  uli.HighPart = a->dwHighDateTime;
-  return ((fs_win32_time_t) (uli.QuadPart / 10000000)) - 11644473600;
-}
-
-static fs_win32_off_t
-windows_size_to_fs_size(DWORD low, DWORD high) {
-  return ((((fs_win32_off_t) high) <<
-           (sizeof(low) * 8)) |
-          high);
-}
-
-#define FILL_ATTRS(file_info)                                           \
-  (FsWin32Attrs) {                                                      \
-    .modified_time = windows_time_to_fs_time(&(file_info).ftLastWriteTime), \
-      .created_time = windows_time_to_fs_time(&(file_info).ftCreationTime), \
-      .is_directory = windows_is_dir((file_info).dwFileAttributes),     \
-      .size = windows_size_to_fs_size((file_info).nFileSizeLow,         \
-                                      (file_info).nFileSizeHigh),       \
-      }
 
 fs_win32_error_t
 fs_win32_fgetattr(fs_win32_t fs, fs_win32_file_handle_t file_handle,
@@ -409,46 +412,57 @@ fs_win32_readdir(fs_win32_t fs, fs_win32_directory_handle_t dir_handle,
                  OUT_VAR FsWin32Attrs *attrs) {
   ASSERT_VALID_FS(fs);
 
-  DWORD last_err;
-  memcpy(&last_err, dir_handle->last_find_data.cAlternateFileName,
-         sizeof(last_err));
-  if (last_err) {
-    if (last_err == ERROR_NO_MORE_FILES) {
-      *name = NULL;
-      return FS_WIN32_ERROR_SUCCESS;
+  while (true) {
+    DWORD last_err;
+    memcpy(&last_err, dir_handle->last_find_data.cAlternateFileName,
+           sizeof(last_err));
+    if (last_err) {
+      if (last_err == ERROR_NO_MORE_FILES) {
+        *name = NULL;
+        return FS_WIN32_ERROR_SUCCESS;
+      }
+      else {
+        return convert_error(last_err);
+      }
+    }
+
+    *name = mb_to_utf8(dir_handle->last_find_data.cFileName);
+    if (!*name) {
+      return FS_WIN32_ERROR_NO_MEM;
+    }
+
+    if (!str_equals(*name, "..") &&
+        !str_equals(*name, ".")) {
+      if (attrs_is_filled) {
+        *attrs_is_filled = true;
+      }
+      if (attrs) {
+
+        *attrs = FILL_ATTRS(dir_handle->last_find_data);
+      }
     }
     else {
-      return convert_error(last_err);
+      free(*name);
+      *name = NULL;
+    }
+
+    /* now pull the next info */
+    const BOOL success_find_next =
+      FindNextFileW(dir_handle->find_handle,
+                    &dir_handle->last_find_data);
+    if (!success_find_next) {
+      DWORD err = GetLastError();
+      memcpy(dir_handle->last_find_data.cAlternateFileName, &err, sizeof(err));
+    }
+    else {
+      memset(dir_handle->last_find_data.cAlternateFileName, 0,
+             sizeof(dir_handle->last_find_data.cAlternateFileName));
+    }
+
+    if (*name) {
+      return FS_WIN32_ERROR_SUCCESS;
     }
   }
-
-  *name = mb_to_utf8(dir_handle->last_find_data.cFileName);
-  if (!*name) {
-    return FS_WIN32_ERROR_NO_MEM;
-  }
-
-  if (attrs_is_filled) {
-    *attrs_is_filled = true;
-  }
-
-  if (attrs){
-    *attrs = FILL_ATTRS(dir_handle->last_find_data);
-  }
-
-  /* now pull the next info */
-  const BOOL success_find_next =
-    FindNextFileW(dir_handle->find_handle,
-                  &dir_handle->last_find_data);
-  if (!success_find_next) {
-    DWORD err = GetLastError();
-    memcpy(dir_handle->last_find_data.cAlternateFileName, &err, sizeof(err));
-  }
-  else {
-    memset(dir_handle->last_find_data.cAlternateFileName, 0,
-           sizeof(dir_handle->last_find_data.cAlternateFileName));
-  }
-
-  return FS_WIN32_ERROR_SUCCESS;
 }
 
 fs_win32_error_t
@@ -464,7 +478,7 @@ fs_win32_closedir(fs_win32_t fs, fs_win32_directory_handle_t dir_handle) {
     assert(last_err == ERROR_NO_MORE_FILES);
   }
   else {
-    const BOOL success_close = CloseHandle(dir_handle->find_handle);
+    const BOOL success_close = FindClose(dir_handle->find_handle);
     if (!success_close) {
       return windows_error_to_fs_error();
     }
@@ -615,59 +629,11 @@ fs_win32_destroy(fs_win32_t fs) {
   return false;
 }
 
-static bool
-_is_root_path(const char *path) {
+bool
+fs_win32_path_is_root(fs_win32_t fs, const char *path) {
+  ASSERT_VALID_FS(fs);
   UNUSED(path);
   return false;
-}
-
-char *
-fs_win32_dirname(fs_win32_t fs, const char *path) {
-  ASSERT_VALID_FS(fs);
-
-  if (_is_root_path(path)) {
-    return strdup_x(path);
-  }
-
-  const char *end_of_path = strrchr(path, '\\');
-  return strndup_x(path, end_of_path - path);
-}
-
-char *
-fs_win32_join(fs_win32_t fs, const char *path, const char *name) {
-  ASSERT_VALID_FS(fs);
-
-  size_t len_of_basename = strlen(name);
-
-  bool add_sep = false;
-  char *new_child;
-  if (_is_root_path(path)) {
-    assert(str_endswith(path, fs_win32_path_sep(fs)));
-    add_sep = true;
-  }
-
-  size_t len_of_sep = strlen(fs_win32_path_sep(fs));
-  size_t len_of_dirname = strlen(path);
-  new_child = malloc(len_of_dirname + (add_sep ? 1 : 0) + len_of_basename + 1);
-  if (!new_child) {
-    return NULL;
-  }
-
-  size_t add = 0;
-  memcpy(new_child + add, path, len_of_dirname);
-  add += len_of_dirname;
-
-  if (add_sep) {
-    memcpy(new_child + add, fs_win32_path_sep(fs), len_of_sep);
-    add += len_of_sep;
-  }
-
-  memcpy(new_child + add, name, len_of_basename);
-  add += len_of_basename;
-
-  new_child[add] = '\0';
-
-  return new_child;
 }
 
 bool
@@ -682,7 +648,7 @@ fs_win32_path_is_parent(fs_win32_t fs,
                         const char *potential_child) {
   ASSERT_VALID_FS(fs);
 
-  if (!str_startswith(potential_child, potential_parent)) {
+  if (!str_case_startswith(potential_child, potential_parent)) {
     return false;
   }
 

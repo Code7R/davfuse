@@ -7,6 +7,7 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -16,6 +17,10 @@
 #include "logging.h"
 
 #ifdef __cplusplus
+#ifndef SIZE_MAX
+#define SIZE_MAX ((size_t) -1)
+#endif
+
 extern "C" {
 #endif
 
@@ -65,6 +70,9 @@ PURE_FUNCTION bool
 str_startswith(const char *a, const char *b);
 
 PURE_FUNCTION bool
+str_case_startswith(const char *a, const char *b);
+
+PURE_FUNCTION bool
 str_endswith(const char *a, const char *b);
 
 PURE_FUNCTION char *
@@ -72,7 +80,6 @@ strdup_x(const char *s);
 
 PURE_FUNCTION char *
 strndup_x(const char *s, size_t n);
-
 
 HEADER_FUNCTION CONST_FUNCTION char
 ascii_to_lower(char a) {
@@ -87,18 +94,12 @@ ascii_to_lower(char a) {
               0);
 }
 
+PURE_FUNCTION int
+ascii_strncasecmp(const char *a, const char *b, size_t n);
+
 HEADER_FUNCTION PURE_FUNCTION int
 ascii_strcasecmp(const char *a, const char *b) {
-  int i, ret;
-  for (i = 0;
-       a[i] != '\0' || b[i] != '\0';
-       ++i) {
-    ret = ascii_to_lower(a[i]) - ascii_to_lower(b[i]);
-    if (ret) {
-      return ret;
-    }
-  }
-  return ascii_to_lower(a[i]) - ascii_to_lower(b[i]);
+  return ascii_strncasecmp(a, b, SIZE_MAX);
 }
 
 HEADER_FUNCTION PURE_FUNCTION bool
@@ -106,14 +107,19 @@ ascii_strcaseequal(const char *a, const char *b) {
   return !ascii_strcasecmp(a, b);
 }
 
-HEADER_FUNCTION PURE_FUNCTION int
-strcasecmp(const char *a, const char *b) {
+HEADER_FUNCTION void
+assert_ascii_locale(void) {
   enum {
     ASCII_SPACE=32,
     ASCII_0=48,
   };
   /* make sure the locale is ASCII */
   assert(isspace(ASCII_SPACE) && isdigit(ASCII_0));
+}
+
+HEADER_FUNCTION PURE_FUNCTION int
+strcasecmp_x(const char *a, const char *b) {
+  assert_ascii_locale();
   return ascii_strcasecmp(a, b);
 }
 
@@ -124,7 +130,7 @@ str_equals(const char *a, const char *b) {
 
 HEADER_FUNCTION PURE_FUNCTION bool
 str_case_equals(const char *a, const char *b) {
-  return !strcasecmp(a, b);
+  return !strcasecmp_x(a, b);
 }
 
 #define DEFINE_MIN(type) \

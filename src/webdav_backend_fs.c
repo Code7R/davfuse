@@ -40,8 +40,6 @@ static char *
 path_from_uri(WebdavBackendFs *pbctx, const char *real_uri) {
   assert(str_startswith(real_uri, "/"));
 
-  log_info("path_from_uri");
-
   /* count all '/' in the uri str */
   size_t num_slashes = count_chars(real_uri, '/');
   const char *path_sep = fs_path_sep(pbctx->fs);
@@ -72,8 +70,6 @@ path_from_uri(WebdavBackendFs *pbctx, const char *real_uri) {
     }
   }
   toret[offset] = '\0';
-
-  log_info("leave path_from_uri: %s / %s", real_uri, toret);
 
   return toret;
 }
@@ -628,7 +624,8 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
   char *const file_path = path_from_uri(pbctx, src_relative_uri);
   char *const destination_path = path_from_uri(pbctx, dst_relative_uri);
 
-  char *const destination_path_dirname = fs_dirname(pbctx->fs, destination_path);
+  char *const destination_path_dirname =
+    util_fs_path_dirname(pbctx->fs, destination_path);
   bool destination_directory_exists;
   const fs_error_t ret_exists =
     util_fs_file_exists(pbctx->fs, destination_path_dirname,

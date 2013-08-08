@@ -110,11 +110,8 @@ fs_win32_close(fs_win32_t fs, fs_win32_file_handle_t handle);
 bool
 fs_win32_destroy(fs_win32_t fs);
 
-char *
-fs_win32_dirname(fs_win32_t fs, const char *path);
-
-char *
-fs_win32_join(fs_win32_t fs, const char *path, const char *name);
+bool
+fs_win32_path_is_root(fs_win32_t fs, const char *path);
 
 bool
 fs_win32_path_equals(fs_win32_t fs, const char *a, const char *b);

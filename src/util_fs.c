@@ -84,8 +84,7 @@ fs_error_t
 util_fs_touch(fs_t fs, const char *file_path, bool *created) {
   bool create = true;
   fs_file_handle_t h;
-  const fs_error_t ret_open = fs_open(fs, file_path, create,
-                                      &h, created);
+  const fs_error_t ret_open = fs_open(fs, file_path, create, &h, created);
   if (!ret_open) {
     util_fs_close_or_abort(fs, h);
     return FS_ERROR_SUCCESS;
@@ -94,7 +93,8 @@ util_fs_touch(fs_t fs, const char *file_path, bool *created) {
     return FS_ERROR_SUCCESS;
   }
 
-  log_debug("Error while opening \"%s\" for touch", file_path);
+  log_debug("Error while opening \"%s\" for touch: %s",
+            file_path, util_fs_strerror(ret_open));
 
   return ret_open;
 }
@@ -126,7 +126,8 @@ _rm_tree_expand(void *ud, void *node, linked_list_t ll) {
       break;
     }
 
-    char *new_child = fs_join(fs, path, name);
+    char *new_child = util_fs_path_join(fs, path, name);
+    log_debug("Join %s and %s to get %s", path, name, new_child);
     if (!new_child) {
       log_warning("Error while creating child path: %s %s",
                   path, name);
@@ -263,8 +264,9 @@ reparent_path(fs_t fs,
   assert(fs_path_is_parent(fs, from_path, to_transform));
 
   size_t from_path_len = strlen(from_path);
-  return fs_join(fs, to_path,
-                 to_transform + from_path_len + strlen(fs_path_sep(fs)));
+  return util_fs_path_join(fs, to_path,
+                           to_transform + from_path_len +
+                           strlen(fs_path_sep(fs)));
 }
 
 linked_list_t
@@ -366,3 +368,52 @@ util_fs_copytree(fs_t fs,
 
   return failed_to_copy;
 }
+
+char *
+util_fs_path_dirname(fs_win32_t fs, const char *path) {
+  if (fs_path_is_root(fs, path)) {
+    return strdup_x(path);
+  }
+
+  /* do this */
+  const char *end_of_path = strrchr(path, '\\');
+  return strndup_x(path, end_of_path - path);
+}
+
+char *
+util_fs_path_join(fs_win32_t fs, const char *path, const char *name) {
+  size_t len_of_basename = strlen(name);
+
+  bool add_sep = true;
+  char *new_child;
+  if (fs_path_is_root(fs, path)) {
+    assert(str_endswith(path, fs_path_sep(fs)));
+    add_sep = false;
+  }
+
+  size_t len_of_sep = strlen(fs_path_sep(fs));
+  size_t len_of_dirname = strlen(path);
+  new_child = malloc(len_of_dirname +
+                     (add_sep ? len_of_sep : 0) +
+                     len_of_basename + 1);
+  if (!new_child) {
+    return NULL;
+  }
+
+  size_t add = 0;
+  memcpy(new_child + add, path, len_of_dirname);
+  add += len_of_dirname;
+
+  if (add_sep) {
+    memcpy(new_child + add, fs_path_sep(fs), len_of_sep);
+    add += len_of_sep;
+  }
+
+  memcpy(new_child + add, name, len_of_basename);
+  add += len_of_basename;
+
+  new_child[add] = '\0';
+
+  return new_child;
+}
+
