@@ -173,7 +173,7 @@ ${LIBDAVFUSE_OBJ}: ${GEN_HEADERS_LIBDAVFUSE}
 ${LIBDAVFUSE_TARGET}: ${LIBDAVFUSE_OBJ}
 	@mkdir -p $(dir $@)
 	@echo Linking $(notdir $@)
-	@${LINK_COMMAND} ${LINK_FLAG_NAME} $(notdir $@) $(if ${LINK_FLAG_VERSION_SCRIPT}, ${LINK_FLAG_VERSION_SCRIPT} fuse_versionscript) -o $@ $^ ${LDFLAGS} ${WEBDAV_LDFLAGS} ${SOCKETS_LDFLAGS}
+	@${LINK_COMMAND} ${LINK_FLAG_NAME} $(notdir $@) $(if ${LINK_FLAG_VERSION_SCRIPT}, ${LINK_FLAG_VERSION_SCRIPT} fuse_versionscript) ${LIBDAVFUSE_EXTRA_LINK_ARGS} -o $@ $^ ${LDFLAGS} ${WEBDAV_LDFLAGS} ${SOCKETS_LDFLAGS}
 
 # davfuse rules
 

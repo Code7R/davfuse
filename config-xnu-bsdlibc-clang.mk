@@ -30,4 +30,5 @@ LINK_FLAG_VERSION_SCRIPT =
 CXX_LDFLAGS = -lc++
 
 # libdavfuse file name
-LIBDAVFUSE_FILE_NAME = libfuse.2.dylib
+LIBDAVFUSE_FILE_NAME = libfuse4x.2.dylib
+LIBDAVFUSE_EXTRA_LINK_ARGS = -compatibility_version 11.0.0 -current_version 11.7.0
