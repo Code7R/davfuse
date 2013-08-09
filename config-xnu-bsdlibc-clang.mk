@@ -4,10 +4,8 @@ FDEVENT_IMPL = select
 FSTATAT_IMPL = emu
 SOCKETS_IMPL = posix
 FS_IMPL = posix
-WEBDAV_BACKEND_IMPL = fs
-HTTP_BACKEND_IMPL = sockets_fdevent
-HTTP_BACKEND_SOURCES = http_backend_sockets_fdevent.c fdevent_select.c sockets_posix.c util_sockets.c
-WEBDAV_BACKEND_SOURCES = webdav_backend_fs.c fs_posix.c dfs.c util_fs.c fstatat_emu.c fd_utils.c
+FS_IMPL_EXTRA_SOURCES = fstatat_emu.c fd_utils.c
+FS_IMPL_EXTRA_INTERFACES = fstatat
 
 # flags
 CPPFLAGS_RELEASE = -DNDEBUG
@@ -20,6 +18,9 @@ CXXFLAGS += -std=c++11 -Wall -Wextra -Werror
 CXXFLAGS_DEBUG = -g
 CXXFLAGS_RELEASE = -O3
 
+CFLAGS_DYN = -fPIC
+CXXFLAGS_DYN = -fPIC
+
 # compiler and linker
 CC = clang
 CXX = clang++
@@ -28,5 +29,5 @@ LINK_FLAG_NAME = -dylinker_install_name
 LINK_FLAG_VERSION_SCRIPT =
 CXX_LDFLAGS = -lc++
 
-# libfuse file name
-LIBFUSE_FILE_NAME = libfuse.2.dylib
+# libdavfuse file name
+LIBDAVFUSE_FILE_NAME = libfuse.2.dylib

@@ -17,7 +17,7 @@ typedef struct {
 } FuseFsOpDoneEvent;
 
 async_fuse_fs_t
-async_fuse_fs_new(FDEventLoop *loop);
+async_fuse_fs_new(fdevent_loop_t loop);
 
 void
 async_fuse_fs_open(async_fuse_fs_t fs,
