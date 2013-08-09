@@ -443,7 +443,7 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
         }
       }
     }
-    else if (handle.dirp) {
+    else if (!open_error && handle.dirp) {
       is_dir = true;
       valid_handle = true;
     }

@@ -478,7 +478,7 @@ generate_propfind_response(struct handler_context *hc,
         char time_buf[400], *time_str;
 
         const char *fmt = is_get_last_modified
-          ? "%a, %d %b %Y %T GMT"
+          ? "%a, %d %b %Y %H:%M:%S GMT"
           : "%Y-%m-%dT%H:%M:%S-00:00";
 
         size_t num_chars = strftime(time_buf, sizeof(time_buf), fmt, tm_);
