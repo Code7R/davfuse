@@ -1,13 +1,13 @@
 #define _ISOC99_SOURCE
-#define _BSD_SOURCE
-#define _XOPEN_SOURCE 500
+/* for dirfd/pread/pwrite */
+#define _POSIX_C_SOURCE 200809L
 
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/uio.h>
 
 #include <fcntl.h>
-#include <libgen.h>
+#include <dirent.h>
 #include <unistd.h>
 
 #include <assert.h>
@@ -397,65 +397,6 @@ bool
 fs_posix_destroy(fs_posix_t fs) {
   ASSERT_VALID_FS(fs);
   return true;
-}
-
-char *
-fs_posix_dirname(fs_posix_t fs,
-                 const char *path) {
-  char *path_parent_to_ret = NULL;
-  char *path_copy = NULL;
-  ASSERT_VALID_FS(fs);
-
-  path_copy = strdup_x(path);
-  if (!path_copy) {
-    goto done;
-  }
-
-  char *path_parent = dirname(path_copy);
-  if (!path_parent) {
-    goto done;
-  }
-
-  path_parent_to_ret = strdup_x(path_parent);
-
- done:
-  free(path_copy);
-
-  return path_parent_to_ret;
-}
-
-char *
-fs_posix_join(fs_posix_t fs, const char *path, const char *name) {
-  ASSERT_VALID_FS(fs);
-
-  size_t len_of_basename = strlen(name);
-
-  char *new_child;
-  if (str_equals(path, "/")) {
-    new_child = malloc(1 + len_of_basename + 1);
-    if (!new_child) {
-      return NULL;
-    }
-
-    new_child[0] = '/';
-    memcpy(new_child + 1, name, len_of_basename);
-    new_child[1 + len_of_basename] = '\0';
-  }
-  else {
-    size_t len_of_dirname = strlen(path);
-
-    new_child = malloc(len_of_dirname + 1 + len_of_basename + 1);
-    if (!new_child) {
-      return NULL;
-    }
-
-    memcpy(new_child, path, len_of_dirname);
-    new_child[len_of_dirname] = '/';
-    memcpy(new_child + len_of_dirname + 1, name, len_of_basename);
-    new_child[len_of_dirname + 1 + len_of_basename] = '\0';
-  }
-
-  return new_child;
 }
 
 bool
