@@ -1,5 +1,5 @@
-#ifndef _WEBDAV_BACKEND_FUSE_H
-#define _WEBDAV_BACKEND_FUSE_H
+#ifndef _WEBDAV_BACKEND_ASYNC_FUSE_H
+#define _WEBDAV_BACKEND_ASYNC_FUSE_H
 
 #include "async_fuse_fs.h"
 #include "_webdav_server_types.h"
