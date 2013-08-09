@@ -1,3 +1,6 @@
+#define _ISOC99_SOURCE
+#define _BSD_SOURCE
+
 #include <libgen.h>
 
 #include "async_fuse_fs.h"

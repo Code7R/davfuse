@@ -2,7 +2,11 @@
 #define _SOCKET_WINSOCK_H
 
 #include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/types.h>
+
 #include <netinet/in.h>
+
 #include <unistd.h>
 
 #include <errno.h>
