@@ -1942,6 +1942,8 @@ webdav_server_start(http_backend_t http_backend,
 static
 EVENT_HANDLER_DEFINE(_webdav_stop_cb, ev_type, ev, ud) {
   UNUSED(ev);
+  UNUSED(ev_type);
+
   struct webdav_server *serv = ud;
 
   assert(ev_type == HTTP_SERVER_STOP_DONE_EVENT);

@@ -4,23 +4,15 @@
 # Platform dependent configuation
 include config.mk
 
-OUTROOT := out
+OUTROOT := $(if ${RELEASE}, out-release, out)
 TARGETROOT := ${OUTROOT}/targets
 SRCROOT := src
 
-MAJOR_VERSION := 0
-MINOR_VERSION := 1
-VERSION := ${MAJOR_VERSION}.${MINOR_VERSION}
-CPPFLAGS += -DVERSION=\"${VERSION}\" -I${SRCROOT}
-CPPFLAGS_HTTP_SERVER_TEST_MAIN = 
+CPPFLAGS += -I${SRCROOT}
 
-# TODO: configure this with a flag
-CFLAGS += ${CFLAGS_DEBUG}
-#CFLAGS += ${CFLAGS_RELEASE}
-#CPPFLAGS += ${CPPFLAGS_RELEASE}
-# Cross-platform essential build flags
-
-CXXFLAGS += ${CXXFLAGS_DEBUG}
+CFLAGS += $(if ${RELEASE}, ${CFLAGS_RELEASE}, ${CFLAGS_DEBUG})
+CXXFLAGS += $(if ${RELEASE}, ${CXXFLAGS_RELEASE}, ${CXXFLAGS_DEBUG})
+CPPFLAGS += $(if ${RELEASE}, ${CPPFLAGS_RELEASE}, ${CPPFLAGS_DEBUG})
 
 # Different xml backends for the webdav server
 WEBDAV_SERVER_XML_IMPL := webdav_server_xml_tinyxml2.cpp tinyxml2.cpp
@@ -76,7 +68,7 @@ LIBDAVFUSE_SRC = \
     fdevent_${FDEVENT_IMPL}.c sockets_${SOCKETS_IMPL}.c util_sockets.c \
     ${WEBDAV_SERVER_SRC} webdav_backend_async_fuse.c
 GEN_HEADERS_LIBDAVFUSE_ = \
-    fdevent.h sockets.h http_backend.h fs.h webdav_backend.h
+    fdevent.h sockets.h http_backend.h webdav_backend.h
 
 GEN_HEADERS_LIBDAVFUSE = $(patsubst %,${OUTROOT}/libdavfuse/headers/%,${GEN_HEADERS_LIBDAVFUSE_})
 LIBDAVFUSE_OBJ := $(patsubst %,${OUTROOT}/libdavfuse/obj/%.o,${LIBDAVFUSE_SRC})
@@ -111,21 +103,18 @@ webdav_server_sockets_fs_main: options ${WEBDAV_SERVER_SOCKETS_FS_MAIN_TARGET}
 libdavfuse: options ${LIBDAVFUSE_TARGET}
 davfuse: options ${DAVFUSE_TARGET}
 
-# general rules
-
 # http_server_test_main rules
+
+${OUTROOT}/http_server_test_main/headers/%.h: ${SRCROOT}/%.idef generate-interface-implementation.sh ${MAKEFILES}
+	@mkdir -p $(dir $@)
+	@echo Generating $(notdir $@)
+	@HTTP_BACKEND_IMPL=sockets_fdevent FDEVENT_IMPL=${FDEVENT_IMPL} SOCKETS_IMPL=${SOCKETS_IMPL} sh generate-interface-implementation.sh $^ > $@
 
 ${OUTROOT}/http_server_test_main/obj/%.c.o: ${SRCROOT}/%.c ${MAKEFILES} 
 	@mkdir -p $(dir $@)
 	@${MAKEDEPEND_CC}
 	@echo CC $(notdir $<)
 	@${CC} -I$(dir $@)../headers ${CPPFLAGS} ${CFLAGS} -c -o $@ $<
-
-${OUTROOT}/http_server_test_main/headers/%.h: ${SRCROOT}/%.idef generate-interface-implementation.sh ${MAKEFILES}
-	@mkdir -p $(dir $@)
-	@echo -n Generating $(notdir $@)
-	@HTTP_BACKEND_IMPL=sockets_fdevent FSTATAT_IMPL=${FSTATAT_IMPL} FS_IMPL=${FS_IMPL} FDEVENT_IMPL=${FDEVENT_IMPL} SOCKETS_IMPL=${SOCKETS_IMPL} sh generate-interface-implementation.sh $^ > $@
-	@echo ' Done!'
 
 ${HTTP_SERVER_TEST_MAIN_OBJ}: ${GEN_HEADERS_HTTP_SERVER_TEST_MAIN}
 
@@ -138,9 +127,8 @@ ${HTTP_SERVER_TEST_MAIN_TARGET}: ${HTTP_SERVER_TEST_MAIN_OBJ}
 
 ${OUTROOT}/webdav_server_sockets_fs_main/headers/%.h: ${SRCROOT}/%.idef generate-interface-implementation.sh ${MAKEFILES}
 	@mkdir -p $(dir $@)
-	@echo -n Generating $(notdir $@)
+	@echo Generating $(notdir $@)
 	@WEBDAV_BACKEND_IMPL=fs HTTP_BACKEND_IMPL=sockets_fdevent FSTATAT_IMPL=${FSTATAT_IMPL} FS_IMPL=${FS_IMPL} FDEVENT_IMPL=${FDEVENT_IMPL} SOCKETS_IMPL=${SOCKETS_IMPL} sh generate-interface-implementation.sh $^ > $@
-	@echo ' Done!'
 
 ${OUTROOT}/webdav_server_sockets_fs_main/obj/%.c.o: ${SRCROOT}/%.c ${MAKEFILES}
 	@mkdir -p $(dir $@)
@@ -165,9 +153,8 @@ ${WEBDAV_SERVER_SOCKETS_FS_MAIN_TARGET}: ${WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ}
 
 ${OUTROOT}/libdavfuse/headers/%.h: ${SRCROOT}/%.idef generate-interface-implementation.sh ${MAKEFILES}
 	@mkdir -p $(dir $@)
-	@echo -n Generating $(notdir $@)
-	@WEBDAV_BACKEND_IMPL=async_fuse HTTP_BACKEND_IMPL=sockets_fdevent FSTATAT_IMPL=${FSTATAT_IMPL} FS_IMPL=${FS_IMPL} FDEVENT_IMPL=${FDEVENT_IMPL} SOCKETS_IMPL=${SOCKETS_IMPL} sh generate-interface-implementation.sh $^ > $@
-	@echo ' Done!'
+	@echo Generating $(notdir $@)
+	@WEBDAV_BACKEND_IMPL=async_fuse HTTP_BACKEND_IMPL=sockets_fdevent FDEVENT_IMPL=${FDEVENT_IMPL} SOCKETS_IMPL=${SOCKETS_IMPL} sh generate-interface-implementation.sh $^ > $@
 
 ${OUTROOT}/libdavfuse/obj/%.c.o: ${SRCROOT}/%.c ${MAKEFILES}
 	@mkdir -p $(dir $@)
@@ -192,10 +179,9 @@ ${LIBDAVFUSE_TARGET}: ${LIBDAVFUSE_OBJ}
 
 ${DAVFUSE_TARGET}: generate-davfuse.sh ${MAKEFILES} ${LIBDAVFUSE_TARGET}
 	@mkdir -p $(dir $@)
-	@echo -n Running generate-davfuse.sh...
+	@echo Running generate-davfuse.sh...
 	@PRIVATE_LIBDIR=. sh generate-davfuse.sh > $@
 	@chmod a+x $@
-	@echo ' Done!'
 
 # for dependency auto generateion
 DEPDIR = $(dir $@)../deps
@@ -218,7 +204,4 @@ MAKEDEPEND_CXX = \
 -include $(WEBDAV_SERVER_SOCKETS_FS_MAIN_SRC:%=${OUTROOT}/webdav_server_sockets_fs_main/deps/%.P)
 -include $(LIBDAVFUSE_SRC:%=${OUTROOT}/libdavfuse/deps/%.P)
 
-clean:
-	-rm -rf ${OUTROOT}
-
-.PHONY: all options clean webdav_server_sockets_fs_main libdavfuse http_server_test_main
+.PHONY: all options webdav_server_sockets_fs_main libdavfuse http_server_test_main
