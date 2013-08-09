@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <errno.h>
 
+#include "fd_utils.h"
 #include "fstatat.h"
 #include "util.h"
 
@@ -453,9 +454,17 @@ fs_posix_join(fs_posix_t fs, const char *path, const char *name) {
   return new_child;
 }
 
-char *
+bool
+fs_posix_path_is_root(fs_posix_t fs, const char *a) {
+  ASSERT_VALID_FS(fs);
+
+  return str_equals(a, "/");
+}
+
+bool
 fs_posix_path_equals(fs_posix_t fs, const char *a, const char *b) {
   ASSERT_VALID_FS(fs);
+
   return str_equals(a, b);
 }
 
@@ -463,6 +472,8 @@ bool
 fs_posix_path_is_parent(fs_posix_t fs,
                         const char *potential_parent,
                         const char *potential_child) {
+  ASSERT_VALID_FS(fs);
+
   if (!str_startswith(potential_child, potential_parent)) {
     return false;
   }
@@ -472,6 +483,8 @@ fs_posix_path_is_parent(fs_posix_t fs,
 }
 
 const char *
-fs_posix_path_sep(void) {
+fs_posix_path_sep(fs_posix_t fs) {
+  ASSERT_VALID_FS(fs);
+
   return "/";
 }

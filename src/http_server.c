@@ -293,7 +293,6 @@ EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
                      min_size_t(tctx->input_nbyte - tctx->input_buf_offset,
                                 cctx->chunk_size - cctx->chunk_read),
                      _chunked_request_coro, ud));
-      log_debug("back chunk read");
       assert(ev_type == C_READ_DONE_EVENT);
       CReadDoneEvent *c_read_done_ev = ev;
       if (c_read_done_ev->error_number) {

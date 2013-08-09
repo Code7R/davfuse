@@ -106,8 +106,19 @@ fs_posix_close(fs_posix_t fs, fs_posix_file_handle_t handle);
 bool
 fs_posix_destroy(fs_posix_t fs);
 
-char *
-fs_posix_dirname(fs_posix_t fs, const char *path);
+bool
+fs_posix_path_is_root(fs_posix_t fs, const char *a);
+
+const char *
+fs_posix_path_sep(fs_posix_t fs);
+
+bool
+fs_posix_path_equals(fs_posix_t fs, const char *a, const char *b);
+
+bool
+fs_posix_path_is_parent(fs_posix_t fs,
+                        const char *potential_parent,
+                        const char *potential_child);
 
 #ifdef __cplusplus
 }

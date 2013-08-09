@@ -370,7 +370,7 @@ util_fs_copytree(fs_t fs,
 }
 
 char *
-util_fs_path_dirname(fs_win32_t fs, const char *path) {
+util_fs_path_dirname(fs_t fs, const char *path) {
   if (fs_path_is_root(fs, path)) {
     return strdup_x(path);
   }
@@ -381,7 +381,7 @@ util_fs_path_dirname(fs_win32_t fs, const char *path) {
 }
 
 char *
-util_fs_path_join(fs_win32_t fs, const char *path, const char *name) {
+util_fs_path_join(fs_t fs, const char *path, const char *name) {
   size_t len_of_basename = strlen(name);
 
   bool add_sep = true;
