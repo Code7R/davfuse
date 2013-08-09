@@ -1,13 +1,6 @@
-#ifndef FDEVENT_COMMON_H
-#define FDEVENT_COMMON_H
-
-#ifndef FDEVENT_LOOP
-#error "must define FDEVENT_LOOP before including this file!"
+#ifndef _INCLUDE_FDEVENT_COMMON_H
+#error "DON'T INCLUDE THIS UNLESS YOU KNOW WHAT YOU'RE DOING"
 #endif
-
-#include <stdbool.h>
-
-#include "c_util.h"
 
 typedef struct {
   bool read : 1;
@@ -24,11 +17,3 @@ HEADER_FUNCTION CONST_FUNCTION bool
 stream_events_are_equal(StreamEvents a, StreamEvents b) {
   return a.read == b.read && a.write == b.write;
 }
-
-typedef struct {
-  FDEVENT_LOOP *loop;
-  int fd;
-  StreamEvents events;
-} FDEvent;
-
-#endif /* FDEVENT_COMMON_H */

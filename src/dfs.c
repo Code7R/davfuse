@@ -25,7 +25,8 @@ NON_NULL_ARGS3(1, 3, 4) depth_first_t
 dfs_create(void *init,
            bool is_postorder,
            expand_fn expand_,
-           free_fn free_) {
+           free_fn free_,
+           void *user_data) {
   EASY_ALLOC(struct depth_first, df);
 
   /* we use tagged pointers, so the initial pointer
@@ -39,6 +40,7 @@ dfs_create(void *init,
     .expand_ = expand_,
     .free_ = free_,
     .is_postorder = is_postorder,
+    .user_data = user_data,
   };
 
   return df;
@@ -68,7 +70,7 @@ dfs_next(depth_first_t ctx) {
            don't have their 0th bit set */
         /* XXX: also that none of them are NULL */
         linked_list_t old_stack = ctx->stack;
-        ctx->stack = ctx->expand_(ctx->curnode, ctx->stack);
+        ctx->stack = ctx->expand_(ctx->user_data, ctx->curnode, ctx->stack);
 
         if (old_stack == ctx->stack) {
           /* this entry didn't extend, it's just a leaf */
@@ -96,11 +98,18 @@ dfs_next(depth_first_t ctx) {
 static void
 my_free(void *p, void *ud) {
   struct depth_first *ctx = ud;
-  ctx->free_(clear_pointer_postorder(p));
+  ctx->free_(ctx->user_data, clear_pointer_postorder(p));
 }
 
 NON_NULL_ARGS0() void
 dfs_destroy(depth_first_t ctx) {
   linked_list_free_ud(ctx->stack, my_free, ctx);
   free(ctx);
+}
+
+
+void
+dfs_ignore_user_data_free(void *ctx, void *ptr) {
+  UNUSED(ctx);
+  free(ptr);
 }

@@ -4,6 +4,7 @@
 #include "http_server.h"
 #include "uthread.h"
 #include "util.h"
+#include "webdav_backend.h"
 #include "_webdav_server_types.h"
 
 #ifdef __cplusplus
@@ -78,14 +79,8 @@ struct webdav_propfind_entry {
   size_t length;
 };
 
-struct webdav_backend {
-  const WebdavBackendOperations *op;
-  void *user_data;
-};
-
 struct webdav_server {
-  HTTPServer http;
-  FDEventLoop *loop;
+  http_server_t http;
   linked_list_t locks;
   webdav_backend_t fs;
   char *public_prefix;

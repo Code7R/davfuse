@@ -1,0 +1,43 @@
+# integral types
+t
+file_handle_t
+directory_handle_t
+error_t
+time_t
+off_t
+
+# transparent structural types
+Attrs
+
+# constants
+ERROR_SUCCESS
+ERROR_DOES_NOT_EXIST
+ERROR_NOT_DIR
+ERROR_IS_DIR
+ERROR_IO
+ERROR_NO_SPACE
+ERROR_PERM
+ERROR_EXISTS
+ERROR_CROSS_DEVICE
+ERROR_NO_MEM
+
+# functions
+open
+fgetattr
+ftruncate
+read
+write
+opendir
+readdir
+closedir
+remove
+mkdir
+getattr
+rename
+close
+blank_new
+destroy
+path_is_root
+path_equals
+path_is_parent
+path_sep

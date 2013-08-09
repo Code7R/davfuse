@@ -126,7 +126,7 @@ webdav_get_depth(const HTTPRequestHeaders *rhs) {
   webdav_depth_t depth;
 
   const char *depth_str = http_get_header_value(rhs, WEBDAV_HEADER_DEPTH);
-  if (!depth_str || !strcasecmp(depth_str, "infinity")) {
+  if (!depth_str || str_case_equals(depth_str, "infinity")) {
     depth = DEPTH_INF;
   }
   else {
@@ -302,8 +302,8 @@ perform_write_lock(struct webdav_server *ws,
   }
 
   char s_lock_token[256];
-  int len = snprintf(s_lock_token, sizeof(s_lock_token), "x-this-lock-token:///%lld.%lld",
-                     (long long) curtime.tv_sec, (long long) curtime.tv_usec);
+  int len = snprintf(s_lock_token, sizeof(s_lock_token), "x-this-lock-token:///%ld.%ld",
+                     (long) curtime.tv_sec, (long) curtime.tv_usec);
   if (len == sizeof(s_lock_token) - 1) {
     /* lock token string was too long */
     return false;
@@ -1896,134 +1896,43 @@ EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
              .serv = ud);
 }
 
-webdav_backend_t
-webdav_backend_new(const WebdavBackendOperations *op,
-              size_t op_size,
-              void *user_data) {
-  UNUSED(op_size);
-
-  struct webdav_backend *toret = malloc(sizeof(*toret));
-  if (!toret) {
-    return NULL;
-  }
-
-  *toret = (struct webdav_backend) {
-    .op = op,
-    .user_data = user_data,
-  };
-
-  return toret;
-}
-
-void
-webdav_backend_destroy(webdav_backend_t fs) {
-  free(fs);
-}
-
-void
-webdav_backend_get(webdav_backend_t fs,
-                   const char *relative_uri,
-                   webdav_get_request_ctx_t get_ctx) {
-  return fs->op->get(fs->user_data, relative_uri, get_ctx);
-}
-
-void
-webdav_backend_put(webdav_backend_t fs,
-                   const char *relative_uri,
-                   webdav_put_request_ctx_t put_ctx) {
-  return fs->op->put(fs->user_data, relative_uri, put_ctx);
-}
-
-void
-webdav_backend_touch(webdav_backend_t fs,
-                     const char *relative_uri,
-                     event_handler_t cb, void *cb_ud) {
-  return fs->op->touch(fs->user_data,
-                       relative_uri,
-                       cb, cb_ud);
-}
-
-void
-webdav_backend_propfind(webdav_backend_t fs,
-                        const char *relative_uri, webdav_depth_t depth,
-                        webdav_propfind_req_type_t propfind_req_type,
-                        event_handler_t cb, void *cb_ud) {
-  return fs->op->propfind(fs->user_data,
-                          relative_uri, depth,
-                          propfind_req_type,
-                          cb, cb_ud);
-}
-
-void
-webdav_backend_mkcol(webdav_backend_t fs,
-                     const char *relative_uri,
-                     event_handler_t cb, void *cb_ud) {
-  return fs->op->mkcol(fs->user_data, relative_uri, cb, cb_ud);
-}
-
-void
-webdav_backend_delete(webdav_backend_t fs,
-                      const char *relative_uri,
-                      event_handler_t cb, void *cb_ud) {
-  return fs->op->delete_x(fs->user_data, relative_uri, cb, cb_ud);
-}
-
-void
-webdav_backend_move(webdav_backend_t fs,
-                    const char *src_relative_uri, const char *dst_relative_uri,
-                    bool overwrite,
-                    event_handler_t cb, void *cb_ud) {
-  return fs->op->move(fs->user_data,
-                      src_relative_uri, dst_relative_uri,
-                      overwrite,
-                      cb, cb_ud);
-}
-
-void
-webdav_backend_copy(webdav_backend_t fs,
-                    const char *src_relative_uri, const char *dst_relative_uri,
-                    bool overwrite, webdav_depth_t depth,
-                    event_handler_t cb, void *cb_ud) {
-  return fs->op->copy(fs->user_data,
-                      src_relative_uri, dst_relative_uri,
-                      overwrite, depth,
-                      cb, cb_ud);
-}
-
 webdav_server_t
-webdav_server_start(FDEventLoop *loop,
-                    int server_fd,
+webdav_server_start(http_backend_t http_backend,
                     const char *public_prefix,
                     webdav_backend_t fs) {
-  struct webdav_server *serv = NULL;
   char *public_prefix_copy = NULL;
-
-  serv = malloc(sizeof(*serv));
-  if (!serv) {
-    goto error;
-  }
+  http_server_t http = (http_server_t) 0;
+  struct webdav_server *serv = NULL;
 
   public_prefix_copy = strdup_x(public_prefix);
   if (!public_prefix_copy) {
     goto error;
   }
 
+  serv = malloc(sizeof(*serv));
+  if (!serv) {
+    goto error;
+  }
+
+  http = http_server_start(http_backend,
+                           handle_request, serv);
+  if (!http) {
+    goto error;
+  }
+
   *serv = (struct webdav_server) {
-    .loop = loop,
+    .http = http,
     .locks = LINKED_LIST_INITIALIZER,
     .fs = fs,
     .public_prefix = public_prefix_copy,
   };
 
-  bool ret = http_server_start(&serv->http, loop, server_fd,
-                               handle_request, serv);
-  if (!ret) {
-    goto error;
-  }
-
   return serv;
 
  error:
+  if (http) {
+    http_server_stop(http, NULL, NULL);
+  }
   free(serv);
   free(public_prefix_copy);
 
@@ -2033,6 +1942,8 @@ webdav_server_start(FDEventLoop *loop,
 static
 EVENT_HANDLER_DEFINE(_webdav_stop_cb, ev_type, ev, ud) {
   UNUSED(ev);
+  UNUSED(ev_type);
+
   struct webdav_server *serv = ud;
 
   assert(ev_type == HTTP_SERVER_STOP_DONE_EVENT);
@@ -2056,5 +1967,5 @@ webdav_server_stop(webdav_server_t ws,
   struct webdav_server *serv = ws;
   serv->stop_cb = cb;
   serv->stop_ud = user_data;
-  return http_server_stop(&serv->http, _webdav_stop_cb, serv);
+  return http_server_stop(serv->http, _webdav_stop_cb, serv);
 }

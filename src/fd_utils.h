@@ -15,16 +15,4 @@ set_non_blocking(int fd);
 bool
 set_blocking(int fd);
 
-int
-create_bound_socket(const struct sockaddr *addr, socklen_t address_len);
-
-typedef uint16_t port_t;
-
-enum {
-  MAX_PORT=UINT16_MAX,
-};
-
-int
-create_ipv4_bound_socket(port_t port);
-
 #endif /* FD_UTILS_H */

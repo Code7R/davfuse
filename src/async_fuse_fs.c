@@ -59,7 +59,7 @@ channel_deinit(Channel *chan) {
 struct async_fuse_fs {
   Channel to_worker;
   Channel to_server;
-  FDEventLoop *loop;
+  fdevent_loop_t loop;
   /* TODO: get rid of this */
   async_rdwr_lock_t to_server_lock;
 };
@@ -244,7 +244,7 @@ send_quit_message_blocking(Channel *chan) {
 typedef struct {
   UTHR_CTX_BASE;
   /* args */
-  FDEventLoop *loop;
+  fdevent_loop_t loop;
   Channel *to_chan;
   Message *msg;
   event_handler_t cb;
@@ -290,7 +290,7 @@ UTHR_DEFINE(_send_message) {
 }
 
 static void
-send_message(FDEventLoop *loop,
+send_message(fdevent_loop_t loop,
              Channel *to_chan,
              Message *msg,
              event_handler_t cb, void *ud) {
@@ -305,7 +305,7 @@ send_message(FDEventLoop *loop,
 typedef struct {
   UTHR_CTX_BASE;
   /* args */
-  FDEventLoop *loop;
+  fdevent_loop_t loop;
   Channel *from_chan;
   event_handler_t cb;
   void *ud;
@@ -353,7 +353,7 @@ UTHR_DEFINE(_receive_reply_message) {
 }
 
 static void
-receive_reply_message(FDEventLoop *loop,
+receive_reply_message(fdevent_loop_t loop,
                       Channel *from_chan,
                       event_handler_t cb, void *ud) {
   UTHR_CALL4(_receive_reply_message, ReceiveReplyMessageCtx,
@@ -394,7 +394,7 @@ _async_fuse_fs_destroy(async_fuse_fs_t fs) {
 }
 
 async_fuse_fs_t
-async_fuse_fs_new(FDEventLoop *loop) {
+async_fuse_fs_new(fdevent_loop_t loop) {
   struct async_fuse_fs *toret = malloc(sizeof(*toret));
   if (!toret) {
     log_error("Couldn't allocate async_fuse_fs_t");

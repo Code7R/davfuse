@@ -108,6 +108,37 @@ str_startswith(const char *a, const char *b) {
   return !memcmp(a, b, len_b);
 }
 
+PURE_FUNCTION int
+ascii_strncasecmp(const char *a, const char *b, size_t n) {
+  int ret;
+  size_t i = 0;
+  for (; (a[i] != '\0' || b[i] != '\0') && i < n; ++i) {
+    ret = ascii_to_lower(a[i]) - ascii_to_lower(b[i]);
+    if (ret) {
+      return ret;
+    }
+  }
+
+  if (i == n) {
+    return 0;
+  }
+
+  return ascii_to_lower(a[i]) - ascii_to_lower(b[i]);
+}
+
+PURE_FUNCTION bool
+str_case_startswith(const char *a, const char *b) {
+  size_t len_a = strlen(a);
+  size_t len_b = strlen(b);
+  if (len_a < len_b) {
+    return false;
+  }
+
+  assert_ascii_locale();
+
+  return !ascii_strncasecmp(a, b, len_b);
+}
+
 PURE_FUNCTION bool
 str_endswith(const char *a, const char *b) {
   size_t len_a = strlen(a);

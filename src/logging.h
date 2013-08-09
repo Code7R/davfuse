@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "c_util.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -47,6 +49,9 @@ extern log_level_t _logging_cur_level;
 
 bool
 init_logging(FILE *log_destination, log_level_t level);
+
+HEADER_FUNCTION void
+shutdown_logging(void) {}
 
 void
 _log(const char *filename, int lineno, log_level_t level, const char *format, ...);

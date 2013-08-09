@@ -1,13 +1,15 @@
 #include <assert.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdlib.h>
 
-
 #include "events.h"
 #include "fdevent.h"
-#include "fd_utils.h"
+#include "http_backend_sockets_fdevent.h"
 #include "http_server.h"
 #include "logging.h"
+#include "util.h"
+#include "util_sockets.h"
 
 #define BUF_SIZE 4096
 
@@ -84,7 +86,6 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
                                 handle_request, hc));
       HTTPRequestReadDoneEvent *read_ev = ev;
       assert(ev_type == HTTP_REQUEST_READ_DONE_EVENT);
-      assert(read_ev->request_handle == hc->rh);
       if (read_ev->err != HTTP_SUCCESS) {
         goto error;
       }
@@ -100,8 +101,9 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   strncpy(hc->resp.message, "Not Found", sizeof(hc->resp.message));
   hc->resp.num_headers = 1;
   strncpy(hc->resp.headers[0].name, "Content-Length", sizeof(hc->resp.headers[0].name));
+  assert(sizeof(toret) - 1 <= UINT_MAX);
   snprintf(hc->resp.headers[0].value, sizeof(hc->resp.headers[0].value),
-           "%zu", sizeof(toret) - 1);
+           "%u", (unsigned ) (sizeof(toret) - 1));
 
   CRYIELD(hc->pos,
           http_request_write_headers(hc->rh, &hc->resp,
@@ -135,29 +137,38 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
 }
 
 int main() {
-  init_logging(stdout, LOG_DEBUG);
+  bool success_init_logging = init_logging(stdout, LOG_DEBUG);
+  ASSERT_TRUE(success_init_logging);
   log_info("Logging initted.");
 
-  /* ignore SIGPIPE */
-  signal(SIGPIPE, SIG_IGN);
+  /* init sockets */
+  bool success_init_sockets = init_socket_subsystem();
+  ASSERT_TRUE(success_init_sockets);
 
-  /* create server socket */
-  int server_fd = create_ipv4_bound_socket(8080);
-  assert(server_fd >= 0);
+  /* ignore SIGPIPE */
+  bool success_ignore = ignore_sigpipe();
+  ASSERT_TRUE(success_ignore);
 
   /* create event loop */
-  FDEventLoop loop;
-  bool ret = fdevent_init(&loop);
-  assert(ret);
+  fdevent_loop_t loop = fdevent_new();
+  ASSERT_TRUE(loop);
+
+  /* create backend */
+  struct sockaddr_in listen_addr;
+  init_sockaddr_in(&listen_addr, 8080);
+
+  http_backend_sockets_fdevent_t http_backend =
+    http_backend_sockets_fdevent_new(loop,
+                                     (struct sockaddr *) &listen_addr,
+                                     sizeof(listen_addr));
+  ASSERT_TRUE(http_backend);
 
   /* start http server */
-  HTTPServer http;
-  ret = http_server_start(&http, &loop, server_fd,
-			  handle_request, NULL);
-  assert(ret);
+  http_server_t server = http_server_start(http_backend, handle_request, NULL);
+  ASSERT_TRUE(server);
 
   log_info("Starting main loop");
-  fdevent_main_loop(&loop);
+  fdevent_main_loop(loop);
 
   return 0;
 }

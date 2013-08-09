@@ -187,15 +187,16 @@ _OwnerXmlStorer::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
 
     if (attr_ns_href) {
       char long_str[200];
-      int ret = snprintf(long_str, sizeof(long_str), "xmlns:a%ju", start);
+      int ret = snprintf(long_str, sizeof(long_str), "xmlns:a%lu",
+                         (unsigned long) start);
       if (ret < 0 || ret == sizeof(long_str) - 1) {
         /* formatted string was too long */
         abort();
       }
       new_elt->SetAttribute(long_str, attr_ns_href);
 
-      int ret2 = snprintf(long_str, sizeof(long_str), "a%ju:%s",
-                         start, attr_ns_name);
+      int ret2 = snprintf(long_str, sizeof(long_str), "a%lu:%s",
+                          (unsigned long) start, attr_ns_name);
       if (ret2 < 0 || ret2 == sizeof(long_str) - 1) {
         /* formatted string was too long */
         abort();
@@ -477,7 +478,7 @@ generate_propfind_response(struct handler_context *hc,
         char time_buf[400], *time_str;
 
         const char *fmt = is_get_last_modified
-          ? "%a, %d %b %Y %T GMT"
+          ? "%a, %d %b %Y %H:%M:%S GMT"
           : "%Y-%m-%dT%H:%M:%S-00:00";
 
         size_t num_chars = strftime(time_buf, sizeof(time_buf), fmt, tm_);
@@ -499,8 +500,8 @@ generate_propfind_response(struct handler_context *hc,
                str_equals(elt->ns_href, DAV_XML_NS) &&
                !propfind_entry->is_collection) {
         char length_str[400];
-        snprintf(length_str, sizeof(length_str), "%lld",
-                 (long long) propfind_entry->length);
+        snprintf(length_str, sizeof(length_str), "%lu",
+                 (unsigned long) propfind_entry->length);
         newChildElement(prop_success_elt, "getcontentlength", length_str);
       }
       else if (str_equals(elt->element_name, "resourcetype") &&

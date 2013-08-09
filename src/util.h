@@ -3,8 +3,11 @@
 
 #include <errno.h>
 
+#include <assert.h>
+#include <ctype.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -14,6 +17,10 @@
 #include "logging.h"
 
 #ifdef __cplusplus
+#ifndef SIZE_MAX
+#define SIZE_MAX ((size_t) -1)
+#endif
+
 extern "C" {
 #endif
 
@@ -63,6 +70,9 @@ PURE_FUNCTION bool
 str_startswith(const char *a, const char *b);
 
 PURE_FUNCTION bool
+str_case_startswith(const char *a, const char *b);
+
+PURE_FUNCTION bool
 str_endswith(const char *a, const char *b);
 
 PURE_FUNCTION char *
@@ -71,6 +81,48 @@ strdup_x(const char *s);
 PURE_FUNCTION char *
 strndup_x(const char *s, size_t n);
 
+HEADER_FUNCTION CONST_FUNCTION char
+ascii_to_lower(char a) {
+  enum {
+    ASCII_UPPER_CASE_LOWER_BOUND=65,
+    ASCII_UPPER_CASE_UPPER_BOUND=90,
+    ASCII_UPPER_CASE_LOWER_OFFSET=32,
+  };
+  return a + ((ASCII_UPPER_CASE_LOWER_BOUND <= a &&
+               a <= ASCII_UPPER_CASE_UPPER_BOUND) ?
+              ASCII_UPPER_CASE_LOWER_OFFSET :
+              0);
+}
+
+PURE_FUNCTION int
+ascii_strncasecmp(const char *a, const char *b, size_t n);
+
+HEADER_FUNCTION PURE_FUNCTION int
+ascii_strcasecmp(const char *a, const char *b) {
+  return ascii_strncasecmp(a, b, SIZE_MAX);
+}
+
+HEADER_FUNCTION PURE_FUNCTION bool
+ascii_strcaseequal(const char *a, const char *b) {
+  return !ascii_strcasecmp(a, b);
+}
+
+HEADER_FUNCTION void
+assert_ascii_locale(void) {
+  enum {
+    ASCII_SPACE=32,
+    ASCII_0=48,
+  };
+  /* make sure the locale is ASCII */
+  assert(isspace(ASCII_SPACE) && isdigit(ASCII_0));
+}
+
+HEADER_FUNCTION PURE_FUNCTION int
+strcasecmp_x(const char *a, const char *b) {
+  assert_ascii_locale();
+  return ascii_strcasecmp(a, b);
+}
+
 HEADER_FUNCTION PURE_FUNCTION bool
 str_equals(const char *a, const char *b) {
   return !strcmp(a, b);
@@ -78,7 +130,7 @@ str_equals(const char *a, const char *b) {
 
 HEADER_FUNCTION PURE_FUNCTION bool
 str_case_equals(const char *a, const char *b) {
-  return !strcasecmp(a, b);
+  return !strcasecmp_x(a, b);
 }
 
 #define DEFINE_MIN(type) \

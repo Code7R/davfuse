@@ -1,7 +1,9 @@
 #define _ISOC99_SOURCE
-#define _POSIX_C_SOURCE 200112L
 
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200112L
 #include <unistd.h>
+#endif
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -26,10 +28,14 @@ init_logging(FILE *log_destination, log_level_t level) {
   _logging_dest = log_destination;
   _logging_cur_level = level;
 
+#ifndef _WIN32
   /* this code makes this module become POSIX */
   char *term_env = getenv("TERM");
   _show_colors = (isatty(fileno(_logging_dest)) &&
                   term_env && !str_equals(term_env, "dumb"));
+#else
+  _show_colors = false;
+#endif
 
   return true;
 }

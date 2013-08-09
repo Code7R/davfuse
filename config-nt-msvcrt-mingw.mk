@@ -1,13 +1,21 @@
 # Customize below to fit your system
-# This example is made for glibc/gcc
-FDEVENT_SOURCE = select
-FSTATAT_SOURCE = native
+# This example is made for nt/msvcrt/mingw
+FDEVENT_IMPL = select
+FSTATAT_IMPL = none
+SOCKETS_IMPL = winsock
+FS_IMPL = win32
+WEBDAV_BACKEND_IMPL = fs
+HTTP_BACKEND_IMPL = sockets_fdevent
+HTTP_BACKEND_SOURCES = http_backend_sockets_fdevent.c fdevent_select.c sockets_winsock.c util_sockets.c
+WEBDAV_BACKEND_SOURCES = webdav_backend_fs.c fs_win32.c dfs.c util_fs.c
+
+SOCKETS_LDFLAGS = -lws2_32
 
 # flags
-# this is used on linux for seamless 64-bit filesystem usage
-# on 32-bit systems
-CPPFLAGS += -D_FORTIFY_SOURCE=2 -D_FILE_OFFSET_BITS=64
 CPPFLAGS_RELEASE = -DNDEBUG
+
+# http://utf8everywhere.org/#how
+CPPFLAGS += -D_UNICODE -DUNICODE
 
 CFLAGS += -std=c99 -Wall -Wextra -Werror
 CFLAGS_DEBUG = -g
