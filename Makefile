@@ -189,14 +189,14 @@ df = ${DEPDIR}/${*F}
 MAKEDEPEND_CC = \
     mkdir -p ${DEPDIR}; \
     ${CC} -M -MT $@ -I$(dir $@)../headers ${CPPFLAGS} ${CFLAGS} -o ${df}.d $<; \
-    CMD=`printf ':a\n s;/\./;/;g \n s;//;/;g \n s;/[^/][^/]*/\.\./;/;g \n s;/[^/][^/]*/\.\.$$;/;g \n ta'`; \
+    CMD=`printf ':a\n s;/\./;/; \n s;//;/; \n s;/[^/][^/]*/\.\./;/; \n s;/[^/][^/]*/\.\.$$;/; \n ta'`; \
     sed -e "$$CMD" < ${df}.d > ${df}.c.P; \
     rm -f ${df}.d
 
 MAKEDEPEND_CXX = \
     mkdir -p ${DEPDIR}; \
     ${CXX} -M -MT $@ -I$(dir $@)../headers ${CPPFLAGS} ${CXXFLAGS} -o ${df}.d $<; \
-    CMD=`printf ':a\n s;/\./;/;g \n s;//;/;g \n s;/[^/][^/]*/\.\./;/;g \n s;/[^/][^/]*/\.\.$$;/;g \n ta'`; \
+    CMD=`printf ':a\n s;/\./;/; \n s;//;/; \n s;/[^/][^/]*/\.\./;/; \n s;/[^/][^/]*/\.\.$$;/; \n ta'`; \
     sed -e "$$CMD" < ${df}.d > ${df}.cpp.P; \
     rm -f ${df}.d
 

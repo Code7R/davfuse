@@ -1031,10 +1031,17 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   }
   WebdavGetRequestEndEvent *request_end_ev = ev;
 
-  code = request_end_ev->error
-    ? HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR
-    /* 0-byte file */
-    : HTTP_STATUS_CODE_OK;
+  switch (request_end_ev->error){
+  case WEBDAV_ERROR_NONE:
+    code = HTTP_STATUS_CODE_OK;
+    break;
+  case WEBDAV_ERROR_DOES_NOT_EXIST:
+    code = HTTP_STATUS_CODE_NOT_FOUND;
+    break;
+  default:
+    code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    break;
+  }
 
  done:
   if (!ctx->sent_headers) {

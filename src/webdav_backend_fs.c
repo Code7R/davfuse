@@ -133,6 +133,7 @@ UTHR_DEFINE(_webdav_backend_fs_get_uthr) {
   const fs_error_t ret_open = fs_open(ctx->pbctx->fs, ctx->file_path, false,
                                       &ctx->fd, NULL);
   if (ret_open) {
+    /* TODO: handle the file being a directory */
     error = ret_open == FS_ERROR_DOES_NOT_EXIST
       ? WEBDAV_ERROR_DOES_NOT_EXIST
       : WEBDAV_ERROR_GENERAL;
