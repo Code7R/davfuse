@@ -11,6 +11,7 @@ extern "C" {
 #ifdef __GNUC__
 
 #define UNUSED_FUNCTION_ATTR __attribute__ ((unused))
+#define UNUSED_CONST_ATTR __attribute__ ((unused))
 
 #define CONST_FUNCTION __attribute__ ((const))
 #define PURE_FUNCTION __attribute__ ((pure))
@@ -24,6 +25,7 @@ extern "C" {
 #else /* __GNUC__ */
 
 #define UNUSED_FUNCTION_ATTR
+#define UNUSED_CONST_ATTR
 
 #define CONST_FUNCTION
 #define PURE_FUNCTION
@@ -37,6 +39,7 @@ extern "C" {
 #endif /* __GNUC__ */
 
 #define HEADER_FUNCTION static UNUSED_FUNCTION_ATTR
+#define HEADER_CONST static UNUSED_CONST_ATTR
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))

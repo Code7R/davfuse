@@ -73,10 +73,10 @@ typedef struct {
 
 struct webdav_propfind_entry {
   char *relative_uri;
-  webdav_file_time_t modified_time;
-  webdav_file_time_t creation_time;
+  webdav_resource_time_t modified_time;
+  webdav_resource_time_t creation_time;
   bool is_collection;
-  size_t length;
+  webdav_resource_size_t length;
 };
 
 struct webdav_server {
@@ -169,6 +169,24 @@ struct handler_context {
     } put;
   } sub;
 };
+
+WebdavProperty *
+create_webdav_property(const char *element_name, const char *ns_href);
+
+void
+free_webdav_property(WebdavProperty *wp);
+
+WebdavProppatchDirective *
+create_webdav_proppatch_directive(webdav_proppatch_directive_type_t type,
+                                  const char *name,
+                                  const char *ns_href,
+                                  const char *value);
+
+void
+free_webdav_proppatch_directive(WebdavProppatchDirective *wp);
+
+char *
+uri_from_path(struct handler_context *hc, const char *path);
 
 #ifdef __cplusplus
 }

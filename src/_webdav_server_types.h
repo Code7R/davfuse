@@ -1,9 +1,18 @@
 #ifndef __WEBDAV_SERVER_TYPES_H
 #define __WEBDAV_SERVER_TYPES_H
 
+#include <stdint.h>
+
+#include "c_util.h"
 #include "events.h"
 
 #ifdef __cplusplus
+/* not defined in C++ */
+#ifndef SIZE_MAX
+#define SIZE_MAX ((size_t) -1)
+#define __DEFINED_SIZE_MAX
+#endif
+
 extern "C" {
 #endif
 
@@ -35,7 +44,15 @@ typedef enum {
   WEBDAV_ERROR_EXISTS,
 } webdav_error_t;
 
-typedef long long webdav_file_time_t;
+typedef long long webdav_resource_time_t;
+typedef size_t webdav_resource_size_t;
+
+/* NB: not totally sure about defining constants like this,
+   a #define might be better */
+HEADER_CONST const
+webdav_resource_time_t INVALID_WEBDAV_RESOURCE_TIME = LLONG_MAX;
+HEADER_CONST const
+webdav_resource_size_t INVALID_WEBDAV_RESOURCE_SIZE = SIZE_MAX;
 
 /* opaque forward decls */
 struct webdav_propfind_entry;
@@ -47,8 +64,24 @@ typedef struct webdav_propfind_entry *webdav_propfind_entry_t;
 typedef struct handler_context *webdav_get_request_ctx_t;
 typedef struct handler_context *webdav_put_request_ctx_t;
 
+webdav_propfind_entry_t
+webdav_new_propfind_entry(const char *relative_uri,
+                          webdav_resource_time_t modified_time,
+                          webdav_resource_time_t creation_time,
+                          bool is_collection,
+                          webdav_resource_size_t length);
+
+void
+webdav_destroy_propfind_entry(webdav_propfind_entry_t pfe);
+
 #ifdef __cplusplus
 }
+
+#ifdef __DEFINED_SIZE_MAX
+#undef __DEFINED_SIZE_MAX
+#undef SIZE_MAX
+#endif
+
 #endif
 
 #endif

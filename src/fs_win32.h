@@ -3,6 +3,7 @@
 
 #include <windows.h>
 
+#include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -35,6 +36,11 @@ typedef enum {
 
 typedef long long fs_win32_time_t;
 typedef unsigned long long fs_win32_off_t;
+
+/* NB: not totally sure about defining constants like this,
+   a #define might be better */
+HEADER_CONST const fs_win32_time_t FS_WIN32_INVALID_TIME = LLONG_MAX;
+HEADER_CONST const fs_win32_off_t FS_WIN32_INVALID_OFF = ULLONG_MAX;
 
 typedef struct {
   fs_win32_time_t modified_time;

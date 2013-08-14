@@ -25,8 +25,7 @@ WEBDAV_LDFLAGS := ${CXX_LDFLAGS}
 MAKEFILES := config.mk Makefile
 
 HTTP_SERVER_SRC := http_server.c coroutine_io.c logging.c util.c http_helpers.c
-WEBDAV_SERVER_SRC := webdav_server.c webdav_server_common.c \
-    ${WEBDAV_SERVER_XML_IMPL}
+WEBDAV_SERVER_SRC := webdav_server.c ${WEBDAV_SERVER_XML_IMPL}
 
 # http_server_test_main vars
 

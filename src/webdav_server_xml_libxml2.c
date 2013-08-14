@@ -5,7 +5,6 @@
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 
-#include "webdav_server_common.h"
 #include "_webdav_server_private_types.h"
 
 #include "webdav_server_xml.h"
@@ -139,11 +138,16 @@ parse_propfind_request(const char *req_data,
 
 bool
 generate_propfind_response(struct handler_context *hc,
+                           webdav_propfind_req_type_t req_type,
                            linked_list_t props_to_get,
                            linked_list_t entries,
                            char **out_data,
                            size_t *out_size,
                            http_status_code_t *out_status_code) {
+  if (req_type == WEBDAV_PROPFIND_PROPNAME) {
+    return false;
+  }
+
   xmlDocPtr xml_response = xmlNewDoc(XMLSTR("1.0"));
   ASSERT_NOT_NULL(xml_response);
   xmlNodePtr multistatus_elt = xmlNewDocNode(xml_response, NULL, XMLSTR("multistatus"), NULL);

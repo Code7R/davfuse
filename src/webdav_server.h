@@ -55,16 +55,6 @@ typedef struct {
   size_t nbyte;
 } WebdavPutRequestReadDoneEvent;
 
-webdav_propfind_entry_t
-webdav_new_propfind_entry(const char *relative_uri,
-                          webdav_file_time_t modified_time,
-                          webdav_file_time_t creation_time,
-                          bool is_collection,
-                          size_t length);
-
-void
-webdav_destroy_propfind_entry(webdav_propfind_entry_t pfe);
-
 webdav_server_t
 webdav_server_start(http_backend_t http_backend,
                     const char *public_prefix,

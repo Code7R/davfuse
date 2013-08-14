@@ -9,7 +9,7 @@ off_t
 # transparent structural types
 Attrs
 
-# constants
+# error constants
 ERROR_SUCCESS
 ERROR_DOES_NOT_EXIST
 ERROR_NOT_DIR
@@ -20,6 +20,10 @@ ERROR_PERM
 ERROR_EXISTS
 ERROR_CROSS_DEVICE
 ERROR_NO_MEM
+
+# type constants
+INVALID_TIME
+INVALID_OFF
 
 # functions
 open

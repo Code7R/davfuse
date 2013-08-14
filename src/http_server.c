@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 #include "c_util.h"
 #include "coroutine.h"
@@ -93,6 +94,7 @@ typedef struct _http_connection {
 const char *const HTTP_HEADER_CONNECTION = "Connection";
 const char *const HTTP_HEADER_CONTENT_LENGTH = "Content-Length";
 const char *const HTTP_HEADER_CONTENT_TYPE = "Content-Type";
+const char *const HTTP_HEADER_DATE = "Date";
 const char *const HTTP_HEADER_HOST = "Host";
 const char *const HTTP_HEADER_TRANSFER_ENCODING = "Transfer-Encoding";
 
@@ -177,7 +179,7 @@ http_request_read_headers(http_request_handle_t rh,
     return cb(HTTP_REQUEST_READ_HEADERS_DONE_EVENT, &read_headers_ev, cb_ud);
   }
 
-  log_debug("FD 0x%jx Reading header", (uintmax_t) (intptr_t) rctx->conn->f.handle);
+  log_debug("FD %p Reading header", rctx->conn);
 
   /* read out client http request */
   rctx->read_state = HTTP_REQUEST_READ_STATE_READING_HEADERS;
@@ -457,6 +459,21 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
             whs->response_headers->message);
   EMITN(whs->response_line, ret);
 
+  /* add date header */
+  const time_t tt = time(NULL);
+  struct tm *const tm_ = gmtime(&tt);
+  const char *const fmt = "Date: %a, %d %b %Y %H:%M:%S GMT\r\n";
+  const int ret_sprint2 =
+    strftime(whs->response_line, sizeof(whs->response_line), fmt, tm_);
+  if (ret_sprint2 < 0) {
+    myerrno = ENOMEM;
+    goto done;
+  }
+  EMITN(whs->response_line, ret_sprint2);
+
+  /* TODO: support persistent connections */
+  EMIT("Connection: close\r\n");
+
   /* output each header */
   for (whs->header_idx = 0; whs->header_idx < whs->response_headers->num_headers;
        ++whs->header_idx) {
@@ -469,17 +486,13 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
     EMIT("\r\n");
   }
 
-  /* TODO: support persistent connections */
-  EMIT("Connection: close\r\n");
-
   /* finish headers */
   EMIT("\r\n");
 
  done:
   if (myerrno) {
-    log_warning("Error while writing headers to client fd 0x%jx: %s",
-                (uintmax_t) (intptr_t) whs->request_context->conn->f.handle,
-                strerror(myerrno));
+    log_warning("Error while writing headers to client %p",
+                whs->request_context->conn);
   }
 
   whs->request_context->write_state = HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS;
@@ -544,6 +557,20 @@ http_request_write_headers(http_request_handle_t rh,
     }
 
     rctx->out_content_length = content_length;
+  }
+
+  if (_get_header_value(response_headers->headers,
+                        response_headers->num_headers,
+                        HTTP_HEADER_CONNECTION)) {
+    log_error("Handler cannot specify a connection header!");
+    goto error;
+  }
+
+  if (_get_header_value(response_headers->headers,
+                        response_headers->num_headers,
+                        HTTP_HEADER_DATE)) {
+    log_error("Handler cannot specify a date header!");
+    goto error;
   }
 
   if (false) {

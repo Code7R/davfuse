@@ -19,6 +19,7 @@
 #ifdef __cplusplus
 #ifndef SIZE_MAX
 #define SIZE_MAX ((size_t) -1)
+#define __DEFINED_SIZE_MAX
 #endif
 
 extern "C" {
@@ -215,6 +216,12 @@ callback_deconstruct(Callback *cbud,
 
 #ifdef __cplusplus
 }
+
+#ifdef __DEFINED_SIZE_MAX
+#undef __DEFINED_SIZE_MAX
+#undef SIZE_MAX
+#endif
+
 #endif
 
 #endif /* UTIL_H */

@@ -7,7 +7,6 @@
 
 #include "http_server.h"
 #include "util.h"
-#include "webdav_server_common.h"
 #include "_webdav_server_types.h"
 #include "_webdav_server_private_types.h"
 
@@ -256,13 +255,18 @@ serializeDoc(const XMLDocument &doc, char **out_data, size_t *out_size) {
   /* copy the data in streamer to a pointer that the caller
      can own,
      TODO: make this more efficient */
-  *out_data = (char *) malloc(streamer.CStrSize() - 1);
+  const char *header = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
+  size_t header_len = strlen(header);
+
+  *out_data = (char *) malloc(header_len + streamer.CStrSize() - 1);
   if (!out_data) {
     abort();
   }
 
-  memcpy(*out_data, streamer.CStr(), streamer.CStrSize() - 1);
-  *out_size = streamer.CStrSize() - 1;
+  memcpy(*out_data, header, header_len);
+
+  memcpy(*out_data  + header_len, streamer.CStr(), streamer.CStrSize() - 1);
+  *out_size = header_len + streamer.CStrSize() - 1;
 }
 
 /* owner xml abstraction */
@@ -271,8 +275,6 @@ void
 owner_xml_free(owner_xml_t a) {
   delete ((XMLDocument *) a);
 }
-
-
 
 class _DocumentCopier : public XMLVisitor {
 public:
@@ -429,13 +431,46 @@ parse_propfind_request(const char *req_data,
   return toret;
 }
 
+static linked_list_t
+default_props_to_get(void) {
+  linked_list_t toret = LINKED_LIST_INITIALIZER;
+
+  toret =
+    linked_list_prepend(toret,
+                        create_webdav_property("getlastmodified", DAV_XML_NS));
+
+  toret =
+    linked_list_prepend(toret,
+                        create_webdav_property("creationdate", DAV_XML_NS));
+
+  toret =
+    linked_list_prepend(toret,
+                        create_webdav_property("getcontentlength", DAV_XML_NS));
+
+  toret =
+    linked_list_prepend(toret,
+                        create_webdav_property("resourcetype", DAV_XML_NS));
+
+  return toret;
+}
+
 bool
 generate_propfind_response(struct handler_context *hc,
-                           linked_list_t props_to_get,
+                           webdav_propfind_req_type_t req_type,
+                           linked_list_t props_to_get_,
                            linked_list_t entries,
                            char **out_data,
                            size_t *out_size,
                            http_status_code_t *out_status_code) {
+  if (req_type == WEBDAV_PROPFIND_PROPNAME) {
+    /* TODO: not supported yet */
+    return false;
+  }
+
+  linked_list_t props_to_get = req_type == WEBDAV_PROPFIND_ALLPROP
+    ? default_props_to_get()
+    : props_to_get_;
+
   XMLDocument doc;
 
   auto multistatus_elt = newChildElement(&doc, "multistatus");
@@ -468,18 +503,19 @@ generate_propfind_response(struct handler_context *hc,
     LINKED_LIST_FOR (WebdavProperty, elt, props_to_get) {
       bool is_get_last_modified;
       if (str_equals(elt->ns_href, DAV_XML_NS) &&
-          ((is_get_last_modified = str_equals(elt->element_name, "getlastmodified")) ||
-           /* TODO: this should be configurable but for now we just
-              set getlastmodified and creationdate to the same date
-              because that's what apache mod_dav does */
-           str_equals(elt->element_name, "creationdate"))) {
-        time_t m_time = (time_t) propfind_entry->modified_time;
+          (((is_get_last_modified = str_equals(elt->element_name, "getlastmodified")) &&
+            propfind_entry->modified_time != INVALID_WEBDAV_RESOURCE_TIME) ||
+           (str_equals(elt->element_name, "creationdate") &&
+            propfind_entry->creation_time != INVALID_WEBDAV_RESOURCE_TIME))) {
+        time_t m_time = (time_t) (is_get_last_modified
+                                  ? propfind_entry->modified_time
+                                  : propfind_entry->creation_time);
         struct tm *tm_ = gmtime(&m_time);
         char time_buf[400], *time_str;
 
         const char *fmt = is_get_last_modified
           ? "%a, %d %b %Y %H:%M:%S GMT"
-          : "%Y-%m-%dT%H:%M:%S-00:00";
+          : "%Y-%m-%dT%H:%M:%SZ";
 
         size_t num_chars = strftime(time_buf, sizeof(time_buf), fmt, tm_);
         XMLElement *xml_node;
@@ -498,7 +534,7 @@ generate_propfind_response(struct handler_context *hc,
       }
       else if (str_equals(elt->element_name, "getcontentlength") &&
                str_equals(elt->ns_href, DAV_XML_NS) &&
-               !propfind_entry->is_collection) {
+               propfind_entry->length != INVALID_WEBDAV_RESOURCE_SIZE) {
         char length_str[400];
         snprintf(length_str, sizeof(length_str), "%lu",
                  (unsigned long) propfind_entry->length);
@@ -512,14 +548,31 @@ generate_propfind_response(struct handler_context *hc,
           newChildElement(resourcetype_elt, "collection");
         }
       }
-      else {
+      else if (req_type == WEBDAV_PROPFIND_PROP) {
         auto random_elt = newChildElement(prop_not_found_elt, elt->element_name);
         random_elt->SetAttribute("xmlns", elt->ns_href);
       }
     }
 
+    /* NB: also add write lock info, this is expected of us in this interface */
+    {
+      auto supported_lock_elt = newChildElement(prop_success_elt, "supportedlock");
+
+      auto lockentry_exclusive_elt = newChildElement(supported_lock_elt, "lockentry");
+      auto lockscope_exclusive_elt = newChildElement(lockentry_exclusive_elt, "lockscope");
+      newChildElement(lockscope_exclusive_elt, "exclusive");
+      auto locktype_exclusive_elt = newChildElement(lockentry_exclusive_elt, "locktype");
+      newChildElement(locktype_exclusive_elt, "write");
+
+      auto lockentry_shared_elt = newChildElement(supported_lock_elt, "lockentry");
+      auto lockscope_shared_elt = newChildElement(lockentry_shared_elt, "lockscope");
+      newChildElement(lockscope_shared_elt, "shared");
+      auto locktype_shared_elt = newChildElement(lockentry_shared_elt, "locktype");
+      newChildElement(locktype_shared_elt, "write");
+    }
+
     if (!prop_not_found_elt->FirstChildElement()) {
-      unlinkNode(prop_not_found_elt);
+      unlinkNode(propstat_not_found_elt);
     }
 
     if (!prop_success_elt->FirstChildElement()) {
@@ -533,6 +586,11 @@ generate_propfind_response(struct handler_context *hc,
 
   serializeDoc(doc, out_data, out_size);
   *out_status_code = HTTP_STATUS_CODE_MULTI_STATUS;
+
+  if (req_type == WEBDAV_PROPFIND_ALLPROP) {
+    linked_list_free(props_to_get,
+                     (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
+  }
 
   return true;
 }

@@ -32,6 +32,11 @@ typedef enum {
 typedef long long fs_posix_time_t;
 typedef long long fs_posix_off_t;
 
+/* NB: not totally sure about defining constants like this,
+   a #define might be better */
+HEADER_CONST const fs_win32_time_t FS_POSIX_INVALID_TIME = LLONG_MAX;
+HEADER_CONST const fs_win32_off_t FS_POSIX_INVALID_OFF = LLONG_MAX;
+
 typedef struct {
   fs_posix_time_t modified_time;
   fs_posix_time_t created_time;

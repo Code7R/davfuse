@@ -133,10 +133,15 @@ UTHR_DEFINE(_webdav_backend_fs_get_uthr) {
   const fs_error_t ret_open = fs_open(ctx->pbctx->fs, ctx->file_path, false,
                                       &ctx->fd, NULL);
   if (ret_open) {
-    /* TODO: handle the file being a directory */
-    error = ret_open == FS_ERROR_DOES_NOT_EXIST
-      ? WEBDAV_ERROR_DOES_NOT_EXIST
-      : WEBDAV_ERROR_GENERAL;
+    if (ret_open == FS_ERROR_IS_DIR) {
+      /* TODO: maybe generate directory listing */
+      error = WEBDAV_ERROR_IS_COL;
+    }
+    else {
+      error = ret_open == FS_ERROR_DOES_NOT_EXIST
+        ? WEBDAV_ERROR_DOES_NOT_EXIST
+        : WEBDAV_ERROR_GENERAL;
+    }
     goto done;
   }
 
@@ -378,12 +383,26 @@ webdav_backend_fs_mkcol(webdav_backend_fs_t backend_handle, const char *relative
 
 static webdav_propfind_entry_t
 create_propfind_entry_from_stat(const char *relative_uri, FsAttrs *attrs) {
-  return webdav_new_propfind_entry(relative_uri,
-                                   attrs->modified_time,
-                                   /* mod_dav from apache also uses mtime as creation time */
-                                   attrs->modified_time,
-                                   attrs->is_directory,
-                                   attrs->size);
+  if (attrs->is_directory) {
+    /* TODO: right now we don't really support these
+       attributes on directories (see `webdav_backend_fs_propfind`) */
+    return webdav_new_propfind_entry(relative_uri,
+                                     INVALID_WEBDAV_RESOURCE_TIME,
+                                     INVALID_WEBDAV_RESOURCE_TIME,
+                                     attrs->is_directory,
+                                     INVALID_WEBDAV_RESOURCE_SIZE);
+  }
+  else {
+    return webdav_new_propfind_entry(relative_uri,
+                                     (attrs->modified_time == FS_INVALID_TIME
+                                      ? INVALID_WEBDAV_RESOURCE_TIME
+                                      : attrs->modified_time),
+                                     (attrs->created_time == FS_INVALID_TIME
+                                      ? INVALID_WEBDAV_RESOURCE_TIME
+                                      : attrs->created_time),
+                                     attrs->is_directory,
+                                     attrs->size);
+  }
 }
 
 void
@@ -411,8 +430,9 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
   }
 
   /* TODO: support this */
-  if (propfind_req_type != WEBDAV_PROPFIND_PROP) {
-    log_info("We only support 'prop' requests");
+  if (propfind_req_type != WEBDAV_PROPFIND_PROP &&
+      propfind_req_type != WEBDAV_PROPFIND_ALLPROP) {
+    log_info("We don't support 'propname' requests");
     ev.error = WEBDAV_ERROR_GENERAL;
     goto done;
   }

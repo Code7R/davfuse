@@ -25,7 +25,6 @@
 #include "logging.h"
 #include "uthread.h"
 #include "util.h"
-#include "webdav_server_common.h"
 #include "webdav_server_xml.h"
 #include "_webdav_server_types.h"
 #include "_webdav_server_private_types.h"
@@ -51,40 +50,6 @@ static EVENT_HANDLER_DECLARE(handle_propfind_request);
 static EVENT_HANDLER_DECLARE(handle_proppatch_request);
 static EVENT_HANDLER_DECLARE(handle_put_request);
 static EVENT_HANDLER_DECLARE(handle_unlock_request);
-
-webdav_propfind_entry_t
-webdav_new_propfind_entry(const char *relative_uri,
-                          webdav_file_time_t modified_time,
-                          webdav_file_time_t creation_time,
-                          bool is_collection,
-                          size_t length) {
-  struct webdav_propfind_entry *elt = malloc(sizeof(*elt));
-  if (!elt) {
-    return NULL;
-  }
-
-  char *relative_uri_copy = strdup_x(relative_uri);
-  if (!relative_uri_copy) {
-    free(elt);
-    return NULL;
-  }
-
-  *elt = (struct webdav_propfind_entry) {
-    .relative_uri = relative_uri_copy,
-    .modified_time = modified_time,
-    .creation_time = creation_time,
-    .is_collection = is_collection,
-    .length = length,
-  };
-
-  return elt;
-}
-
-void
-webdav_destroy_propfind_entry(struct webdav_propfind_entry *pfe) {
-  free(pfe->relative_uri);
-  free(pfe);
-}
 
 static char *
 path_from_uri(struct handler_context *hc, const char *uri) {
@@ -1035,6 +1000,12 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   case WEBDAV_ERROR_NONE:
     code = HTTP_STATUS_CODE_OK;
     break;
+  case WEBDAV_ERROR_IS_COL:
+    /* NB: if the backend returns this, then we return http method not allowed,
+       but the backend is also free to define a get resource for a
+       collection */
+    code = HTTP_STATUS_CODE_METHOD_NOT_ALLOWED;
+    break;
   case WEBDAV_ERROR_DOES_NOT_EXIST:
     code = HTTP_STATUS_CODE_NOT_FOUND;
     break;
@@ -1525,6 +1496,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   /* now generate response */
   bool success_generate =
     generate_propfind_response(hc,
+                               ctx->propfind_req_type,
                                ctx->props_to_get,
                                run_propfind_ev->entries,
                                &ctx->out_buf,
@@ -1546,7 +1518,8 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   assert(status_code);
   log_debug("Responding with status: %d", status_code);
   assert(ctx->out_buf_size <= INT_MAX);
-  log_debug("XML response will be: %.*s",
+  log_debug("XML response will be: (%d bytes) %.*s",
+            (int) ctx->out_buf_size,
             (int) ctx->out_buf_size, ctx->out_buf);
 
   CRYIELD(ctx->pos,
@@ -1554,7 +1527,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
                                        status_code,
                                        ctx->out_buf,
                                        ctx->out_buf_size,
-                                       "application/xml",
+                                       "application/xml; charset=\"utf-8\"",
                                        LINKED_LIST_INITIALIZER,
                                        handle_propfind_request, hc));
 
@@ -1975,4 +1948,172 @@ webdav_server_stop(webdav_server_t ws,
   serv->stop_cb = cb;
   serv->stop_ud = user_data;
   return http_server_stop(serv->http, _webdav_stop_cb, serv);
+}
+
+
+/* private api, specifically helper functions for the xml implementation */
+
+webdav_propfind_entry_t
+webdav_new_propfind_entry(const char *relative_uri,
+                          webdav_resource_time_t modified_time,
+                          webdav_resource_time_t creation_time,
+                          bool is_collection,
+                          webdav_resource_size_t length) {
+  struct webdav_propfind_entry *elt = malloc(sizeof(*elt));
+  if (!elt) {
+    return NULL;
+  }
+
+  char *relative_uri_copy = strdup_x(relative_uri);
+  if (!relative_uri_copy) {
+    free(elt);
+    return NULL;
+  }
+
+  *elt = (struct webdav_propfind_entry) {
+    .relative_uri = relative_uri_copy,
+    .modified_time = modified_time,
+    .creation_time = creation_time,
+    .is_collection = is_collection,
+    .length = length,
+  };
+
+  return elt;
+}
+
+void
+webdav_destroy_propfind_entry(struct webdav_propfind_entry *pfe) {
+  free(pfe->relative_uri);
+  free(pfe);
+}
+
+WebdavProperty *
+create_webdav_property(const char *element_name, const char *ns_href) {
+  EASY_ALLOC(WebdavProperty, elt);
+
+  elt->element_name = strdup_x(element_name);
+  elt->ns_href = strdup_x(ns_href);
+
+  return elt;
+}
+
+void
+free_webdav_property(WebdavProperty *wp) {
+  free(wp->element_name);
+  free(wp->ns_href);
+  free(wp);
+}
+
+WebdavProppatchDirective *
+create_webdav_proppatch_directive(webdav_proppatch_directive_type_t type,
+                                  const char *name,
+                                  const char *ns_href,
+                                  const char *value) {
+  char *name_dup = NULL;
+  char *ns_href_dup = NULL;
+  char *value_dup = NULL;
+  WebdavProppatchDirective *directive = NULL;
+
+  /* assert valid values */
+  assert(type == WEBDAV_PROPPATCH_DIRECTIVE_SET || !value);
+
+  name_dup = strdup_x(name);
+  if (!name_dup) {
+    goto error;
+  }
+
+  ns_href_dup = strdup_x(ns_href);
+  if (!ns_href_dup) {
+    goto error;
+  }
+
+  if (value) {
+    value_dup = strdup_x(value);
+    if (!value_dup) {
+      goto error;
+    }
+  }
+
+  directive = malloc(sizeof(*directive));
+  if (!directive) {
+    goto error;
+  }
+
+  *directive = (WebdavProppatchDirective) {
+    .type = type,
+    .name = name_dup,
+    .ns_href = ns_href_dup,
+    .value = value_dup,
+  };
+
+
+  if (false) {
+  error:
+    free(name_dup);
+    free(ns_href_dup);
+    free(value_dup);
+    free(directive);
+  }
+
+  return directive;
+}
+
+void
+free_webdav_proppatch_directive(WebdavProppatchDirective *wp) {
+  free(wp->name);
+  free(wp->ns_href);
+  free(wp->value);
+  free(wp);
+}
+
+char *
+uri_from_path(struct handler_context *hc, const char *path) {
+  /* TODO: urlencode `path` */
+  assert(str_startswith(path, "/"));
+  assert(str_equals(path, "/") || !str_endswith(path, "/"));
+
+  char *encoded_path = encode_urlpath(path, strlen(path));
+
+  const char *request_uri = hc->rhs.uri;
+
+  /* NB: we should always be generating urls for paths
+     that are descendants of the request uri */
+
+  char *prefix = hc->serv->public_prefix;
+  char *real_uri;
+  if (str_startswith(request_uri, "/")) {
+    /* request uri was in relative format, generate a relative uri */
+    char *slashslash = strstr(hc->serv->public_prefix, "//");
+    prefix = strchr(slashslash + 2, '/');
+  }
+
+  size_t prefix_len = strlen(prefix);
+  size_t path_len = strlen(encoded_path);
+
+  /* make extra space for a trailing space */
+  real_uri = malloc(prefix_len - 1 + path_len + 1 + 1);
+  if (!real_uri) {
+    goto done;
+  }
+
+  memcpy(real_uri, prefix, prefix_len - 1);
+  memcpy(real_uri + prefix_len - 1, encoded_path, path_len);
+  real_uri[prefix_len - 1 + path_len] = '/';
+  real_uri[prefix_len - 1 + path_len + 1] = '\0';
+
+  if (!str_equals(request_uri, real_uri)) {
+    real_uri[prefix_len - 1 + path_len] = '\0';
+  }
+
+  if (false) {
+    /* if (false) for now, copy/move might need to transform a path
+       that's not a child of the request uri */
+    /* 8.3 URL Handling, RFC 4918 */
+    assert(str_startswith(real_uri, request_uri));
+  }
+
+ done:
+  free(encoded_path);
+
+  return real_uri;
 }
