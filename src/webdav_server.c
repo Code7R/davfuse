@@ -1462,7 +1462,7 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
     }                                                                   \
     while (0)
 
-    ALLOW_METHOD("LOCK,UNLOCK,PROPFIND,DELETE,MOVE,COPY,OPTIONS,PROPPATCH,TRACE");
+    ALLOW_METHOD("LOCK,UNLOCK,PROPFIND,DELETE,MOVE,COPY,OPTIONS,PROPPATCH");
 
     struct webdav_propfind_entry *ent = linked_list_peekleft(propfind_done_ev->entries);
     ASSERT_NOT_NULL(ent);
@@ -1695,6 +1695,12 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
 
  done:
   assert(status_code);
+
+  log_debug("XML response will be: (%d bytes) %.*s",
+            (int) hc->sub.proppatch.response_body_size,
+            (int) hc->sub.proppatch.response_body_size,
+            hc->sub.proppatch.response_body);
+
   CRYIELD(hc->sub.proppatch.pos,
           http_request_simple_response(hc->rh,
                                        status_code,

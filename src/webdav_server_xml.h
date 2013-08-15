@@ -1,3 +1,7 @@
+/* NOTE TO IMPLEMENTORS:
+   every tag of all generated XML must have an explicit prefix
+   otherwise the Microsoft Windows client will not be able to parse */
+
 #ifndef _WEBDAV_SERVER_XML_H
 #define _WEBDAV_SERVER_XML_H
 
@@ -27,6 +31,7 @@ owner_xml_free(owner_xml_t a);
 
 owner_xml_t
 owner_xml_copy(owner_xml_t a);
+
 
 /* PROPFIND method XML functions */
 xml_parse_code_t
