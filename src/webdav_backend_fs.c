@@ -495,16 +495,18 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
         abort();
       }
 
-      size_t name_len = strlen(name);
+      const size_t name_len = strlen(name);
       ASSERT_TRUE(name_len);
 
-      char *new_uri = str_equals(relative_uri, "/")
+      char *const new_uri = str_equals(relative_uri, "/")
         ? super_strcat("/", name, NULL)
         : super_strcat(relative_uri, "/", name, NULL);
       ASSERT_NOT_NULL(new_uri);
 
-      webdav_propfind_entry_t pfe = create_propfind_entry_from_stat(new_uri, &dirent_attrs);
+      const webdav_propfind_entry_t pfe =
+        create_propfind_entry_from_stat(new_uri, &dirent_attrs);
       ASSERT_TRUE(pfe);
+      free(new_uri);
       ev.entries = linked_list_prepend(ev.entries, pfe);
 
       free(name);

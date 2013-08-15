@@ -155,6 +155,7 @@ http_server_stop(http_server_t http,
 
   if (!http->num_connections) {
     /* no more connections, call callback immediately */
+    free(http);
     cb(HTTP_SERVER_STOP_DONE_EVENT, NULL, user_data);
   }
 }
@@ -840,8 +841,10 @@ UTHR_DEFINE(client_coroutine) {
   UTHR_FREE(cc);
   server->num_connections -= 1;
   if (!server->num_connections && server->shutting_down) {
-    return server->stop_cb(HTTP_SERVER_STOP_DONE_EVENT, NULL,
-                           server->stop_ud);
+    event_handler_t cb = server->stop_cb;
+    void *ud = server->stop_ud;
+    free(server);
+    return cb(HTTP_SERVER_STOP_DONE_EVENT, NULL, ud);
   }
   else {
     return;
