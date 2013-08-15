@@ -46,6 +46,7 @@ main(int argc, char *argv[]) {
 
   ASSERT_TRUE(argc > 3);
 
+  /* TODO: handle bad input paths, or sanitize them, you know DWIM... */
   char *base_path = strdup_x(argv[3]);
   ASSERT_NOT_NULL(base_path);
 

@@ -77,6 +77,14 @@ path_from_uri(WebdavBackendFs *pbctx, const char *real_uri) {
 webdav_backend_fs_t
 webdav_backend_fs_new(fs_t fs, const char *root) {
   char *base_path = NULL;
+
+  if (!fs_path_is_root(fs, root) &&
+      str_endswith(root, fs_path_sep(fs))) {
+    log_info("Bad input path: %s", root);
+    return NULL;
+  }
+
+
   WebdavBackendFs *backend = malloc(sizeof(*backend));
   if (!backend) {
     return NULL;
