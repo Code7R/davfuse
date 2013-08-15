@@ -868,9 +868,11 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   if (delete_done_ev->failed_to_delete) {
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
   }
+  else {
+    status_code = HTTP_STATUS_CODE_OK;
+  }
 
   linked_list_free(delete_done_ev->failed_to_delete, free);
-  status_code = HTTP_STATUS_CODE_OK;
 
  done:
   assert(status_code);
@@ -1543,6 +1545,8 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
 
   ctx->request_relative_uri = path_from_uri(hc, hc->rhs.uri);
   if (!ctx->request_relative_uri) {
+    log_info("couldn't create request relative uri: %s",
+             hc->rhs.uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1552,6 +1556,8 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
           http_request_read_body(hc->rh, handle_propfind_request, hc));
   const HTTPRequestReadBodyDoneEvent *rbev = ev;
   if (rbev->error) {
+    log_info("propfind request had a body: %s",
+             ctx->request_relative_uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1561,6 +1567,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   /* figure out depth */
   const webdav_depth_t depth = webdav_get_depth(&hc->rhs);
   if (depth == DEPTH_INVALID) {
+    log_info("bad depth header!");
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
   }
@@ -1577,10 +1584,12 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
                            &ctx->props_to_get);
   if (success_parse == XML_PARSE_ERROR_SYNTAX ||
       success_parse == XML_PARSE_ERROR_STRUCTURE) {
+    log_info("bad syntax for propfind request!");
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
   }
   else if (success_parse == XML_PARSE_ERROR_INTERNAL) {
+    log_info("internal parser error!");
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1594,6 +1603,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   assert(ev_type == WEBDAV_PROPFIND_DONE_EVENT);
   const WebdavPropfindDoneEvent *run_propfind_ev = ev;
   if (run_propfind_ev->error) {
+    log_info("error while doing propfind: %d!", run_propfind_ev->error);
     status_code = run_propfind_ev->error == WEBDAV_ERROR_DOES_NOT_EXIST
       ? HTTP_STATUS_CODE_NOT_FOUND
       : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;

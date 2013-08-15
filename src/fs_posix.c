@@ -82,7 +82,7 @@ fill_attrs(FsPosixAttrs *attrs, struct stat *st) {
   *attrs = (FsPosixAttrs) {
     .modified_time = st->st_mtime,
     /* special case this on systems that support this */
-    .created_time = st->st_mtime,
+    .created_time = FS_POSIX_INVALID_TIME,
     .is_directory = S_ISDIR(st->st_mode),
     .size = st->st_size,
   };

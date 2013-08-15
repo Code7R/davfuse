@@ -375,8 +375,14 @@ util_fs_path_dirname(fs_t fs, const char *path) {
     return strdup_x(path);
   }
 
+  const char *path_sep = fs_path_sep(fs);
+  /* TODO: support this */
+  if (strlen(path_sep) != 1) {
+    return NULL;
+  }
+
   /* do this */
-  const char *end_of_path = strrchr(path, '\\');
+  const char *end_of_path = strrchr(path, path_sep[0]);
   return strndup_x(path, end_of_path - path);
 }
 

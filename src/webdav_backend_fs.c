@@ -405,12 +405,8 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
     .entries = LINKED_LIST_INITIALIZER,
     .error = 0,
   };
-  union {
-    fs_directory_handle_t dirp;
-    fs_file_handle_t fd;
-  } handle;
+  fs_directory_handle_t dirp = (fs_directory_handle_t) 0;
   bool is_dir = false;
-  bool valid_handle = false;
   char *file_path = NULL;
 
   /* TODO: support this */
@@ -440,7 +436,8 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
   FsAttrs attrs;
   const fs_error_t ret_getattr = fs_getattr(pbctx->fs, file_path, &attrs);
   if (ret_getattr) {
-    log_info("Couldn't getattr(\"%s\")\'", file_path);
+    log_info("Couldn't getattr(\"%s\"): %s",
+             file_path, util_fs_strerror(ret_getattr));
     ev.error = ret_getattr == FS_ERROR_DOES_NOT_EXIST
       ? WEBDAV_ERROR_DOES_NOT_EXIST
       : WEBDAV_ERROR_GENERAL;
@@ -449,33 +446,32 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
 
   is_dir = attrs.is_directory;
 
-  /* open the resource */
-  fs_error_t ret_open = is_dir
-    ? fs_opendir(pbctx->fs, file_path, &handle.dirp)
-    : fs_open(pbctx->fs, file_path, false, &handle.fd, NULL);
-
-  if (ret_open) {
-    ev.error = ret_open == FS_ERROR_DOES_NOT_EXIST
-      ? WEBDAV_ERROR_DOES_NOT_EXIST
-      : WEBDAV_ERROR_GENERAL;
-    goto done;
-  }
-
-  valid_handle = true;
-
   webdav_propfind_entry_t pfe = create_propfind_entry_from_stat(relative_uri, &attrs);
   ASSERT_NOT_NULL(pfe);
   ev.entries = linked_list_prepend(ev.entries, pfe);
 
   if (depth == DEPTH_1 && is_dir) {
+    /* open the resource */
+    fs_error_t ret_open = fs_opendir(pbctx->fs, file_path, &dirp);
+    if (ret_open) {
+      log_info("Couldn't opendir(\"%s\"): %s",
+               file_path, util_fs_strerror(ret_open));
+      ev.error = ret_open == FS_ERROR_DOES_NOT_EXIST
+        ? WEBDAV_ERROR_DOES_NOT_EXIST
+        : WEBDAV_ERROR_GENERAL;
+      goto done;
+    }
+
     while (true) {
       char *name;
       bool attrs_is_filled;
       FsAttrs dirent_attrs;
       const fs_error_t ret_readdir =
-        fs_readdir(pbctx->fs, handle.dirp,
+        fs_readdir(pbctx->fs, dirp,
                    &name, &attrs_is_filled, &dirent_attrs);
       if (ret_readdir) {
+        log_info("Couldn't readdir \"%s\": %s",
+                 file_path, util_fs_strerror(ret_readdir));
         ev.error = WEBDAV_ERROR_GENERAL;
         goto done;
       }
@@ -515,14 +511,8 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
                      (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
   }
 
-  if (valid_handle) {
-    fs_error_t ret_close;
-    if (is_dir) {
-      ret_close = fs_closedir(pbctx->fs, handle.dirp);
-    }
-    else {
-      ret_close = fs_close(pbctx->fs, handle.fd);
-    }
+  if (dirp) {
+    fs_error_t ret_close = fs_closedir(pbctx->fs, dirp);
     ASSERT_TRUE(!ret_close);
   }
 
@@ -611,6 +601,12 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
 
   char *const destination_path_dirname =
     util_fs_path_dirname(pbctx->fs, destination_path);
+  if (!destination_path_dirname) {
+    log_info("Error while getting the dirname of: %s",
+             destination_path);
+    goto done;
+  }
+
   bool destination_directory_exists;
   const fs_error_t ret_exists =
     util_fs_file_exists(pbctx->fs, destination_path_dirname,
@@ -621,6 +617,8 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
     goto done;
   }
   else if (!destination_directory_exists) {
+    log_debug("Destination directory \"%s\" does not exist!",
+              destination_path_dirname);
     err = WEBDAV_ERROR_DESTINATION_DOES_NOT_EXIST;
     goto done;
   }
