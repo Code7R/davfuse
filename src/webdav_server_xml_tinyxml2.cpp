@@ -8,6 +8,7 @@
 #include <stack>
 #include <string>
 #include <unordered_set>
+#include <utility>
 
 #include "tinyxml2.h"
 
@@ -22,6 +23,8 @@ using namespace tinyxml2;
 
 static const char *const DAV_XML_NS = "DAV:";
 static const char *const DAV_XML_NS_PREFIX = "D";
+static const char * const XML_XML_NS = "http://www.w3.org/XML/1998/namespace";
+static const char * const XMLNS_XML_NS = "http://www.w3.org/2000/xmlns/";
 
 /* utilities */
 
@@ -49,6 +52,35 @@ void free_linked_list_of_propfind_entries(linked_list_t ents) {
 
 typedef CFreer<char *, free_str> CStringFreer;
 
+/* special hash<Key> for the standard pair type, since the
+   standard library doesn't do this forus.
+   used below */
+namespace std {
+template<typename U, typename V>
+struct hash<std::pair<U,V> > {
+  std::size_t
+  operator()(const std::pair<U,V> & s) const {
+    std::size_t h1 = std::hash<U>()(s.first);
+    std::size_t h2 = std::hash<V>()(s.second);
+    return h1 ^  (h2 << 1);
+  }
+};
+}
+
+struct c_str_pred {
+  bool
+  operator()(const char *s1, const char *s2) const {
+    return str_equals(s1, s2);
+  }
+};
+
+struct c_str_hash {
+  size_t
+  operator()(const char *p) const {
+    return std::hash<std::string>()(p);
+  }
+};
+
 static PURE_FUNCTION bool
 not_empty_no_colon(const char *a) {
   return (!str_equals(a, "") && !strchr(a, ':'));
@@ -57,6 +89,13 @@ not_empty_no_colon(const char *a) {
 static PURE_FUNCTION bool
 safe_str_equals(const char *a, const char *b) {
   return a && b ? str_equals(a, b) : !a && !b;
+}
+
+static bool
+is_xmlns_attr(const XMLAttribute *a) {
+  const char *attr_name = a->Name();
+  return (str_equals(attr_name, "xmlns") ||
+          str_startswith(attr_name, "xmlns:"));
 }
 
 static PURE_FUNCTION const char *
@@ -74,7 +113,7 @@ get_ns_name(const XMLElement *elt) {
   return get_ns_name(elt->Name());
 }
 
-static PURE_FUNCTION char *
+static char *
 make_ns_prefix(const char *tag_name) {
   const char *first_colon = strchr(tag_name, ':');
   if (!first_colon) {
@@ -84,7 +123,9 @@ make_ns_prefix(const char *tag_name) {
   return strndup_x(tag_name, first_colon - tag_name);
 }
 
-static PURE_FUNCTION const char *
+/* this is an internal function used for parsing,
+   do not add special cases to this */
+static const char *
 get_ns_href_for_prefix(const XMLElement *elt, const char *prefix) {
   char *allocated_attr_to_query = NULL;
   CStringFreer free_allocated_attr_to_query(allocated_attr_to_query);
@@ -111,31 +152,38 @@ get_ns_href_for_prefix(const XMLElement *elt, const char *prefix) {
   return elt_href;
 }
 
-static PURE_FUNCTION const char *
-get_ns_href(const XMLElement *elt, const char *raw_elt_name=NULL,
-            bool check_default_namespace=true) {
-  if (!raw_elt_name) {
-    raw_elt_name = elt->Name();
-  }
+static const char *
+get_ns_href(const XMLElement *elt, const XMLAttribute *attr=NULL) {
+  const char *raw_elt_name = attr
+    ? attr->Name()
+    : elt->Name();
 
   const char *elt_href = NULL;
   char *const prefix = make_ns_prefix(raw_elt_name);
   CStringFreer free_prefix(prefix);
   if (prefix) {
-    elt_href = get_ns_href_for_prefix(elt, prefix);
-    /* if a prefix was specified, there must be namespace name
-       associated with it */
-    assert(elt_href);
+    if (str_equals(prefix, "xmlns")) {
+      /* only attributes can have the xmlns prefix */
+      assert(attr);
+      elt_href = XMLNS_XML_NS;
+    }
+    else if (str_equals(prefix, "xml")) {
+      elt_href = XML_XML_NS;
+    }
+    else {
+      elt_href = get_ns_href_for_prefix(elt, prefix);
+      /* if a prefix was specified, there must be namespace name
+         associated with it */
+      assert(elt_href);
+    }
   }
-  else if (check_default_namespace) {
+  else if (!attr) {
+    /* check default namespace if this isn't an attr */
     elt_href = get_ns_href_for_prefix(elt, NULL);
   }
 
-  /* we stopped at the first relevant namespace attribute
-     but an empty namespace href means there is no namespace */
-  if (elt_href && str_equals(elt_href, "")) {
-    elt_href = NULL;
-  }
+  /* namespace undeclarations should not be possible */
+  assert(!elt_href || !str_equals(elt_href, ""));
 
   return elt_href;
 }
@@ -223,7 +271,7 @@ unlinkNode(XMLNode *elt) {
 }
 
 static bool
-serializeDoc(const XMLDocument &doc, char **out_data, size_t *out_size) {
+serializeDoc(const XMLDocument & doc, char **out_data, size_t *out_size) {
   XMLPrinter streamer;
   doc.Print(&streamer);
 
@@ -273,30 +321,16 @@ private:
   const char *FindOrCreatePrefix(XMLElement *start_at, const char *ns_href);
 };
 
-static bool
-is_xmlns_attr(const XMLAttribute *a) {
-  const char *attr_name = a->Name();
-  return (str_equals(attr_name, "xmlns") ||
-          str_startswith(attr_name, "xmlns:"));
-}
-
-struct c_str_pred {
-  bool
-  operator()(const char *s1, const char *s2) const {
-    return str_equals(s1, s2);
-  }
-};
-
-struct c_str_hash {
-  size_t
-  operator()(const char *p) const {
-    return std::hash<std::string>()(p);
-  }
-};
-
 static const char *
 findPrefix(XMLElement *start_at, const char *ns_href) {
-  assert(ns_href && !str_equals(ns_href, ""));
+  assert(ns_href &&
+         !str_equals(ns_href, "") &&
+         !str_equals(ns_href, XMLNS_XML_NS));
+
+  if (str_equals(ns_href, XML_XML_NS)) {
+    /* this is always the prefix */
+    return "xml";
+  }
 
   const char *prefix = NULL;
 
@@ -325,7 +359,7 @@ findPrefix(XMLElement *start_at, const char *ns_href) {
       else {
         /* higher up prefix values won't count,
            since they will be overshadowed by this */
-        prefixes_seen.insert(potential_prefix);
+        prefixes_seen.insert(std::move(potential_prefix));
       }
     }
 
@@ -390,10 +424,7 @@ _OwnerXmlStorer::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
     }
 
     const char *attr_ns_name = get_ns_name(curattrs->Name());
-    /* attributes without prefixes don't check the default namespace */
-    bool check_default_namespace = false;
-    const char *attr_ns_href = get_ns_href(&elt, curattrs->Name(),
-                                           check_default_namespace);
+    const char *attr_ns_href = get_ns_href(&elt, curattrs);
 
     if (attr_ns_href) {
       const char *const prefix = FindOrCreatePrefix(new_elt, attr_ns_href);
@@ -551,8 +582,9 @@ private:
 };
 
 static bool
-is_valid_tag_name(const XMLElement & root_elt, const char *tag_name) {
-  const char *first_colon = strchr(tag_name, ':');
+is_valid_element(const XMLElement & elt) {
+  const char *const tag_name = elt.Name();
+  const char *const first_colon = strchr(tag_name, ':');
 
   if (first_colon) {
     if ((first_colon == tag_name ||
@@ -562,19 +594,97 @@ is_valid_tag_name(const XMLElement & root_elt, const char *tag_name) {
       return false;
     }
 
-    /* tag name is valid at this point */
+    /* tag name is syntactically valid at this point */
     char *const prefix = strndup_x(tag_name, first_colon - tag_name);
     ASSERT_NOT_NULL(prefix);
     CStringFreer free_prefix(prefix);
 
-    if (!str_equals(prefix, "xml") &&
-        !str_equals(prefix, "xmlns")) {
-      const char *const elt_href = get_ns_href_for_prefix(&root_elt, prefix);
+    if (str_equals(prefix, "xmlns")) {
+      log_info("The prefix 'xmlns' cannot be used in element names");
+      return false;
+    }
+
+    const char *const elt_href = get_ns_href_for_prefix(&elt, prefix);
+
+    if (str_equals(prefix, "xml")) {
+      /* this is checked in `is_valid_attribute` */
+      assert(!elt_href || str_equals(elt_href, XML_XML_NS));
+    }
+    else {
       if (!elt_href) {
-        /* there was no namespace URI for the prefix, this is invalid */
-        log_info("No namespace for prefix: %s", prefix);
+        log_info("No namespace name was bound for prefix: %s", prefix);
         return false;
       }
+
+      /* this is checked in `is_valid_attribute` */
+      assert(!str_equals(elt_href, ""));
+    }
+  }
+
+  return true;
+}
+
+static bool
+is_valid_namespace_name(const char *name) {
+  return (!str_equals(name, XML_XML_NS) &&
+          !str_equals(name, XMLNS_XML_NS) &&
+          !str_equals(name, ""));
+}
+
+static bool
+is_valid_attribute(const XMLElement & elt, const XMLAttribute & attr) {
+  const char *const tag_name = attr.Name();
+  const char *const first_colon = strchr(tag_name, ':');
+
+  if (first_colon) {
+    if ((first_colon == tag_name ||
+         first_colon[1] == '\0' ||
+         strchr(first_colon + 1, ':'))) {
+      log_info("Tag was invalid: %s", tag_name);
+      return false;
+    }
+
+    /* tag name is syntactically valid at this point */
+    char *const prefix = strndup_x(tag_name, first_colon - tag_name);
+    ASSERT_NOT_NULL(prefix);
+    CStringFreer free_prefix(prefix);
+
+    if (str_equals(prefix, "xmlns")) {
+      /* namespace decl */
+      const char *const pure_name = first_colon + 1;
+
+      if (str_equals(pure_name, "xmlns")) {
+        log_info("can't declare the prefix 'xmlns'!");
+        return false;
+      }
+
+      if (str_equals(pure_name, "xml")) {
+        if (!str_equals(attr.Value(), XML_XML_NS)) {
+          log_info("Can only declare the prefix 'xml' "
+                   "to have the namespace name: %s, not %s",
+                   XML_XML_NS, elt.Value());
+          return false;
+        }
+      }
+      else if (!is_valid_namespace_name(attr.Value())) {
+        log_info("Invalid namespace name! %s", elt.Value());
+        return false;
+      }
+    }
+    else  {
+      /* normal attribute */
+      const char *const elt_href = get_ns_href_for_prefix(&elt, prefix);
+      if (!elt_href && !str_equals(prefix, "xml")) {
+        log_info("no namespace name was declared for the prefix: %s", prefix);
+        return false;
+      }
+    }
+  }
+  else if (str_equals(tag_name, "xmlns")) {
+    /* default namespace decl */
+    if (!is_valid_namespace_name(attr.Value())) {
+      log_info("Invalid namespace name! %s", attr.Value());
+      return false;
     }
   }
 
@@ -584,17 +694,34 @@ is_valid_tag_name(const XMLElement & root_elt, const char *tag_name) {
 bool
 XMLNamespaceVerifier::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
   /* verify tag name and all attributes names */
-  const char *const tag_name = elt.Name();
-
-  if (!is_valid_tag_name(elt, tag_name)) {
+  if (!is_valid_element(elt)) {
     m_is_valid = false;
   }
   else {
+    std::unordered_set<std::pair<std::string,std::string> > seen_attrs;
     for (const XMLAttribute *curattrs = attrs;
-         curattrs; curattrs = curattrs->Next()) {
-      if (!is_valid_tag_name(elt, curattrs->Name())) {
+         curattrs && m_is_valid;
+         curattrs = curattrs->Next()) {
+      if (!is_valid_attribute(elt, *curattrs)) {
         m_is_valid = false;
-        break;
+      }
+      else {
+        /* this is a valid attr, check if we've already
+           seen it */
+        const char *const ns_href = get_ns_href(&elt, curattrs);
+        const char *const pure_name = get_ns_name(curattrs->Name());
+        /* we use empty string to mean no namespace since an
+           empty namespace name is not valid in the first place */
+        assert(!ns_href || !str_equals(ns_href, ""));
+        auto fully_qualified_name = std::make_pair(std::string(ns_href ? ns_href : ""),
+                                                   std::string(pure_name));
+        if (seen_attrs.count(fully_qualified_name)) {
+          log_info("Duplicate attr name: %s:%s", ns_href, pure_name);
+          m_is_valid = false;
+        }
+        else {
+          seen_attrs.insert(std::move(fully_qualified_name));
+        }
       }
     }
   }
