@@ -29,9 +29,9 @@ static const char *const DAV_XML_NS_PREFIX = "D";
 template <class T, void (*func)(T)>
 class CFreer {
 private:
-  T & myt;
+  const T & myt;
 public:
-  CFreer(T & var) : myt(var) {}
+  CFreer(const T & var) : myt(var) {}
   ~CFreer() {
     func(myt);
   }
@@ -48,6 +48,11 @@ void free_linked_list_of_propfind_entries(linked_list_t ents) {
 }
 
 typedef CFreer<char *, free_str> CStringFreer;
+
+static PURE_FUNCTION bool
+not_empty_no_colon(const char *a) {
+  return (!str_equals(a, "") && !strchr(a, ':'));
+}
 
 static PURE_FUNCTION bool
 safe_str_equals(const char *a, const char *b) {
@@ -69,36 +74,61 @@ get_ns_name(const XMLElement *elt) {
   return get_ns_name(elt->Name());
 }
 
+static PURE_FUNCTION char *
+make_ns_prefix(const char *tag_name) {
+  const char *first_colon = strchr(tag_name, ':');
+  if (!first_colon) {
+    return NULL;
+  }
+
+  return strndup_x(tag_name, first_colon - tag_name);
+}
+
 static PURE_FUNCTION const char *
-get_ns_href(const XMLElement *elt, const char *raw_elt_name=NULL) {
+get_ns_href_for_prefix(const XMLElement *elt, const char *prefix) {
+  char *allocated_attr_to_query = NULL;
+  CStringFreer free_allocated_attr_to_query(allocated_attr_to_query);
+
+  const char *attr_to_query;
+  if (!prefix) {
+    attr_to_query = "xmlns";
+  }
+  else {
+    assert(not_empty_no_colon(prefix));
+    allocated_attr_to_query = super_strcat("xmlns:", prefix, NULL);
+    attr_to_query = allocated_attr_to_query;
+  }
+
+  /* okay now find the href for this ns, start at this elt and go up */
+  const char *elt_href = NULL;
+  const XMLElement *start_elt = elt;
+  while (start_elt && !elt_href) {
+    /* find the xmlns/xmlns:<ns> attributes */
+    elt_href = start_elt->Attribute(attr_to_query);
+    start_elt = start_elt->Parent()->ToElement();
+  }
+
+  return elt_href;
+}
+
+static PURE_FUNCTION const char *
+get_ns_href(const XMLElement *elt, const char *raw_elt_name=NULL,
+            bool check_default_namespace=true) {
   if (!raw_elt_name) {
     raw_elt_name = elt->Name();
   }
 
   const char *elt_href = NULL;
-  const char *start_of_colon = strchr(raw_elt_name, ':');
-  if (start_of_colon) {
-    char *attr_to_query = (char *) malloc_or_abort(sizeof("xmlns:") + start_of_colon - raw_elt_name);
-    CStringFreer free_attr_to_query(attr_to_query);
-    memcpy(attr_to_query, "xmlns:", sizeof("xmlns:") - 1);
-    memcpy(attr_to_query + sizeof("xmlns:") - 1, raw_elt_name, start_of_colon - raw_elt_name);
-    attr_to_query[sizeof("xmlns:") + start_of_colon - raw_elt_name - 1] = '\0';
-
-    /* okay now find the href for this ns, start at this elt and go up */
-    const XMLElement *start_elt = elt;
-    while (start_elt && !elt_href) {
-      /* find the xmlns:<ns> attributes */
-      elt_href = start_elt->Attribute(attr_to_query);
-      start_elt = start_elt->Parent()->ToElement();
-    }
+  char *const prefix = make_ns_prefix(raw_elt_name);
+  CStringFreer free_prefix(prefix);
+  if (prefix) {
+    elt_href = get_ns_href_for_prefix(elt, prefix);
+    /* if a prefix was specified, there must be namespace name
+       associated with it */
+    assert(elt_href);
   }
-  else {
-    /* no explicitly designated namespace, look for the nearest empty xmlns */
-    const XMLElement *start_elt = elt;
-    while (start_elt && !elt_href) {
-      elt_href = start_elt->Attribute("xmlns");
-      start_elt = start_elt->Parent()->ToElement();
-    }
+  else if (check_default_namespace) {
+    elt_href = get_ns_href_for_prefix(elt, NULL);
   }
 
   /* we stopped at the first relevant namespace attribute
@@ -139,6 +169,10 @@ newChildElement(XMLNode *parent, const char *one, const char *two=NULL) {
     ns_prefix = NULL;
     pure_tag_name = one;
   }
+
+  /* the tag should not have a colon in it */
+  assert(!ns_prefix || not_empty_no_colon(ns_prefix));
+  assert(not_empty_no_colon(pure_tag_name));
 
   if (ns_prefix) {
     copied_tag_name = super_strcat(ns_prefix, ":", pure_tag_name, NULL);
@@ -209,30 +243,15 @@ serializeDoc(const XMLDocument &doc, char **out_data, size_t *out_size) {
 
 /* owner xml abstraction */
 
-/* This class is responsible for flattening out XML namespaces
-   so that you can copy past XML easily. This is used for the Owner XML
-   element in WebDAV (which needs to be preserved exactly). For Example,
-   it turns this:
-
-   <elt xmlns:D="HAI">
-       <D:Yo D:sup="1" xmlns:H="LOL">
-           <H:sick D:word="2" />
-       </D>
-   </elt>
-
-   into:
-
-   <elt>
-       <Yo xmlns="HAI" xmlns:a0="HAI" a0:sup="1">
-           <sick xmlns="LOL" xmlns:a0="HAI" a0:word="2" />
-       </Yo>
-   </elt>
+/* This class is responsible moving XML to new documents while preserving
+   namespace / prefix mappings. This is used for the Owner XML
+   element in WebDAV (which needs to be preserved exactly).
 */
 class _OwnerXmlStorer : public XMLVisitor {
 public:
   _OwnerXmlStorer(XMLNode *initNode)
-  : m_stack(std::deque<XMLNode *>({initNode})),
-    m_ns_count(0)
+    : m_stack(std::deque<XMLNode *>(1, initNode)),
+      m_ns_count(0)
   {}
 
   ~_OwnerXmlStorer() {
@@ -277,7 +296,7 @@ struct c_str_hash {
 
 static const char *
 findPrefix(XMLElement *start_at, const char *ns_href) {
-  assert(!str_equals(ns_href, ""));
+  assert(ns_href && !str_equals(ns_href, ""));
 
   const char *prefix = NULL;
 
@@ -288,14 +307,14 @@ findPrefix(XMLElement *start_at, const char *ns_href) {
     /* search each xmlns declaration for the href */
     for (const XMLAttribute *attr = search->FirstAttribute();
          attr && !prefix; attr = attr->Next()) {
-      if (!is_xmlns_attr(attr)) {
+      /* normal xmlns isn't relevant, since there is no prefix there */
+      if (!str_startswith(attr->Name(), "xmlns:")) {
         continue;
       }
 
-      const char *potential_prefix = str_equals(attr->Name(), "xmlns")
-        ? ""
-        : strchr(attr->Name(), ':') + 1;
+      const char *const potential_prefix  = strchr(attr->Name(), ':') + 1;
       assert(potential_prefix != (void *) 1);
+      assert(potential_prefix[0] != '\0');
 
       /* check that this prefix hasn't been invalidated anywhere below */
       if (!prefixes_seen.count(potential_prefix) &
@@ -371,12 +390,15 @@ _OwnerXmlStorer::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
     }
 
     const char *attr_ns_name = get_ns_name(curattrs->Name());
-    const char *attr_ns_href = get_ns_href(&elt, curattrs->Name());
+    /* attributes without prefixes don't check the default namespace */
+    bool check_default_namespace = false;
+    const char *attr_ns_href = get_ns_href(&elt, curattrs->Name(),
+                                           check_default_namespace);
 
     if (attr_ns_href) {
-      const char *prefix = FindOrCreatePrefix(new_elt, attr_ns_href);
-      assert(prefix);
-      char *new_attr_name = super_strcat(prefix, ":", attr_ns_name, NULL);
+      const char *const prefix = FindOrCreatePrefix(new_elt, attr_ns_href);
+      assert(prefix && not_empty_no_colon(prefix));
+      char *const new_attr_name = super_strcat(prefix, ":", attr_ns_name, NULL);
       ASSERT_NOT_NULL(new_attr_name);
       CStringFreer free_new_attr_name(new_attr_name);
       new_elt->SetAttribute(new_attr_name, curattrs->Value());
@@ -434,7 +456,7 @@ owner_xml_free(owner_xml_t a) {
 class _DocumentCopier : public XMLVisitor {
 public:
   _DocumentCopier()
-    : m_stack(std::deque<XMLNode *>({new XMLDocument()}))
+    : m_stack(std::deque<XMLNode *>(1, new XMLDocument()))
   {}
 
   ~_DocumentCopier() {
@@ -492,6 +514,94 @@ owner_xml_copy(owner_xml_t a) {
   return copier.getCopy();
 }
 
+/* XML namespace syntax verifier */
+
+class XMLNamespaceVerifier : public XMLVisitor {
+public:
+  XMLNamespaceVerifier()
+    : m_is_valid(true)
+  {}
+
+  bool
+  VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) override;
+
+  bool
+  WasValid(void) {
+    return m_is_valid;
+  }
+
+private:
+  bool m_is_valid;
+};
+
+static bool
+is_valid_tag_name(const XMLElement & root_elt, const char *tag_name) {
+  const char *first_colon = strchr(tag_name, ':');
+
+  if (first_colon) {
+    if ((first_colon == tag_name ||
+         first_colon[1] == '\0' ||
+         strchr(first_colon + 1, ':'))) {
+      log_info("Tag was invalid: %s", tag_name);
+      return false;
+    }
+
+    /* tag name is valid at this point */
+    char *const prefix = strndup_x(tag_name, first_colon - tag_name);
+    ASSERT_NOT_NULL(prefix);
+    CStringFreer free_prefix(prefix);
+
+    if (!str_equals(prefix, "xml") &&
+        !str_equals(prefix, "xmlns")) {
+      const char *const elt_href = get_ns_href_for_prefix(&root_elt, prefix);
+      if (!elt_href) {
+        /* there was no namespace URI for the prefix, this is invalid */
+        log_info("No namespace for prefix: %s", prefix);
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+bool
+XMLNamespaceVerifier::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
+  /* verify tag name and all attributes names */
+  const char *const tag_name = elt.Name();
+
+  if (!is_valid_tag_name(elt, tag_name)) {
+    m_is_valid = false;
+  }
+  else {
+    for (const XMLAttribute *curattrs = attrs;
+         curattrs; curattrs = curattrs->Next()) {
+      if (!is_valid_tag_name(elt, curattrs->Name())) {
+        m_is_valid = false;
+        break;
+      }
+    }
+  }
+
+  return m_is_valid;
+}
+
+static XMLError
+parseXML(XMLDocument & doc, const char *xml, size_t xml_len) {
+  auto xml_error = doc.Parse(xml, xml_len);
+  if (xml_error) {
+    return xml_error;
+  }
+
+  XMLNamespaceVerifier verifier;
+
+  doc.Accept(&verifier);
+
+  return (verifier.WasValid()
+          ? XML_NO_ERROR
+          : XML_ERROR_PARSING);
+}
+
 /* PROPFIND method XML functions */
 
 xml_parse_code_t
@@ -510,7 +620,7 @@ parse_propfind_request(const char *req_data,
     *out_propfind_req_type = WEBDAV_PROPFIND_ALLPROP;
   }
   else {
-    auto error_parse = doc.Parse(req_data, req_data_length);
+    auto error_parse = parseXML(doc, req_data, req_data_length);
     if (error_parse) {
       /* TODO: could probably get a higher fidelity error */
       toret = XML_PARSE_ERROR_SYNTAX;
@@ -557,12 +667,6 @@ parse_propfind_request(const char *req_data,
            prop_elt; prop_elt = prop_elt->NextSiblingElement()) {
         const char *ns_name = get_ns_name(prop_elt);
         const char *ns_href = get_ns_href(prop_elt);
-        if (ns_href && str_equals(ns_href, "")) {
-          /* empty ns_hrefs are bad XML */
-          toret = XML_PARSE_ERROR_STRUCTURE;
-          goto done;
-        }
-
         *out_props_to_get =
           linked_list_prepend(*out_props_to_get,
                               create_webdav_property(ns_name, ns_href));
@@ -622,7 +726,7 @@ generate_propfind_response(struct handler_context *hc,
     return false;
   }
 
-  linked_list_t allocated_props_to_get = req_type == WEBDAV_PROPFIND_ALLPROP
+  const linked_list_t allocated_props_to_get = req_type == WEBDAV_PROPFIND_ALLPROP
     ? default_props_to_get()
     : 0;
   CFreer<linked_list_t, free_linked_list_of_propfind_entries> free_props_to_get(allocated_props_to_get);
@@ -636,7 +740,7 @@ generate_propfind_response(struct handler_context *hc,
 
   auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
 
-  char *xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
+  char *const xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
   ASSERT_NOT_NULL(xmlns_attr_name);
   CStringFreer free_xmlns_attr_name(xmlns_attr_name);
   multistatus_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
@@ -646,7 +750,7 @@ generate_propfind_response(struct handler_context *hc,
   LINKED_LIST_FOR (struct webdav_propfind_entry, propfind_entry, entries) {
     auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
-    char *uri = uri_from_path(hc, propfind_entry->relative_uri);
+    char *const uri = uri_from_path(hc, propfind_entry->relative_uri);
     ASSERT_NOT_NULL(uri);
     CStringFreer free_uri(uri);
 
@@ -717,8 +821,22 @@ generate_propfind_response(struct handler_context *hc,
         }
       }
       else if (req_type == WEBDAV_PROPFIND_PROP) {
-        auto random_elt = newChildElement(prop_not_found_elt, "random", elt->element_name);
-        random_elt->SetAttribute("xmlns:random", elt->ns_href);
+        const char *prefix = NULL;
+        bool set_prefix = false;
+        if (elt->ns_href) {
+          prefix = findPrefix(prop_not_found_elt, elt->ns_href);
+        }
+        if (!prefix) {
+          prefix = "random";
+          set_prefix = true;
+        }
+        auto random_elt = newChildElement(prop_not_found_elt, prefix, elt->element_name);
+
+        if (set_prefix) {
+          random_elt->SetAttribute("xmlns:random",
+                                   /* clear the random prefix if there is no href */
+                                   elt->ns_href ? elt->ns_href : "");
+        }
       }
     }
 
@@ -785,7 +903,7 @@ parse_lock_request_body(const char *body, size_t body_len,
   *owner_xml = NULL;
 
   XMLDocument doc;
-  auto error_parse = doc.Parse(body, body_len);
+  auto error_parse = parseXML(doc, body, body_len);
   if (error_parse) {
     toret = XML_PARSE_ERROR_SYNTAX;
     goto error;
@@ -842,14 +960,14 @@ generate_locked_response(struct handler_context *hc,
 
   auto error_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "error");
 
-  char *xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
+  char *const xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
   ASSERT_NOT_NULL(xmlns_attr_name);
   CStringFreer free_xmlns_attr_name(xmlns_attr_name);
   error_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
 
   newChildElement(error_elt, DAV_XML_NS_PREFIX, "lock-token-submitted");
 
-  char *uri = uri_from_path(hc, locked_path);
+  char *const uri = uri_from_path(hc, locked_path);
   ASSERT_NOT_NULL(uri);
   CStringFreer free_uri(uri);
 
@@ -877,14 +995,14 @@ generate_locked_descendant_response(struct handler_context *hc,
 
   auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
 
-  char *xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
+  char *const xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
   ASSERT_NOT_NULL(xmlns_attr_name);
   CStringFreer free_xmlns_attr_name(xmlns_attr_name);
   multistatus_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
 
   auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
-  char *uri = uri_from_path(hc, locked_descendant);
+  char *const uri = uri_from_path(hc, locked_descendant);
   ASSERT_NOT_NULL(uri);
   CStringFreer free_uri(uri);
 
@@ -917,7 +1035,7 @@ generate_failed_lock_response_body(struct handler_context *hc,
 
   auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
 
-  char *xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
+  char *const xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
   ASSERT_NOT_NULL(xmlns_attr_name);
   CStringFreer free_xmlns_attr_name(xmlns_attr_name);
   multistatus_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
@@ -928,7 +1046,7 @@ generate_failed_lock_response_body(struct handler_context *hc,
   if (!same_path) {
     auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
-    char *status_uri = uri_from_path(hc, status_path);
+    char *const status_uri = uri_from_path(hc, status_path);
     ASSERT_NOT_NULL(status_uri);
     CStringFreer free_status_uri(status_uri);
 
@@ -938,7 +1056,7 @@ generate_failed_lock_response_body(struct handler_context *hc,
 
   auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
-  char *file_uri = uri_from_path(hc, file_path);
+  char *const file_uri = uri_from_path(hc, file_path);
   ASSERT_NOT_NULL(file_uri);
   CStringFreer free_file_uri(file_uri);
 
@@ -975,7 +1093,7 @@ generate_success_lock_response_body(struct handler_context *hc,
 
   auto prop_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "prop");
 
-  char *xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
+  char *const xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
   ASSERT_NOT_NULL(xmlns_attr_name);
   CStringFreer free_xmlns_attr_name(xmlns_attr_name);
   prop_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
@@ -1022,7 +1140,7 @@ generate_success_lock_response_body(struct handler_context *hc,
 
   auto lockroot_elt = newChildElement(activelock_elt,  DAV_XML_NS_PREFIX, "lockroot");
 
-  char *lockroot_uri = uri_from_path(hc, file_path);
+  char *const lockroot_uri = uri_from_path(hc, file_path);
   ASSERT_NOT_NULL(lockroot_uri);
   CStringFreer free_lockroot_uri(lockroot_uri);
   newChildElementWithText(lockroot_elt, DAV_XML_NS_PREFIX, "href", file_path);
@@ -1046,7 +1164,7 @@ parse_proppatch_request(const char *body, size_t body_len,
 
   XMLDocument doc;
 
-  auto error_parse = doc.Parse(body, body_len);
+  auto error_parse = parseXML(doc, body, body_len);
   if (error_parse) {
     toret = XML_PARSE_ERROR_SYNTAX;
     goto done;
@@ -1097,12 +1215,6 @@ parse_proppatch_request(const char *body, size_t body_len,
       for (auto xml_prop = prop_elt->FirstChildElement(); xml_prop;
            xml_prop = xml_prop->NextSiblingElement()) {
         const char *ns_href = get_ns_href(xml_prop);
-        if (ns_href && str_equals(ns_href, "")) {
-          /* empty ns_hrefs are bad XML */
-          toret = XML_PARSE_ERROR_STRUCTURE;
-          goto done;
-        }
-
         const char *ns_name = get_ns_name(xml_prop);
 
         WebdavProppatchDirective *directive =
@@ -1138,7 +1250,7 @@ generate_proppatch_response(const char *uri,
 
   auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
 
-  char *xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
+  char *const xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
   ASSERT_NOT_NULL(xmlns_attr_name);
   CStringFreer free_xmlns_attr_name(xmlns_attr_name);
   multistatus_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
@@ -1157,8 +1269,22 @@ generate_proppatch_response(const char *uri,
   /* we don't support arbitrary dead properties */
   LINKED_LIST_FOR (WebdavProppatchDirective, elt, props_to_patch) {
     /* add this element to the proppatch response */
-    auto new_xml_prop = newChildElement(new_prop_elt, "random", elt->name);
-    new_xml_prop->SetAttribute("xmlns:random", elt->ns_href ? elt->ns_href : "");
+    const char *prefix = NULL;
+    bool set_prefix = false;
+    if (elt->ns_href) {
+      prefix = findPrefix(new_prop_elt, elt->ns_href);
+    }
+    if (!prefix) {
+      prefix = "random";
+      set_prefix = true;
+    }
+    auto new_xml_prop =
+      newChildElement(new_prop_elt, prefix, elt->name);
+    if (set_prefix) {
+      new_xml_prop->SetAttribute("xmlns:random",
+                                 /* clear random what means if there is no href*/
+                                 elt->ns_href ? elt->ns_href : "");
+    }
   }
 
   bool success_serialize =

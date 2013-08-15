@@ -14,7 +14,7 @@ CFLAGS += -std=c99 -Wall -Wextra -Werror
 CFLAGS_DEBUG = -g
 CFLAGS_RELEASE = -O3
 
-CXXFLAGS += -std=c++11 -Wall -Wextra -Werror
+CXXFLAGS += -std=c++11 -Wall -Wextra -Werror -stdlib=libc++
 CXXFLAGS_DEBUG = -g
 CXXFLAGS_RELEASE = -O3
 
