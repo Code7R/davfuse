@@ -323,16 +323,19 @@ private:
 
 static const char *
 findPrefix(const XMLElement *start_at, const char *ns_href) {
-  /* there is a bit of asymmetry here with
-     get_ns_href (the logical inverse of this function)
-     (which can return XMLNS_XML_NS) for a prefix */
   assert(ns_href &&
          !str_equals(ns_href, "") &&
          !str_equals(ns_href, XMLNS_XML_NS));
 
+  /* ensure consistency with `get_ns_href()`
+     (the logical inverse of this function)
+   */
   if (str_equals(ns_href, XML_XML_NS)) {
     /* this is always the prefix */
     return "xml";
+  }
+  else if (str_equals(ns_href, XMLNS_XML_NS)) {
+    return "xmlns";
   }
 
   const char *prefix = NULL;
