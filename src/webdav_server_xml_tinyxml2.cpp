@@ -6,6 +6,8 @@
 #include <deque>
 #include <memory>
 #include <stack>
+#include <string>
+#include <unordered_set>
 
 #include "tinyxml2.h"
 
@@ -22,6 +24,30 @@ static const char *const DAV_XML_NS = "DAV:";
 static const char *const DAV_XML_NS_PREFIX = "D";
 
 /* utilities */
+
+/* this little class allows us to get C++ RAII with C based data structures */
+template <class T, void (*func)(T)>
+class CFreer {
+private:
+  T & myt;
+public:
+  CFreer(T & var) : myt(var) {}
+  ~CFreer() {
+    func(myt);
+  }
+};
+
+void free_str(char *f) {
+  return free((void *) f);
+}
+
+void free_linked_list_of_propfind_entries(linked_list_t ents) {
+  return linked_list_free(ents,
+                          (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
+
+}
+
+typedef CFreer<char *, free_str> CStringFreer;
 
 static PURE_FUNCTION bool
 safe_str_equals(const char *a, const char *b) {
@@ -53,6 +79,7 @@ get_ns_href(const XMLElement *elt, const char *raw_elt_name=NULL) {
   const char *start_of_colon = strchr(raw_elt_name, ':');
   if (start_of_colon) {
     char *attr_to_query = (char *) malloc_or_abort(sizeof("xmlns:") + start_of_colon - raw_elt_name);
+    CStringFreer free_attr_to_query(attr_to_query);
     memcpy(attr_to_query, "xmlns:", sizeof("xmlns:") - 1);
     memcpy(attr_to_query + sizeof("xmlns:") - 1, raw_elt_name, start_of_colon - raw_elt_name);
     attr_to_query[sizeof("xmlns:") + start_of_colon - raw_elt_name - 1] = '\0';
@@ -64,14 +91,6 @@ get_ns_href(const XMLElement *elt, const char *raw_elt_name=NULL) {
       elt_href = start_elt->Attribute(attr_to_query);
       start_elt = start_elt->Parent()->ToElement();
     }
-
-    if (!elt_href) {
-      /* TODO: change the interface to account for this type of invalid xml */
-      log_warning("Element \"%s\" had a namespace but no HREF",
-                  attr_to_query);
-    }
-
-    free(attr_to_query);
   }
   else {
     /* no explicitly designated namespace, look for the nearest empty xmlns */
@@ -80,6 +99,12 @@ get_ns_href(const XMLElement *elt, const char *raw_elt_name=NULL) {
       elt_href = start_elt->Attribute("xmlns");
       start_elt = start_elt->Parent()->ToElement();
     }
+  }
+
+  /* we stopped at the first relevant namespace attribute
+     but an empty namespace href means there is no namespace */
+  if (elt_href && str_equals(elt_href, "")) {
+    elt_href = NULL;
   }
 
   return elt_href;
@@ -100,31 +125,32 @@ node_is(const XMLElement *elt, const char *test_href, const char *test_name) {
 
 static XMLElement *
 newChildElement(XMLNode *parent, const char *one, const char *two=NULL) {
+  const char *ns_prefix;
+  const char *pure_tag_name;
   const char *tag_name;
-  char *copied_tag_name;
+  char *copied_tag_name = NULL;
+  CStringFreer free_copied_tag_name(copied_tag_name);
 
   if (two) {
-    const char *const ns_prefix = one;
-    const char *const pure_tag_name = two;
+    ns_prefix = one;
+    pure_tag_name = two;
+  }
+  else {
+    ns_prefix = NULL;
+    pure_tag_name = one;
+  }
 
+  if (ns_prefix) {
     copied_tag_name = super_strcat(ns_prefix, ":", pure_tag_name, NULL);
     ASSERT_NOT_NULL(copied_tag_name);
-
     tag_name = copied_tag_name;
   }
   else {
-    tag_name = one;
-    copied_tag_name = NULL;
+    tag_name = pure_tag_name;
   }
 
   auto new_element = parent->GetDocument()->NewElement(tag_name);
-
-  if (copied_tag_name) {
-    free(copied_tag_name);
-  }
-
   parent->InsertEndChild(new_element);
-
 
   return new_element;
 }
@@ -181,30 +207,6 @@ serializeDoc(const XMLDocument &doc, char **out_data, size_t *out_size) {
   return true;
 }
 
-/* this little class allows us to get C++ RAII with C based data structures */
-template <class T, void (*func)(T)>
-class CFreer {
-private:
-  T & myt;
-public:
-  CFreer(T & var) : myt(var) {}
-  ~CFreer() {
-    func(myt);
-  }
-};
-
-void free_str(char *f) {
-  return free((void *) f);
-}
-
-void free_linked_list_of_propfind_entries(linked_list_t ents) {
-  return linked_list_free(ents,
-                          (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
-
-}
-
-typedef CFreer<char *, free_str> CStringFreer;
-
 /* owner xml abstraction */
 
 /* This class is responsible for flattening out XML namespaces
@@ -259,11 +261,27 @@ is_xmlns_attr(const XMLAttribute *a) {
           str_startswith(attr_name, "xmlns:"));
 }
 
-const char *
+struct c_str_pred {
+  bool
+  operator()(const char *s1, const char *s2) const {
+    return str_equals(s1, s2);
+  }
+};
+
+struct c_str_hash {
+  size_t
+  operator()(const char *p) const {
+    return std::hash<std::string>()(p);
+  }
+};
+
+static const char *
 findPrefix(XMLElement *start_at, const char *ns_href) {
+  assert(!str_equals(ns_href, ""));
+
   const char *prefix = NULL;
 
-  assert(!str_equals(ns_href, ""));
+  std::unordered_set<const char *, c_str_hash, c_str_pred> prefixes_seen;
 
   XMLElement *search = start_at;
   while (search && !prefix) {
@@ -274,14 +292,21 @@ findPrefix(XMLElement *start_at, const char *ns_href) {
         continue;
       }
 
-      if (str_equals(attr->Value(), ns_href)) {
-        /* TODO: check that this prefix hasn't been invalidated
-           anywhere below (compare against a set) */
+      const char *potential_prefix = str_equals(attr->Name(), "xmlns")
+        ? ""
+        : strchr(attr->Name(), ':') + 1;
+      assert(potential_prefix != (void *) 1);
+
+      /* check that this prefix hasn't been invalidated anywhere below */
+      if (!prefixes_seen.count(potential_prefix) &
+          str_equals(attr->Value(), ns_href)) {
         /* whoa we found it */
-        prefix = str_equals(attr->Name(), "xmlns")
-          ? ""
-          : strchr(attr->Name(), ':') + 1;
-        assert(prefix);
+        prefix = potential_prefix;
+      }
+      else {
+        /* higher up prefix values won't count,
+           since they will be overshadowed by this */
+        prefixes_seen.insert(potential_prefix);
       }
     }
 
@@ -321,21 +346,20 @@ bool
 _OwnerXmlStorer::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
   const char *elt_name = get_ns_name(&elt);
   const char *elt_href = get_ns_href(&elt);
-  /* the current interface doesn't handle this bad XML, so just die
-     TODO: fix this */
-  ASSERT_TRUE(!(elt_href && str_equals(elt_href, "")));
 
   /* find an xml tag namespace prefix for the current namespace href */
   XMLElement *parent_element = m_stack.top()->ToElement();
 
-  const char *prefix = parent_element
-    ? FindOrCreatePrefix(parent_element, elt_href)
-    /* our parent is the doc, we're adding the root element
-       so we have to bootstrap our own prefix */
-    : "ns0";
+  const char *prefix = elt_href
+    ? (parent_element
+       ? FindOrCreatePrefix(parent_element, elt_href)
+       /* our parent is the doc, we're adding the root element
+          so we have to bootstrap our own prefix */
+       : "ns0")
+    : NULL;
 
   auto new_elt = newChildElement(m_stack.top(), prefix, elt_name);
-  if (!parent_element) {
+  if (elt_href && !parent_element) {
     new_elt->SetAttribute("xmlns:ns0", elt_href);
   }
 
@@ -348,9 +372,6 @@ _OwnerXmlStorer::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
 
     const char *attr_ns_name = get_ns_name(curattrs->Name());
     const char *attr_ns_href = get_ns_href(&elt, curattrs->Name());
-    /* the current interface doesn't handle this bad XML, so just die
-       TODO: fix this */
-    ASSERT_TRUE(!(attr_ns_href && str_equals(attr_ns_href, "")));
 
     if (attr_ns_href) {
       const char *prefix = FindOrCreatePrefix(new_elt, attr_ns_href);
