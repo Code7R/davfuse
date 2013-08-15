@@ -523,12 +523,28 @@ public:
   {}
 
   bool
+  VisitEnter(const XMLDocument &) override { return m_is_valid; }
+
+  bool
+  VisitExit(const XMLDocument &) override { return m_is_valid; }
+
+  bool
   VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) override;
 
   bool
-  WasValid(void) {
-    return m_is_valid;
-  }
+  VisitExit(const XMLElement &) override { return m_is_valid; }
+
+  bool
+  Visit(const XMLDeclaration &) override { return m_is_valid; }
+
+  bool
+  Visit(const XMLText &) override { return m_is_valid; }
+
+  bool
+  Visit(const XMLComment &) override { return m_is_valid; }
+
+  bool
+  Visit(const XMLUnknown &) override { return m_is_valid; }
 
 private:
   bool m_is_valid;
@@ -595,9 +611,7 @@ parseXML(XMLDocument & doc, const char *xml, size_t xml_len) {
 
   XMLNamespaceVerifier verifier;
 
-  doc.Accept(&verifier);
-
-  return (verifier.WasValid()
+  return (doc.Accept(&verifier)
           ? XML_NO_ERROR
           : XML_ERROR_PARSING);
 }
