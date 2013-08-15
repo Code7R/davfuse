@@ -10,10 +10,13 @@
 
 #include "http_backend.h"
 
+/* forward decl */
+struct _accept_ctx;
+
 typedef struct _http_backend {
   fdevent_loop_t loop;
   fd_t serv_socket;
-  fdevent_watch_key_t accept_key;
+  struct _accept_ctx *cur_accept;
 } HTTPBackend;
 
 http_backend_sockets_fdevent_t
@@ -65,17 +68,20 @@ http_backend_sockets_fdevent_destroy(http_backend_sockets_fdevent_t backend) {
   free(backend);
 }
 
-typedef struct {
+typedef struct _accept_ctx {
   UTHR_CTX_BASE;
   /* args */
   http_backend_sockets_fdevent_t backend;
   event_handler_t cb;
   void *cb_ud;
   /* ctx */
+  fdevent_watch_key_t accept_key;
 } HTTPBackendAcceptCtx;
 
 UTHR_DEFINE(_http_backend_sockets_fdevent_accept_uthr) {
   UTHR_HEADER(HTTPBackendAcceptCtx, ctx);
+
+  ctx->accept_key = FDEVENT_INVALID_WATCH_KEY;
 
   fd_t socket;
   while (true) {
@@ -90,14 +96,16 @@ UTHR_DEFINE(_http_backend_sockets_fdevent_accept_uthr) {
                                              create_stream_events(true, false),
                                              _http_backend_sockets_fdevent_accept_uthr,
                                              ctx,
-                                             &ctx->backend->accept_key);
+                                             &ctx->accept_key);
       if (!success_watch) {
         log_error("Couldn't add fdevent watch!");
         break;
       }
       else {
+        ctx->backend->cur_accept = ctx;
         UTHR_YIELD(ctx, 0);
-        ctx->backend->accept_key = FDEVENT_INVALID_WATCH_KEY;
+        ctx->accept_key = FDEVENT_INVALID_WATCH_KEY;
+        ctx->backend->cur_accept = NULL;
       }
     }
     else {
@@ -134,6 +142,14 @@ void
 http_backend_sockets_fdevent_accept(http_backend_sockets_fdevent_t backend,
                                     event_handler_t cb,
                                     void *cb_ud) {
+  if (backend->cur_accept) {
+    HttpBackendAcceptDoneEvent ev = {
+      /* TODO: get better error code */
+      .error = HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_UNKNOWN,
+    };
+    return cb(HTTP_BACKEND_SOCKETS_FDEVENT_ACCEPT_DONE_EVENT, &ev, cb_ud);
+  }
+
   UTHR_CALL3(_http_backend_sockets_fdevent_accept_uthr, HTTPBackendAcceptCtx,
              .backend = backend,
              .cb = cb,
@@ -142,7 +158,14 @@ http_backend_sockets_fdevent_accept(http_backend_sockets_fdevent_t backend,
 
 void
 http_backend_sockets_fdevent_stop_accept(http_backend_sockets_fdevent_t backend) {
-  UNUSED(backend);
+  if (backend->cur_accept) {
+    assert(backend->cur_accept->accept_key != FDEVENT_INVALID_WATCH_KEY);
+    const bool success_remove =
+      fdevent_remove_watch(backend->loop, backend->cur_accept->accept_key);
+    ASSERT_TRUE(success_remove);
+    free(backend->cur_accept);
+    backend->cur_accept = NULL;
+  }
 }
 
 typedef struct {

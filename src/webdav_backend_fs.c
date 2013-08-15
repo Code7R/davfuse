@@ -773,6 +773,6 @@ webdav_backend_fs_move(WebdavBackendFs *backend_handle,
 
 void
 webdav_backend_fs_destroy(webdav_backend_fs_t backend) {
-  UNUSED(backend);
-  abort();
+  free(backend->base_path);
+  free(backend);
 }
