@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -169,5 +170,41 @@ strndup_x(const char *s, size_t n) {
   }
   memcpy(toret, s, len);
   toret[len] = '\0';
+  return toret;
+}
+
+char *
+super_strcat(const char *first, ...) {
+  va_list ap;
+
+  /* first compute the necessary length */
+  size_t required_size = 0;
+  va_start(ap, first);
+  const char *next = first;
+  while (next) {
+    required_size += strlen(next);
+    next = va_arg(ap, const char *);
+  }
+  va_end(ap);
+
+  char *toret = malloc(required_size + 1);
+  if (!toret) {
+    return NULL;
+  }
+
+  /* now copy the memory */
+  size_t offset = 0;
+  va_start(ap, first);
+  const char *next_add = first;
+  while (next_add) {
+    size_t adding = strlen(next_add);
+    memcpy(toret + offset, next_add, adding);
+    offset += adding;
+    next_add = va_arg(ap, const char *);
+  }
+  va_end(ap);
+
+  toret[offset] = '\0';
+
   return toret;
 }

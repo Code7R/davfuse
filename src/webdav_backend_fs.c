@@ -114,13 +114,13 @@ typedef struct {
   fs_file_handle_t fd;
   fs_off_t offset;
   size_t amt_read;
-} PosixGetCtx;
+} WebdavBackendFsGetCtx;
 
 static
 UTHR_DEFINE(_webdav_backend_fs_get_uthr) {
   webdav_error_t error;
 
-  UTHR_HEADER(PosixGetCtx, ctx);
+  UTHR_HEADER(WebdavBackendFsGetCtx, ctx);
 
   ctx->fd = (fs_file_handle_t) 0;
 
@@ -130,8 +130,9 @@ UTHR_DEFINE(_webdav_backend_fs_get_uthr) {
     goto done;
   }
 
-  const fs_error_t ret_open = fs_open(ctx->pbctx->fs, ctx->file_path, false,
-                                      &ctx->fd, NULL);
+  const bool create_file = false;
+  const fs_error_t ret_open = fs_open(ctx->pbctx->fs, ctx->file_path,
+                                      create_file, &ctx->fd, NULL);
   if (ret_open) {
     if (ret_open == FS_ERROR_IS_DIR) {
       /* TODO: maybe generate directory listing */
@@ -146,19 +147,18 @@ UTHR_DEFINE(_webdav_backend_fs_get_uthr) {
   }
 
   FsAttrs attrs;
-  const fs_error_t fstat_ret = fs_fgetattr(ctx->pbctx->fs, ctx->fd, &attrs);
-  if (fstat_ret) {
+  const fs_error_t ret_fgetattr = fs_fgetattr(ctx->pbctx->fs, ctx->fd, &attrs);
+  if (ret_fgetattr) {
     error = WEBDAV_ERROR_GENERAL;
     goto done;
   }
 
-  /* check if this is a directory */
-  if (attrs.is_directory) {
-    error = WEBDAV_ERROR_IS_COL;
-    goto done;
-  }
+  /* this should never happen */
+  ASSERT_TRUE(!attrs.is_directory);
 
   /* write out the size hint */
+  /* TODO: remove this, the file might end up
+     being larger or smaller than this */
   UTHR_YIELD(ctx,
              webdav_get_request_size_hint(ctx->get_ctx, attrs.size,
                                           _webdav_backend_fs_get_uthr, ctx));
@@ -219,7 +219,7 @@ UTHR_DEFINE(_webdav_backend_fs_get_uthr) {
 void
 webdav_backend_fs_get(WebdavBackendFs *backend_handle, const char *relative_uri,
                       webdav_get_request_ctx_t get_ctx) {
-  UTHR_CALL3(_webdav_backend_fs_get_uthr, PosixGetCtx,
+  UTHR_CALL3(_webdav_backend_fs_get_uthr, WebdavBackendFsGetCtx,
              .pbctx = backend_handle,
              .relative_uri = relative_uri,
              .get_ctx = get_ctx);
@@ -237,11 +237,11 @@ typedef struct {
   bool resource_existed;
   size_t total_amount_transferred;
   char buf[TRANSFER_BUF_SIZE];
-} PosixPutCtx;
+} WebdavBackendFsPutCtx;
 
 static
 UTHR_DEFINE(_webdav_backend_fs_put_uthr) {
-  UTHR_HEADER(PosixPutCtx, ctx);
+  UTHR_HEADER(WebdavBackendFsPutCtx, ctx);
 
   webdav_error_t error;
 
@@ -333,7 +333,7 @@ UTHR_DEFINE(_webdav_backend_fs_put_uthr) {
 void
 webdav_backend_fs_put(WebdavBackendFs *backend_handle, const char *relative_uri,
                       webdav_put_request_ctx_t put_ctx) {
-  UTHR_CALL3(_webdav_backend_fs_put_uthr, PosixPutCtx,
+  UTHR_CALL3(_webdav_backend_fs_put_uthr, WebdavBackendFsPutCtx,
              .pbctx = backend_handle,
              .relative_uri = relative_uri,
              .put_ctx = put_ctx);
@@ -383,26 +383,17 @@ webdav_backend_fs_mkcol(webdav_backend_fs_t backend_handle, const char *relative
 
 static webdav_propfind_entry_t
 create_propfind_entry_from_stat(const char *relative_uri, FsAttrs *attrs) {
-  if (attrs->is_directory) {
-    /* TODO: right now we don't really support these
-       attributes on directories (see `webdav_backend_fs_propfind`) */
-    return webdav_new_propfind_entry(relative_uri,
-                                     INVALID_WEBDAV_RESOURCE_TIME,
-                                     INVALID_WEBDAV_RESOURCE_TIME,
-                                     attrs->is_directory,
-                                     INVALID_WEBDAV_RESOURCE_SIZE);
-  }
-  else {
-    return webdav_new_propfind_entry(relative_uri,
-                                     (attrs->modified_time == FS_INVALID_TIME
-                                      ? INVALID_WEBDAV_RESOURCE_TIME
-                                      : attrs->modified_time),
-                                     (attrs->created_time == FS_INVALID_TIME
-                                      ? INVALID_WEBDAV_RESOURCE_TIME
-                                      : attrs->created_time),
-                                     attrs->is_directory,
-                                     attrs->size);
-  }
+  return webdav_new_propfind_entry(relative_uri,
+                                   (attrs->modified_time == FS_INVALID_TIME
+                                    ? INVALID_WEBDAV_RESOURCE_TIME
+                                    : attrs->modified_time),
+                                   (attrs->created_time == FS_INVALID_TIME
+                                    ? INVALID_WEBDAV_RESOURCE_TIME
+                                    : attrs->created_time),
+                                   attrs->is_directory,
+                                   (attrs->is_directory
+                                    ? INVALID_WEBDAV_RESOURCE_SIZE
+                                    : ((webdav_resource_size_t) attrs->size)));
 }
 
 void
@@ -440,59 +431,43 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
   file_path = path_from_uri(pbctx, relative_uri);
   if (!file_path) {
     log_info("Couldn't make file path from \"%s\'", file_path);
-    ev.error = true;
+    ev.error = WEBDAV_ERROR_GENERAL;
     goto done;
   }
 
-  /* open the resource */
+  /* NB: the consistency between this and the file that we open is
+     not guaranteed */
   FsAttrs attrs;
-  fs_error_t open_error = 0;
-  while (!valid_handle && !open_error) {
-    open_error = fs_opendir(pbctx->fs, file_path, &handle.dirp);
-    if (open_error == FS_ERROR_NOT_DIR) {
-      open_error = fs_open(pbctx->fs, file_path, false, &handle.fd, NULL);
-      if (!open_error) {
-        /* check if this is a directory, if so try again... */
-        const fs_error_t ret_getattr = fs_fgetattr(pbctx->fs, handle.fd, &attrs);
-        if (ret_getattr || attrs.is_directory) {
-          /* it's a directory! try again */
-          const fs_error_t ret_close = fs_close(pbctx->fs, handle.fd);
-          ASSERT_TRUE(!ret_close);
-        }
-        else {
-          valid_handle = true;
-        }
-      }
-    }
-    else if (!open_error && handle.dirp) {
-      is_dir = true;
-      valid_handle = true;
-    }
-  }
-
-  if (open_error) {
-    assert(!valid_handle);
-    ev.error = open_error == FS_ERROR_DOES_NOT_EXIST
+  const fs_error_t ret_getattr = fs_getattr(pbctx->fs, file_path, &attrs);
+  if (ret_getattr) {
+    log_info("Couldn't getattr(\"%s\")\'", file_path);
+    ev.error = ret_getattr == FS_ERROR_DOES_NOT_EXIST
       ? WEBDAV_ERROR_DOES_NOT_EXIST
       : WEBDAV_ERROR_GENERAL;
     goto done;
   }
 
-  if (is_dir) {
-    /* TODO: it would be nice to get modified time too */
-    attrs = (FsAttrs) {
-      .is_directory = true,
-    };
+  is_dir = attrs.is_directory;
+
+  /* open the resource */
+  fs_error_t ret_open = is_dir
+    ? fs_opendir(pbctx->fs, file_path, &handle.dirp)
+    : fs_open(pbctx->fs, file_path, false, &handle.fd, NULL);
+
+  if (ret_open) {
+    ev.error = ret_open == FS_ERROR_DOES_NOT_EXIST
+      ? WEBDAV_ERROR_DOES_NOT_EXIST
+      : WEBDAV_ERROR_GENERAL;
+    goto done;
   }
+
+  valid_handle = true;
 
   webdav_propfind_entry_t pfe = create_propfind_entry_from_stat(relative_uri, &attrs);
   ASSERT_NOT_NULL(pfe);
   ev.entries = linked_list_prepend(ev.entries, pfe);
 
-  assert(attrs.is_directory == is_dir);
-
   if (depth == DEPTH_1 && is_dir) {
-    size_t relative_uri_len = strlen(relative_uri);
     while (true) {
       char *name;
       bool attrs_is_filled;
@@ -517,23 +492,12 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
       }
 
       size_t name_len = strlen(name);
-      assert(name_len);
+      ASSERT_TRUE(name_len);
 
-      char *new_uri;
-      if (str_equals(relative_uri, "/")) {
-        new_uri = malloc_or_abort(1 + name_len + 1);
-        new_uri[0] = '/';
-        memcpy(&new_uri[1], name, name_len);
-        new_uri[name_len + 1] = '\0';
-      }
-      else {
-        /* NB: intentionally don't use `asprintf()` */
-        new_uri = malloc_or_abort(relative_uri_len + 1 + name_len + 1);
-        memcpy(new_uri, relative_uri, relative_uri_len);
-        new_uri[relative_uri_len] = '/';
-        memcpy(new_uri + relative_uri_len + 1, name, name_len);
-        new_uri[relative_uri_len + 1 + name_len] = '\0';
-      }
+      char *new_uri = str_equals(relative_uri, "/")
+        ? super_strcat("/", name, NULL)
+        : super_strcat(relative_uri, "/", name, NULL);
+      ASSERT_NOT_NULL(new_uri);
 
       webdav_propfind_entry_t pfe = create_propfind_entry_from_stat(new_uri, &dirent_attrs);
       ASSERT_TRUE(pfe);

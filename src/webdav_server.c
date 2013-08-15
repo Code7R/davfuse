@@ -1,5 +1,5 @@
 /*
-  A webdav compatible http file server out of the current directory
+  An async webdav server
 */
 #define _ISOC99_SOURCE
 
@@ -788,7 +788,7 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
                                        status_code,
                                        ctx->response_body,
                                        ctx->response_body_len,
-                                       "application/xml",
+                                       "application/xml; charset=\"utf-8\"",
                                        LINKED_LIST_INITIALIZER,
                                        handle_copy_request, hc));
 
@@ -881,7 +881,7 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
                                        status_code,
                                        ctx->response_body,
                                        ctx->response_body_len,
-                                       "application/xml",
+                                       "application/xml; charset=\"utf-8\"",
                                        LINKED_LIST_INITIALIZER,
                                        handle_delete_request, hc));
 
@@ -1089,11 +1089,13 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   if_lock_token_err_t if_lock_token_err =
     webdav_get_if_lock_token(&hc->rhs, &ctx->resource_tag, &ctx->refresh_uri);
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_BAD_PARSE) {
+    log_debug("Bad XML!");
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
   }
 
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_INTERNAL) {
+    log_debug("XML Parse failed...");
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1101,6 +1103,8 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS) {
     ctx->resource_tag_path = path_from_uri(hc, ctx->resource_tag);
     if (!ctx->resource_tag_path) {
+      log_debug("Couldn't get normalized resource path from uri ...: %s",
+                ctx->resource_tag);
       status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
       goto done;
     }
@@ -1165,6 +1169,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
     goto done;
   }
   else if (error_parse) {
+    log_debug("Internal error while parsing request");
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1275,7 +1280,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
                                        status_code,
                                        ctx->response_body,
                                        ctx->response_body_len,
-                                       "application/xml",
+                                       "application/xml; charset=\"utf-8\"",
                                        ctx->headers,
                                        handle_lock_request, ud));
   assert(ev_type == GENERIC_EVENT);
@@ -1331,8 +1336,8 @@ EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
 
   CRYIELD(ctx->pos,
           webdav_backend_mkcol(hc->serv->fs,
-                          ctx->request_relative_uri,
-                          handle_mkcol_request, hc));
+                               ctx->request_relative_uri,
+                               handle_mkcol_request, hc));
   assert(WEBDAV_MKCOL_DONE_EVENT == ev_type);
   WebdavMkcolDoneEvent *mkcol_done_ev = ev;
   switch (mkcol_done_ev->error) {
@@ -1378,24 +1383,128 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
   UNUSED(ev_type);
   UNUSED(ev);
 
+  /* these are run on every re-entry */
   struct handler_context *hc = ud;
-  bool ret;
+  struct options_context *ctx = &hc->sub.options;
+  http_status_code_t status_code = 0;
 
-  ret = http_response_set_code(&hc->resp, HTTP_STATUS_CODE_OK);
-  ASSERT_TRUE(ret);
+  CRBEGIN(ctx->pos);
 
-  ret = http_response_add_header(&hc->resp, "DAV", "1,2");
-  ASSERT_TRUE(ret);
+  ctx->entries = (linked_list_t) 0;
 
-  ret = http_response_add_header(&hc->resp, "Allow",
-                                 "GET,HEAD,PUT,DELETE,MKCOL,COPY,MOVE,PROPFIND,LOCK,OPTIONS");
-  ASSERT_TRUE(ret);
+  /* read body first */
+  CRYIELD(ctx->pos,
+          http_request_ignore_body(hc->rh,
+                                   handle_options_request, hc));
+  HTTPRequestReadBodyDoneEvent *rbev = ev;
+  if (rbev->error) {
+    log_info("Error while reading body of request");
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto error;
+  }
 
-  ret = http_response_add_header(&hc->resp, HTTP_HEADER_CONTENT_LENGTH, "0");
-  ASSERT_TRUE(ret);
+  ctx->request_relative_uri = path_from_uri(hc, hc->rhs.uri);
+  if (!ctx->request_relative_uri) {
+    log_info("Couldn't make file path from %s", hc->rhs.uri);
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto error;
+  }
 
-  http_request_write_headers(hc->rh, &hc->resp,
-                             request_proc, ud);
+  CRYIELD(ctx->pos,
+          webdav_backend_propfind(hc->serv->fs,
+                                  ctx->request_relative_uri,
+                                  DEPTH_0, WEBDAV_PROPFIND_ALLPROP,
+                                  handle_options_request, hc));
+  assert(WEBDAV_PROPFIND_DONE_EVENT == ev_type);
+  WebdavPropfindDoneEvent *propfind_done_ev = ev;
+  if (propfind_done_ev->error != WEBDAV_ERROR_NONE &&
+      propfind_done_ev->error != WEBDAV_ERROR_DOES_NOT_EXIST) {
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto error;
+  }
+
+  const bool success_set_code =
+    http_response_set_code(&hc->resp, HTTP_STATUS_CODE_OK);
+  ASSERT_TRUE(success_set_code);
+
+  const bool success_add_dav_header =
+    http_response_add_header(&hc->resp, "DAV", "1,2");
+  ASSERT_TRUE(success_add_dav_header);
+
+  /* tell microsoft clients that we only support webdav and not frontpage extensions */
+  const bool success_add_ms_header =
+    http_response_add_header(&hc->resp, "MS-Author-Via", "DAV");
+  ASSERT_TRUE(success_add_ms_header);
+
+  const bool success_add_cl_header =
+    http_response_add_header(&hc->resp, HTTP_HEADER_CONTENT_LENGTH, "0");
+  ASSERT_TRUE(success_add_cl_header);
+
+  if (propfind_done_ev->error == WEBDAV_ERROR_DOES_NOT_EXIST) {
+    const bool success_add_allow_header =
+      http_response_add_header(&hc->resp, "Allow",
+                               "OPTIONS,MKCOL,PUT,LOCK");
+    ASSERT_TRUE(success_add_allow_header);
+  }
+  else {
+    ctx->entries = propfind_done_ev->entries;
+
+    size_t allow_header_off = 0;
+
+#define ALLOW_METHOD(meth) \
+    do {                                                                \
+      if (allow_header_off >= sizeof(ctx->allow_header)) {              \
+        status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;          \
+        goto error;                                                     \
+      }                                                                 \
+      memcpy(ctx->allow_header + allow_header_off, meth, sizeof(meth) - 1); \
+      allow_header_off += sizeof(meth) - 1;                             \
+    }                                                                   \
+    while (0)
+
+    ALLOW_METHOD("LOCK,UNLOCK,PROPFIND,DELETE,MOVE,COPY,OPTIONS,PROPPATCH,TRACE");
+
+    struct webdav_propfind_entry *ent = linked_list_peekleft(propfind_done_ev->entries);
+    ASSERT_NOT_NULL(ent);
+
+    if (!ent->is_collection) {
+      ALLOW_METHOD(",GET,PUT");
+    }
+
+    ALLOW_METHOD("\0");
+
+#undef ALLOW_METHOD
+
+    const bool success_add_allow_header =
+      http_response_add_header(&hc->resp, "Allow", ctx->allow_header);
+    if (!success_add_allow_header) {
+      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      goto error;
+    }
+  }
+
+  CRYIELD(ctx->pos,
+          http_request_write_headers(hc->rh, &hc->resp,
+                                     handle_options_request, ud));
+
+  if (false) {
+  error:
+    assert(status_code);
+    http_request_string_response(hc->rh,
+                                 status_code,
+                                 "",
+                                 request_proc, ud);
+  }
+
+  linked_list_free(ctx->entries,
+                   (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
+
+  free(ctx->request_relative_uri);
+
+  CRRETURN(ctx->pos,
+           request_proc(GENERIC_EVENT, NULL, hc));
+
+  CREND();
 }
 
 static
@@ -1441,7 +1550,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   /* read all posted data */
   CRYIELD(ctx->pos,
           http_request_read_body(hc->rh, handle_propfind_request, hc));
-  HTTPRequestReadBodyDoneEvent *rbev = ev;
+  const HTTPRequestReadBodyDoneEvent *rbev = ev;
   if (rbev->error) {
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
@@ -1450,7 +1559,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   ctx->buf_used = rbev->length;
 
   /* figure out depth */
-  webdav_depth_t depth = webdav_get_depth(&hc->rhs);
+  const webdav_depth_t depth = webdav_get_depth(&hc->rhs);
   if (depth == DEPTH_INVALID) {
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
@@ -1461,7 +1570,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
             depth, (int) ctx->buf_used, ctx->buf);
 
   /* parse request */
-  xml_parse_code_t success_parse =
+  const xml_parse_code_t success_parse =
     parse_propfind_request(ctx->buf,
                            ctx->buf_used,
                            &ctx->propfind_req_type,
@@ -1483,7 +1592,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
                                   ctx->propfind_req_type,
                                   handle_propfind_request, hc));
   assert(ev_type == WEBDAV_PROPFIND_DONE_EVENT);
-  WebdavPropfindDoneEvent *run_propfind_ev = ev;
+  const WebdavPropfindDoneEvent *run_propfind_ev = ev;
   if (run_propfind_ev->error) {
     status_code = run_propfind_ev->error == WEBDAV_ERROR_DOES_NOT_EXIST
       ? HTTP_STATUS_CODE_NOT_FOUND
@@ -1493,8 +1602,16 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
 
   assert(run_propfind_ev->entries);
 
+  LINKED_LIST_FOR (struct webdav_propfind_entry, propfind_entry,
+                   run_propfind_ev->entries) {
+    /* TODO: we don't support get on collections */
+    if (propfind_entry->is_collection) {
+      propfind_entry->modified_time = INVALID_WEBDAV_RESOURCE_TIME;
+    }
+  }
+
   /* now generate response */
-  bool success_generate =
+  const bool success_generate =
     generate_propfind_response(hc,
                                ctx->propfind_req_type,
                                ctx->props_to_get,
@@ -1583,7 +1700,7 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
                                        status_code,
                                        hc->sub.proppatch.response_body,
                                        hc->sub.proppatch.response_body_size,
-                                       "application/xml",
+                                       "application/xml; charset=\"utf-8\"",
                                        LINKED_LIST_INITIALIZER,
                                        handle_proppatch_request, hc));
 
@@ -1770,7 +1887,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
                                        status_code,
                                        ctx->response_body,
                                        ctx->response_body_len,
-                                       "application/xml",
+                                       "application/xml; charset=\"utf-8\"",
                                        LINKED_LIST_INITIALIZER,
                                        handle_put_request, ud));
 
@@ -2091,15 +2208,10 @@ uri_from_path(struct handler_context *hc, const char *path) {
   size_t path_len = strlen(encoded_path);
 
   /* make extra space for a trailing space */
-  real_uri = malloc(prefix_len - 1 + path_len + 1 + 1);
+  real_uri = super_strcat(prefix, encoded_path + 1, "/", NULL);
   if (!real_uri) {
     goto done;
   }
-
-  memcpy(real_uri, prefix, prefix_len - 1);
-  memcpy(real_uri + prefix_len - 1, encoded_path, path_len);
-  real_uri[prefix_len - 1 + path_len] = '/';
-  real_uri[prefix_len - 1 + path_len + 1] = '\0';
 
   if (!str_equals(request_uri, real_uri)) {
     real_uri[prefix_len - 1 + path_len] = '\0';

@@ -143,6 +143,12 @@ struct handler_context {
       coroutine_position_t pos;
       char *request_relative_uri;
     } mkcol;
+    struct options_context {
+      coroutine_position_t pos;
+      char *request_relative_uri;
+      char allow_header[256];
+      linked_list_t entries;
+    } options;
     struct propfind_context {
       coroutine_position_t pos;
       char *request_relative_uri;

@@ -44,7 +44,6 @@ typedef struct {
 } WebdavPropfindDoneEvent;
 
 typedef _WebdavGenericDoneEvent WebdavMkcolDoneEvent;
-typedef _WebdavGenericDoneEvent WebdavCloseDoneEvent;
 
 /* backend method helper done events */
 typedef _WebdavGenericDoneEvent WebdavGetRequestSizeHintDoneEvent;

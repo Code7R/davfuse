@@ -481,7 +481,7 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
               whs->response_headers->headers[whs->header_idx].name,
               whs->response_headers->headers[whs->header_idx].value);
     EMITS(whs->response_headers->headers[whs->header_idx].name);
-    EMIT(":");
+    EMIT(": ");
     EMITS(whs->response_headers->headers[whs->header_idx].value);
     EMIT("\r\n");
   }

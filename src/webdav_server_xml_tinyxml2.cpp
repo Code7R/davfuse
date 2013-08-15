@@ -1,6 +1,7 @@
 #include <cstring>
 #include <ctime>
 
+#include <memory>
 #include <stack>
 
 #include "tinyxml2.h"
@@ -14,10 +15,8 @@
 
 using namespace tinyxml2;
 
-#define XMLSTR(a) ((const xmlChar *) (a))
-#define STR(a) ((const char *) (a))
-
 static const char *const DAV_XML_NS = "DAV:";
+static const char *const DAV_XML_NS_PREFIX = "D";
 
 /* utilities */
 
@@ -97,14 +96,61 @@ node_is(const XMLElement *elt, const char *test_href, const char *test_name) {
 }
 
 static XMLElement *
-newChildElement(XMLNode *parent, const char *tag_name, const char *text=NULL) {
+newChildElement(XMLNode *parent, const char *one, const char *two=NULL) {
+  const char *tag_name;
+  char *copied_tag_name;
+
+  if (two) {
+    const char *const ns_prefix = one;
+    const char *const pure_tag_name = two;
+
+    copied_tag_name = super_strcat(ns_prefix, ":", pure_tag_name, NULL);
+    ASSERT_NOT_NULL(copied_tag_name);
+
+    tag_name = copied_tag_name;
+  }
+  else {
+    tag_name = one;
+    copied_tag_name = NULL;
+  }
+
   auto new_element = parent->GetDocument()->NewElement(tag_name);
+
+  if (copied_tag_name) {
+    free(copied_tag_name);
+  }
+
   parent->InsertEndChild(new_element);
 
-  if (text) {
-    auto new_text = parent->GetDocument()->NewText(text);
-    new_element->InsertEndChild(new_text);
+
+  return new_element;
+}
+
+static XMLElement *
+newChildElementWithText(XMLNode *parent, const char *one, const char *two,
+                        const char *three=NULL) {
+  const char *ns_prefix;
+  const char *tag_name;
+  const char *text;
+
+  if (three) {
+    ns_prefix = one;
+    tag_name = two;
+    text = three;
   }
+  else {
+    ns_prefix = NULL;
+    tag_name = one;
+    text = two;
+  }
+
+  auto new_element = ns_prefix
+    ? newChildElement(parent, ns_prefix, tag_name)
+    : newChildElement(parent, tag_name);
+
+
+  auto new_text = parent->GetDocument()->NewText(text);
+  new_element->InsertEndChild(new_text);
 
   return new_element;
 }
@@ -113,6 +159,50 @@ static void
 unlinkNode(XMLNode *elt) {
   elt->Parent()->DeleteChild(elt);
 }
+
+
+static bool
+serializeDoc(const XMLDocument &doc, char **out_data, size_t *out_size) {
+  XMLPrinter streamer;
+  doc.Print(&streamer);
+
+  /* copy the data in streamer to a pointer that the caller
+     can own,
+     TODO: make this more efficient */
+  *out_data = (char *) malloc(streamer.CStrSize() - 1);
+  if (!out_data) {
+    return false;
+  }
+
+  memcpy(*out_data, streamer.CStr(), streamer.CStrSize() - 1);
+  *out_size = streamer.CStrSize() - 1;
+
+  return true;
+}
+
+/* this little class allows us to get C++ RAII with C based data structures */
+template <class T, void (*func)(T)>
+class CFreer {
+private:
+  T & myt;
+public:
+  CFreer(T & var) : myt(var) {}
+  ~CFreer() {
+    func(myt);
+  }
+};
+
+void free_str(char *f) {
+  return free((void *) f);
+}
+
+void free_linked_list_of_propfind_entries(linked_list_t ents) {
+  return linked_list_free(ents,
+                          (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
+
+}
+
+/* owner xml abstraction */
 
 /* This class is responsible for flattening out XML namespaces
    so that you can copy past XML easily. This is used for the Owner XML
@@ -246,30 +336,6 @@ loadOwnerChildren(XMLElement *owner_parent, owner_xml_t owner_xml) {
 
   owner_doc->Accept(&storer);
 }
-
-static void
-serializeDoc(const XMLDocument &doc, char **out_data, size_t *out_size) {
-  XMLPrinter streamer;
-  doc.Print(&streamer);
-
-  /* copy the data in streamer to a pointer that the caller
-     can own,
-     TODO: make this more efficient */
-  const char *header = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
-  size_t header_len = strlen(header);
-
-  *out_data = (char *) malloc(header_len + streamer.CStrSize() - 1);
-  if (!out_data) {
-    abort();
-  }
-
-  memcpy(*out_data, header, header_len);
-
-  memcpy(*out_data  + header_len, streamer.CStr(), streamer.CStrSize() - 1);
-  *out_size = header_len + streamer.CStrSize() - 1;
-}
-
-/* owner xml abstraction */
 
 void
 owner_xml_free(owner_xml_t a) {
@@ -467,38 +533,50 @@ generate_propfind_response(struct handler_context *hc,
     return false;
   }
 
-  linked_list_t props_to_get = req_type == WEBDAV_PROPFIND_ALLPROP
+  linked_list_t allocated_props_to_get = req_type == WEBDAV_PROPFIND_ALLPROP
     ? default_props_to_get()
+    : 0;
+  CFreer<linked_list_t, free_linked_list_of_propfind_entries> free_props_to_get(allocated_props_to_get);
+
+  linked_list_t props_to_get = req_type == WEBDAV_PROPFIND_ALLPROP
+    ? allocated_props_to_get
     : props_to_get_;
 
   XMLDocument doc;
+  doc.InsertEndChild(doc.NewDeclaration());
 
-  auto multistatus_elt = newChildElement(&doc, "multistatus");
-  multistatus_elt->SetAttribute("xmlns", DAV_XML_NS);
+  auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
+
+  char *xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
+  ASSERT_NOT_NULL(xmlns_attr_name);
+  CFreer<char *, free_str> free_xmlns_attr_name(xmlns_attr_name);
+  multistatus_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
 
   /* TODO: deal with the case where entries == NULL */
+  ASSERT_NOT_NULL(entries);
   LINKED_LIST_FOR (struct webdav_propfind_entry, propfind_entry, entries) {
-    auto response_elt = newChildElement(multistatus_elt, "response");
+    auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
     char *uri = uri_from_path(hc, propfind_entry->relative_uri);
     ASSERT_NOT_NULL(uri);
-    newChildElement(response_elt, "href", uri);
-    free(uri);
+    CFreer<char *, free_str> free_uri(uri);
 
-    auto propstat_not_found_elt = newChildElement(response_elt, "propstat");
-    auto prop_not_found_elt = newChildElement(propstat_not_found_elt, "prop");
-    newChildElement(propstat_not_found_elt, "status",
-                    "HTTP/1.1 404 Not Found");
+    newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "href", uri);
 
-    auto propstat_success_elt = newChildElement(response_elt, "propstat");
-    auto prop_success_elt = newChildElement(propstat_success_elt, "prop");
-    newChildElement(propstat_success_elt, "status",
-                    "HTTP/1.1 200 OK");
+    auto propstat_not_found_elt = newChildElement(response_elt, DAV_XML_NS_PREFIX, "propstat");
+    auto prop_not_found_elt = newChildElement(propstat_not_found_elt, DAV_XML_NS_PREFIX, "prop");
+    newChildElementWithText(propstat_not_found_elt, DAV_XML_NS_PREFIX, "status",
+                            "HTTP/1.1 404 Not Found");
 
-    auto propstat_failure_elt = newChildElement(response_elt, "propstat");
-    auto prop_failure_elt = newChildElement(propstat_failure_elt, "prop");
-    newChildElement(propstat_failure_elt, "status",
-                    "HTTP/1.1 500 Internal Server Error");
+    auto propstat_success_elt = newChildElement(response_elt, DAV_XML_NS_PREFIX, "propstat");
+    auto prop_success_elt = newChildElement(propstat_success_elt, DAV_XML_NS_PREFIX, "prop");
+    newChildElementWithText(propstat_success_elt, DAV_XML_NS_PREFIX, "status",
+                            "HTTP/1.1 200 OK");
+
+    auto propstat_failure_elt = newChildElement(response_elt, DAV_XML_NS_PREFIX, "propstat");
+    auto prop_failure_elt = newChildElement(propstat_failure_elt, DAV_XML_NS_PREFIX, "prop");
+    newChildElementWithText(propstat_failure_elt, DAV_XML_NS_PREFIX, "status",
+                            "HTTP/1.1 500 Internal Server Error");
 
     LINKED_LIST_FOR (WebdavProperty, elt, props_to_get) {
       bool is_get_last_modified;
@@ -530,7 +608,7 @@ generate_propfind_response(struct handler_context *hc,
           xml_node = prop_success_elt;
         }
 
-        newChildElement(xml_node, elt->element_name, time_str);
+        newChildElementWithText(xml_node, DAV_XML_NS_PREFIX, elt->element_name, time_str);
       }
       else if (str_equals(elt->element_name, "getcontentlength") &&
                str_equals(elt->ns_href, DAV_XML_NS) &&
@@ -538,37 +616,46 @@ generate_propfind_response(struct handler_context *hc,
         char length_str[400];
         snprintf(length_str, sizeof(length_str), "%lu",
                  (unsigned long) propfind_entry->length);
-        newChildElement(prop_success_elt, "getcontentlength", length_str);
+        newChildElementWithText(prop_success_elt, DAV_XML_NS_PREFIX,
+                                "getcontentlength", length_str);
       }
       else if (str_equals(elt->element_name, "resourcetype") &&
                str_equals(elt->ns_href, DAV_XML_NS)) {
-        auto resourcetype_elt = newChildElement(prop_success_elt, "resourcetype");
+        auto resourcetype_elt = newChildElement(prop_success_elt, DAV_XML_NS_PREFIX, "resourcetype");
 
         if (propfind_entry->is_collection) {
-          newChildElement(resourcetype_elt, "collection");
+          newChildElement(resourcetype_elt, DAV_XML_NS_PREFIX, "collection");
         }
       }
       else if (req_type == WEBDAV_PROPFIND_PROP) {
-        auto random_elt = newChildElement(prop_not_found_elt, elt->element_name);
-        random_elt->SetAttribute("xmlns", elt->ns_href);
+        auto random_elt = newChildElement(prop_not_found_elt, "random", elt->element_name);
+        random_elt->SetAttribute("xmlns:random", elt->ns_href);
       }
     }
 
-    /* NB: also add write lock info, this is expected of us in this interface */
-    {
-      auto supported_lock_elt = newChildElement(prop_success_elt, "supportedlock");
+    /* NB: here we also add write lock info,
+       this is expected of us in this interface between us and the server */
+    if (req_type == WEBDAV_PROPFIND_ALLPROP) {
+      auto supported_lock_elt =
+        newChildElement(prop_success_elt, DAV_XML_NS_PREFIX, "supportedlock");
 
-      auto lockentry_exclusive_elt = newChildElement(supported_lock_elt, "lockentry");
-      auto lockscope_exclusive_elt = newChildElement(lockentry_exclusive_elt, "lockscope");
-      newChildElement(lockscope_exclusive_elt, "exclusive");
-      auto locktype_exclusive_elt = newChildElement(lockentry_exclusive_elt, "locktype");
-      newChildElement(locktype_exclusive_elt, "write");
+      auto lockentry_exclusive_elt =
+        newChildElement(supported_lock_elt, DAV_XML_NS_PREFIX, "lockentry");
+      auto lockscope_exclusive_elt =
+        newChildElement(lockentry_exclusive_elt, DAV_XML_NS_PREFIX, "lockscope");
+      newChildElement(lockscope_exclusive_elt, DAV_XML_NS_PREFIX, "exclusive");
+      auto locktype_exclusive_elt =
+        newChildElement(lockentry_exclusive_elt, DAV_XML_NS_PREFIX, "locktype");
+      newChildElement(locktype_exclusive_elt, DAV_XML_NS_PREFIX, "write");
 
-      auto lockentry_shared_elt = newChildElement(supported_lock_elt, "lockentry");
-      auto lockscope_shared_elt = newChildElement(lockentry_shared_elt, "lockscope");
-      newChildElement(lockscope_shared_elt, "shared");
-      auto locktype_shared_elt = newChildElement(lockentry_shared_elt, "locktype");
-      newChildElement(locktype_shared_elt, "write");
+      auto lockentry_shared_elt =
+        newChildElement(supported_lock_elt, DAV_XML_NS_PREFIX, "lockentry");
+      auto lockscope_shared_elt =
+        newChildElement(lockentry_shared_elt, DAV_XML_NS_PREFIX, "lockscope");
+      newChildElement(lockscope_shared_elt, DAV_XML_NS_PREFIX, "shared");
+      auto locktype_shared_elt =
+        newChildElement(lockentry_shared_elt, DAV_XML_NS_PREFIX, "locktype");
+      newChildElement(locktype_shared_elt, DAV_XML_NS_PREFIX, "write");
     }
 
     if (!prop_not_found_elt->FirstChildElement()) {
@@ -584,13 +671,12 @@ generate_propfind_response(struct handler_context *hc,
     }
   }
 
-  serializeDoc(doc, out_data, out_size);
-  *out_status_code = HTTP_STATUS_CODE_MULTI_STATUS;
-
-  if (req_type == WEBDAV_PROPFIND_ALLPROP) {
-    linked_list_free(props_to_get,
-                     (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
+  const bool success_serialize = serializeDoc(doc, out_data, out_size);
+  if (!success_serialize) {
+    return false;
   }
+
+  *out_status_code = HTTP_STATUS_CODE_MULTI_STATUS;
 
   return true;
 }
@@ -663,18 +749,28 @@ generate_locked_response(struct handler_context *hc,
                          char **response_body,
                          size_t *response_body_len) {
   XMLDocument doc;
+  doc.InsertEndChild(doc.NewDeclaration());
 
-  auto error_elt = newChildElement(&doc, "error");
-  error_elt->SetAttribute("xmlns", DAV_XML_NS);
+  auto error_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "error");
 
-  newChildElement(error_elt, "lock-token-submitted");
+  char *xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
+  ASSERT_NOT_NULL(xmlns_attr_name);
+  CFreer<char *, free_str> free_xmlns_attr_name(xmlns_attr_name);
+  error_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
+
+  newChildElement(error_elt, DAV_XML_NS_PREFIX, "lock-token-submitted");
 
   char *uri = uri_from_path(hc, locked_path);
   ASSERT_NOT_NULL(uri);
-  newChildElement(error_elt, "href", uri);
-  free(uri);
+  CFreer<char *, free_str> free_uri(uri);
 
-  serializeDoc(doc, response_body, response_body_len);
+  newChildElementWithText(error_elt, DAV_XML_NS_PREFIX, "href", uri);
+
+  bool success_serialize =
+    serializeDoc(doc, response_body, response_body_len);
+  if (!success_serialize) {
+    return false;
+  }
 
   *status_code = HTTP_STATUS_CODE_LOCKED;
 
@@ -688,23 +784,32 @@ generate_locked_descendant_response(struct handler_context *hc,
                                     char **response_body,
                                     size_t *response_body_len) {
   XMLDocument doc;
+  doc.InsertEndChild(doc.NewDeclaration());
 
-  auto multistatus_elt = newChildElement(&doc, "multistatus");
-  multistatus_elt->SetAttribute("xmlns", DAV_XML_NS);
+  auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
 
-  auto response_elt = newChildElement(multistatus_elt, "response");
+  char *xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
+  ASSERT_NOT_NULL(xmlns_attr_name);
+  CFreer<char *, free_str> free_xmlns_attr_name(xmlns_attr_name);
+  multistatus_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
+
+  auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
   char *uri = uri_from_path(hc, locked_descendant);
   ASSERT_NOT_NULL(uri);
-  newChildElement(response_elt, "href", uri);
-  free(uri);
+  CFreer<char *, free_str> free_uri(uri);
 
-  newChildElement(response_elt, "status", "HTTP/1.1 423 Locked");
+  newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "href", uri);
+  newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "status", "HTTP/1.1 423 Locked");
 
-  auto error_elt = newChildElement(response_elt, "error");
-  newChildElement(error_elt, "lock-token-submitted");
+  auto error_elt = newChildElement(response_elt, DAV_XML_NS_PREFIX, "error");
+  newChildElement(error_elt, DAV_XML_NS_PREFIX, "lock-token-submitted");
 
-  serializeDoc(doc, response_body, response_body_len);
+  bool success_serialize =
+    serializeDoc(doc, response_body, response_body_len);
+  if (!success_serialize) {
+    return false;
+  }
 
   *status_code = HTTP_STATUS_CODE_MULTI_STATUS;
 
@@ -719,36 +824,45 @@ generate_failed_lock_response_body(struct handler_context *hc,
                                    char **response_body,
                                    size_t *response_body_len) {
   XMLDocument doc;
+  doc.InsertEndChild(doc.NewDeclaration());
 
-  auto multistatus_elt = newChildElement(&doc, "multistatus");
-  multistatus_elt->SetAttribute("xmlns", DAV_XML_NS);
+  auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
+
+  char *xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
+  ASSERT_NOT_NULL(xmlns_attr_name);
+  CFreer<char *, free_str> free_xmlns_attr_name(xmlns_attr_name);
+  multistatus_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
 
   bool same_path = str_equals(file_path, status_path);
   const char *locked_status = "HTTP/1.1 423 Locked";
 
   if (!same_path) {
-    auto response_elt = newChildElement(multistatus_elt, "response");
+    auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
     char *status_uri = uri_from_path(hc, status_path);
     ASSERT_NOT_NULL(status_uri);
-    newChildElement(response_elt, "href", status_uri);
-    free(status_uri);
+    CFreer<char *, free_str> free_status_uri(status_uri);
 
-    newChildElement(response_elt, "status", locked_status);
+    newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "href", status_uri);
+    newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "status", locked_status);
   }
 
-  auto response_elt = newChildElement(multistatus_elt, "response");
+  auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
   char *file_uri = uri_from_path(hc, file_path);
   ASSERT_NOT_NULL(file_uri);
-  newChildElement(response_elt, "href", file_uri);
-  free(file_uri);
+  CFreer<char *, free_str> free_file_uri(file_uri);
 
-  newChildElement(response_elt, "status",
-                  same_path ? locked_status : "HTTP/1.1 424 Failed Dependency");
+  newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "href", file_uri);
+  newChildElementWithText(response_elt, DAV_XML_NS_PREFIX,
+                          "status",
+                          same_path ? locked_status : "HTTP/1.1 424 Failed Dependency");
 
-
-  serializeDoc(doc, response_body, response_body_len);
+  bool success_serialize =
+    serializeDoc(doc, response_body, response_body_len);
+  if (!success_serialize) {
+    return false;
+  }
 
   *status_code = HTTP_STATUS_CODE_MULTI_STATUS;
 
@@ -768,30 +882,31 @@ generate_success_lock_response_body(struct handler_context *hc,
                                     char **response_body,
                                     size_t *response_body_len) {
   XMLDocument doc;
+  doc.InsertEndChild(doc.NewDeclaration());
 
-  auto prop_elt = newChildElement(&doc, "prop");
-  prop_elt->SetAttribute("xmlns", DAV_XML_NS);
+  auto prop_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "prop");
 
-  auto lockdiscovery_elt = newChildElement(prop_elt, "lockdiscovery");
+  char *xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
+  ASSERT_NOT_NULL(xmlns_attr_name);
+  CFreer<char *, free_str> free_xmlns_attr_name(xmlns_attr_name);
+  prop_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
 
-  auto activelock_elt = newChildElement(lockdiscovery_elt, "activelock");
+  auto lockdiscovery_elt = newChildElement(prop_elt, DAV_XML_NS_PREFIX, "lockdiscovery");
 
-  auto locktype_elt = newChildElement(activelock_elt, "locktype");
+  auto activelock_elt = newChildElement(lockdiscovery_elt, DAV_XML_NS_PREFIX, "activelock");
 
-  newChildElement(locktype_elt, "write");
+  auto locktype_elt = newChildElement(activelock_elt, DAV_XML_NS_PREFIX, "locktype");
 
-  auto lockscope_elt = newChildElement(activelock_elt, "lockscope");
+  newChildElement(locktype_elt, DAV_XML_NS_PREFIX, "write");
 
-  if (is_exclusive) {
-    newChildElement(lockscope_elt, "exclusive");
-  }
-  else {
-    newChildElement(lockscope_elt, "shared");
-  }
+  auto lockscope_elt = newChildElement(activelock_elt, DAV_XML_NS_PREFIX, "lockscope");
+
+  newChildElement(lockscope_elt, DAV_XML_NS_PREFIX,
+                  is_exclusive ? "exclusive" : "shared");
 
   assert(depth == DEPTH_0 || depth == DEPTH_INF);
-  newChildElement(activelock_elt, "depth",
-                  depth == DEPTH_INF ? "infinity" : "0");
+  newChildElementWithText(activelock_elt,  DAV_XML_NS_PREFIX, "depth",
+                          depth == DEPTH_INF ? "infinity" : "0");
 
   if (owner_xml) {
     loadOwnerChildren(activelock_elt, owner_xml);
@@ -812,19 +927,22 @@ generate_success_lock_response_body(struct handler_context *hc,
     timeout_str = timeout_buf;
   }
 
-  newChildElement(activelock_elt, "timeout", timeout_str);
-  auto locktoken_elt = newChildElement(activelock_elt, "locktoken");
-  newChildElement(locktoken_elt, "href", lock_token);
+  newChildElementWithText(activelock_elt,  DAV_XML_NS_PREFIX, "timeout", timeout_str);
+  auto locktoken_elt = newChildElement(activelock_elt, DAV_XML_NS_PREFIX, "locktoken");
+  newChildElementWithText(locktoken_elt,  DAV_XML_NS_PREFIX, "href", lock_token);
 
-  auto lockroot_elt = newChildElement(activelock_elt, "lockroot");
+  auto lockroot_elt = newChildElement(activelock_elt,  DAV_XML_NS_PREFIX, "lockroot");
 
   char *lockroot_uri = uri_from_path(hc, file_path);
   ASSERT_NOT_NULL(lockroot_uri);
-  newChildElement(lockroot_elt, "href", file_path);
-  free(lockroot_uri);
+  CFreer<char *, free_str> free_lockroot_uri(lockroot_uri);
+  newChildElementWithText(lockroot_elt, "href", file_path);
 
-
-  serializeDoc(doc, response_body, response_body_len);
+  bool success_serialize =
+    serializeDoc(doc, response_body, response_body_len);
+  if (!success_serialize) {
+    return false;
+  }
 
   *status_code = created ? HTTP_STATUS_CODE_CREATED : HTTP_STATUS_CODE_OK;
 
@@ -927,29 +1045,38 @@ generate_proppatch_response(const char *uri,
                             char **output, size_t *output_size,
                             http_status_code_t *status_code) {
   XMLDocument doc;
+  doc.InsertEndChild(doc.NewDeclaration());
 
   auto multistatus_elt = newChildElement(&doc, "multistatus");
-  multistatus_elt->SetAttribute("xmlns", DAV_XML_NS);
 
-  auto response_elt = newChildElement(multistatus_elt, "response");
+  char *xmlns_attr_name = super_strcat("xmlns:", DAV_XML_NS_PREFIX, NULL);
+  ASSERT_NOT_NULL(xmlns_attr_name);
+  CFreer<char *, free_str> free_xmlns_attr_name(xmlns_attr_name);
+  multistatus_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
 
-  newChildElement(response_elt, "href", uri);
+  auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
-  auto propstat_elt = newChildElement(response_elt, "propstat");
-  auto new_prop_elt = newChildElement(propstat_elt, "prop");
-  newChildElement(propstat_elt, "status",
-                  "HTTP/1.1 403 Forbidden");
+  newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "href", uri);
+
+  auto propstat_elt = newChildElement(response_elt, DAV_XML_NS_PREFIX, "propstat");
+  auto new_prop_elt = newChildElement(propstat_elt, DAV_XML_NS_PREFIX, "prop");
+  newChildElementWithText(propstat_elt, DAV_XML_NS_PREFIX, "status",
+                          "HTTP/1.1 403 Forbidden");
 
   /* now iterate over every propertyupdate directive */
   /* TODO: for now we don't support setting anything */
   /* we don't support arbitrary dead properties */
   LINKED_LIST_FOR (WebdavProppatchDirective, elt, props_to_patch) {
     /* add this element to the proppatch response */
-    auto new_xml_prop = newChildElement(new_prop_elt, elt->name);
-    new_xml_prop->SetAttribute("xmlns", elt->ns_href ? elt->ns_href : "");
+    auto new_xml_prop = newChildElement(new_prop_elt, "random", elt->name);
+    new_xml_prop->SetAttribute("xmlns:random", elt->ns_href ? elt->ns_href : "");
   }
 
-  serializeDoc(doc, output, output_size);
+  bool success_serialize =
+    serializeDoc(doc, output, output_size);
+  if (!success_serialize) {
+    return false;
+  }
 
   *status_code = HTTP_STATUS_CODE_MULTI_STATUS;
 

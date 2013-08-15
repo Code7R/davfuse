@@ -3,8 +3,10 @@
 
 #include <dirent.h>
 
+#include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "c_util.h"
 
@@ -12,8 +14,8 @@
 extern "C" {
 #endif
 
-typedef int fs_posix_t;
-typedef int fs_posix_file_handle_t;
+typedef intptr_t fs_posix_t;
+typedef intptr_t fs_posix_file_handle_t;
 typedef DIR *fs_posix_directory_handle_t;
 
 /* non-opaque structures */
@@ -34,8 +36,8 @@ typedef long long fs_posix_off_t;
 
 /* NB: not totally sure about defining constants like this,
    a #define might be better */
-HEADER_CONST const fs_win32_time_t FS_POSIX_INVALID_TIME = LLONG_MAX;
-HEADER_CONST const fs_win32_off_t FS_POSIX_INVALID_OFF = LLONG_MAX;
+HEADER_CONST const fs_posix_time_t FS_POSIX_INVALID_TIME = LLONG_MAX;
+HEADER_CONST const fs_posix_off_t FS_POSIX_INVALID_OFF = LLONG_MAX;
 
 typedef struct {
   fs_posix_time_t modified_time;

@@ -61,7 +61,7 @@ linked_list_peekleft(linked_list_t);
 void *
 linked_list_pop_link(linked_list_t *llp);
 
-size_t
+PURE_FUNCTION size_t
 strnlen(const char *s, size_t maxlen);
 
 const char *
@@ -135,8 +135,8 @@ str_case_equals(const char *a, const char *b) {
 }
 
 #define DEFINE_MIN(type) \
-  type min_##type(type a, type b) {		\
-    return a < b ? a : b;			\
+  type CONST_FUNCTION min_##type(type a, type b) {      \
+    return a < b ? a : b;                               \
   }
 
 #define EASY_ALLOC(type, name) type *name = malloc(sizeof(*name)); do { if (!name) { abort();} } while (false)
@@ -144,7 +144,7 @@ str_case_equals(const char *a, const char *b) {
 HEADER_FUNCTION DEFINE_MIN(size_t);
 
 HEADER_FUNCTION void
-ASSERT_NOT_NULL(void *foo) {
+ASSERT_NOT_NULL(const void *foo) {
   if (!foo) {
     log_critical("Illegal null value");
     abort();
@@ -213,6 +213,9 @@ callback_deconstruct(Callback *cbud,
   *ud = cbud->ud;
   free(cbud);
 }
+
+char *
+super_strcat(const char *first, ...);
 
 #ifdef __cplusplus
 }
