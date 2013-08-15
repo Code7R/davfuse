@@ -288,6 +288,8 @@ UTHR_DEFINE(_webdav_backend_fs_put_uthr) {
                        WebdavPutRequestReadDoneEvent,
                        read_done_ev);
     if (read_done_ev->error) {
+      log_info("Error while reading data for %s: %d",
+               ctx->relative_uri, read_done_ev->error);
       error = read_done_ev->error;
       goto done;
     }
