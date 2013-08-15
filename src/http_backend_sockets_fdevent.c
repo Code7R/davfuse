@@ -107,6 +107,16 @@ UTHR_DEFINE(_http_backend_sockets_fdevent_accept_uthr) {
     }
   }
 
+  if (socket != INVALID_SOCKET) {
+    bool success_non_blocking =
+      set_socket_non_blocking(socket);
+    if (!success_non_blocking) {
+      const int ret_close = closesocket(socket);
+      ASSERT_TRUE(!ret_close);
+      socket = INVALID_SOCKET;
+    }
+  }
+
   HttpBackendAcceptDoneEvent ev = {
     .error = (socket == INVALID_SOCKET
               ? HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_UNKNOWN
