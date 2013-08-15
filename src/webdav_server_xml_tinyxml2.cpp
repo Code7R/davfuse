@@ -322,7 +322,10 @@ private:
 };
 
 static const char *
-findPrefix(XMLElement *start_at, const char *ns_href) {
+findPrefix(const XMLElement *start_at, const char *ns_href) {
+  /* there is a bit of asymmetry here with
+     get_ns_href (the logical inverse of this function)
+     (which can return XMLNS_XML_NS) for a prefix */
   assert(ns_href &&
          !str_equals(ns_href, "") &&
          !str_equals(ns_href, XMLNS_XML_NS));
@@ -336,7 +339,7 @@ findPrefix(XMLElement *start_at, const char *ns_href) {
 
   std::unordered_set<const char *, c_str_hash, c_str_pred> prefixes_seen;
 
-  XMLElement *search = start_at;
+  const XMLElement *search = start_at;
   while (search && !prefix) {
     /* search each xmlns declaration for the href */
     for (const XMLAttribute *attr = search->FirstAttribute();
@@ -625,7 +628,7 @@ is_valid_element(const XMLElement & elt) {
 }
 
 static bool
-is_valid_namespace_name(const char *name) {
+is_valid_namespace_declaration_name(const char *name) {
   return (!str_equals(name, XML_XML_NS) &&
           !str_equals(name, XMLNS_XML_NS) &&
           !str_equals(name, ""));
@@ -666,7 +669,7 @@ is_valid_attribute(const XMLElement & elt, const XMLAttribute & attr) {
           return false;
         }
       }
-      else if (!is_valid_namespace_name(attr.Value())) {
+      else if (!is_valid_namespace_declaration_name(attr.Value())) {
         log_info("Invalid namespace name! %s", elt.Value());
         return false;
       }
@@ -682,7 +685,7 @@ is_valid_attribute(const XMLElement & elt, const XMLAttribute & attr) {
   }
   else if (str_equals(tag_name, "xmlns")) {
     /* default namespace decl */
-    if (!is_valid_namespace_name(attr.Value())) {
+    if (!is_valid_namespace_declaration_name(attr.Value())) {
       log_info("Invalid namespace name! %s", attr.Value());
       return false;
     }
