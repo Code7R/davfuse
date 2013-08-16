@@ -12,7 +12,8 @@
 #include "webdav_backend_fs.h"
 
 enum {
-  TRANSFER_BUF_SIZE = 4096,
+  //  TRANSFER_BUF_SIZE=4096,
+  TRANSFER_BUF_SIZE=16 * 4096,
 };
 
 typedef struct _webdav_backend_fs {
@@ -616,6 +617,7 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
   if (!destination_path_dirname) {
     log_info("Error while getting the dirname of: %s",
              destination_path);
+    err =  WEBDAV_ERROR_GENERAL;
     goto done;
   }
 

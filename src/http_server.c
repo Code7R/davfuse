@@ -77,9 +77,9 @@ typedef struct _http_request_context {
 
 typedef struct _http_connection {
   UTHR_CTX_BASE;
+  struct _http_server *server;
   http_backend_handle_t handle;
   ReadBuffer f;
-  struct _http_server *server;
   /* these might become per-request,
      right now we only do one request at a time,
      i.e. no pipe-lining */
@@ -217,9 +217,11 @@ static
 EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
   UNUSED(ev_type);
 
-  HTTPRequestContext *rctx = ud;
-  struct chunked_read_persist_ctx *cctx = &rctx->persist_ctx.chunked_coro_ctx;
-  struct chunked_read_temp_ctx *tctx = &rctx->sub.chunked_read_ctx;
+  HTTPRequestContext *const rctx = ud;
+  struct chunked_read_persist_ctx *const cctx =
+    &rctx->persist_ctx.chunked_coro_ctx;
+  struct chunked_read_temp_ctx *const tctx =
+    &rctx->sub.chunked_read_ctx;
 
   /* if this coroutine is running, it should be returning data to
      someone */

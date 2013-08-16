@@ -16,9 +16,6 @@
   UNUSED(__ev_type);                                                    \
   UNUSED(__ev);                                                         \
   type *name = __tctx;                                                  \
-  if (__ev_type == START_COROUTINE_EVENT) {                             \
-    name->__coropos = CORO_POS_INIT;                                    \
-  }                                                                     \
   CRBEGIN(name->__coropos);                                             \
   assert(__ev_type == START_COROUTINE_EVENT)
 
@@ -30,7 +27,12 @@
            ((void) ret, free(ctx)))
 #define UTHR_FREE(ctx) free(ctx)
 
-#define UTHR_RUN(coro, ctx) coro(START_COROUTINE_EVENT, NULL, ctx)
+#define UTHR_RUN(coro, ctx)                     \
+  do {                                          \
+    ctx->__coropos = CORO_POS_INIT;             \
+    coro(START_COROUTINE_EVENT, NULL, ctx);     \
+  }                                             \
+  while (false)
 
 #define UTHR_CTX_BASE coroutine_position_t __coropos
 

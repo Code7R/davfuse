@@ -644,8 +644,7 @@ is_valid_attribute(const XMLElement & elt, const XMLAttribute & attr) {
 
   if (first_colon) {
     if ((first_colon == tag_name ||
-         first_colon[1] == '\0' ||
-         strchr(first_colon + 1, ':'))) {
+         !not_empty_no_colon(first_colon + 1))) {
       log_info("Tag was invalid: %s", tag_name);
       return false;
     }

@@ -1040,8 +1040,8 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   UNUSED(ev_type);
 
   /* set this variable before coroutine restarts */
-  struct handler_context *hc = ud;
-  struct lock_context *ctx = &hc->sub.lock;
+  struct handler_context *const hc = ud;
+  struct lock_context *const ctx = &hc->sub.lock;
   http_status_code_t status_code = 0;
 
   CRBEGIN(ctx->pos);
@@ -1306,8 +1306,8 @@ EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
   UNUSED(ev_type);
 
   /* these are run on every re-entry */
-  struct handler_context *hc = ud;
-  struct mkcol_context *ctx = &hc->sub.mkcol;
+  struct handler_context *const hc = ud;
+  struct mkcol_context *const ctx = &hc->sub.mkcol;
   http_status_code_t status_code = 0;
 
   CRBEGIN(ctx->pos);
@@ -1386,8 +1386,8 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
   UNUSED(ev);
 
   /* these are run on every re-entry */
-  struct handler_context *hc = ud;
-  struct options_context *ctx = &hc->sub.options;
+  struct handler_context *const hc = ud;
+  struct options_context *const ctx = &hc->sub.options;
   http_status_code_t status_code = 0;
 
   CRBEGIN(ctx->pos);
@@ -1531,8 +1531,8 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   UNUSED(ev_type);
   UNUSED(ev);
 
-  struct handler_context *hc = ud;
-  struct propfind_context *ctx = &hc->sub.propfind;
+  struct handler_context *const hc = ud;
+  struct propfind_context *const ctx = &hc->sub.propfind;
   http_status_code_t status_code = 0;
 
   CRBEGIN(ctx->pos);
@@ -1816,8 +1816,8 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
   UNUSED(ev_type);
 
   /* re-init these before restarting the coroutine */
-  struct handler_context *hc = ud;
-  struct put_context *ctx = &hc->sub.put;
+  struct handler_context *const hc = ud;
+  struct put_context *const ctx = &hc->sub.put;
   http_status_code_t status_code = 0;
 
   CRBEGIN(ctx->pos);
