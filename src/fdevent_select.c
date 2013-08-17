@@ -186,19 +186,35 @@ fdevent_select_main_loop(fdevent_select_loop_t loop) {
     }
 
     /* if there is nothing to select for, then stop the main loop */
-    if (nfds < 0) {
+    if (!readfds_watched && !writefds_watched) {
       return true;
     }
 
+    log_debug("before select");
     if (ACTUALLY_WAIT_ON_SELECT) {
-      while (select(nfds + 1, &readfds, &writefds, NULL, NULL) < 0) {
+      fd_set *readfds_ptr = readfds_watched
+        ? &readfds
+        : NULL;
+      fd_set *writefds_ptr = writefds_watched
+        ? &writefds
+        : NULL;
+      while (true) {
+        int ret_select =
+          select(nfds + 1, readfds_ptr, writefds_ptr, NULL, NULL);
+        if (ret_select != SOCKET_ERROR) {
+          break;
+        }
+
         if (last_socket_error() != SOCKET_EINTR) {
           log_error("Error while doing select(): %s",
                     last_socket_error_message());
           return false;
         }
+
+        log_info("select() interrupted!");
       }
     }
+    log_debug("after select");
 
     /* now dispatch on events */
     ll = loop->ll;

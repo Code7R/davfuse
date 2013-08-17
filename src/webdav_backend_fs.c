@@ -323,8 +323,9 @@ UTHR_DEFINE(_webdav_backend_fs_put_uthr) {
     ctx->total_amount_transferred += amount_written;
   }
 
-  log_info("Resource \"%s\" created with %zu bytes",
-           ctx->relative_uri, ctx->total_amount_transferred);
+  log_info("Resource \"%s\" created with %lu bytes",
+           ctx->relative_uri,
+           (unsigned long) ctx->total_amount_transferred);
   error = WEBDAV_ERROR_NONE;
 
  done:
