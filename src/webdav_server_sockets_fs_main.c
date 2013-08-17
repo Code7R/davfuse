@@ -3,6 +3,11 @@
  */
 #define _ISOC99_SOURCE
 
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200112L
+#include <unistd.h>
+#endif
+
 #include <assert.h>
 #include <errno.h>
 #include <signal.h>
@@ -18,10 +23,26 @@
 #include "util.h"
 #include "util_sockets.h"
 
+#ifndef _WIN32
+#include "log_printer_stdio.h"
+#else
+#include "log_printer.h"
+#endif
+
 int
 main(int argc, char *argv[]) {
   /* init logging */
-  init_logging(stdout, LOG_DEBUG);
+#ifndef _WIN32
+  /* this code makes this module become POSIX */
+  char *const term_env = getenv("TERM");
+  const bool show_colors = (isatty(fileno(_logging_dest)) &&
+                      term_env && !str_equals(term_env, "dumb"));
+  log_printer_stdio_init(stdout, show_colors);
+#else
+  log_printer_default_init();
+#endif
+
+  logging_set_global_level(LOG_DEBUG);
   log_info("Logging initted.");
 
   /* parse command line */
@@ -114,7 +135,7 @@ main(int argc, char *argv[]) {
   free(base_path);
 
   log_info("Shutting down logging, bye!");
-  shutdown_logging();
+  log_printer_shutdown();
 
   return 0;
 }

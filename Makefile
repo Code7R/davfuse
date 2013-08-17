@@ -16,7 +16,7 @@ CPPFLAGS += $(if ${RELEASE}, ${CPPFLAGS_RELEASE}, ${CPPFLAGS_DEBUG})
 
 # Different xml backends for the webdav server
 WEBDAV_SERVER_XML_IMPL := webdav_server_xml_tinyxml2.cpp tinyxml2.cpp
-WEBDAV_LDFLAGS := ${CXX_LDFLAGS}
+WEBDAV_LIBS := ${CXX_LIBS}
 
 #WEBDAV_SERVER_XML_IMPL := webdav_server_xml_libxml2.c
 #CFLAGS += $(shell xml2-config --cflags)
@@ -31,8 +31,9 @@ WEBDAV_SERVER_SRC := webdav_server.c ${WEBDAV_SERVER_XML_IMPL}
 
 HTTP_SERVER_TEST_MAIN_SRC := http_server_test_main.c \
     ${HTTP_SERVER_SRC} http_backend_sockets_fdevent.c \
-    fdevent_${FDEVENT_IMPL}.c sockets_${SOCKETS_IMPL}.c util_sockets.c
-GEN_HEADERS_HTTP_SERVER_TEST_MAIN_ := fdevent.h sockets.h http_backend.h
+    fdevent_${FDEVENT_IMPL}.c sockets_${SOCKETS_IMPL}.c util_sockets.c \
+    log_printer_${LOG_PRINTER_IMPL}.c
+GEN_HEADERS_HTTP_SERVER_TEST_MAIN_ := fdevent.h sockets.h http_backend.h log_printer.h
 
 GEN_HEADERS_HTTP_SERVER_TEST_MAIN := $(patsubst %,${OUTROOT}/http_server_test_main/headers/%,${GEN_HEADERS_HTTP_SERVER_TEST_MAIN_})
 HTTP_SERVER_TEST_MAIN_OBJ := $(patsubst %,${OUTROOT}/http_server_test_main/obj/%.o,${HTTP_SERVER_TEST_MAIN_SRC})
@@ -47,9 +48,11 @@ WEBDAV_SERVER_SOCKETS_FS_MAIN_SRC = \
     fdevent_${FDEVENT_IMPL}.c sockets_${SOCKETS_IMPL}.c util_sockets.c \
     ${WEBDAV_SERVER_SRC} \
     webdav_backend_fs.c fs_${FS_IMPL}.c util_fs.c dfs.c \
+    log_printer_${LOG_PRINTER_IMPL}.c \
     ${FS_IMPL_EXTRA_SOURCES}
 GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN_ := \
     fdevent.h sockets.h http_backend.h fs.h webdav_backend.h \
+    log_printer.h
     $(patsubst %,%.h,${FS_IMPL_EXTRA_INTERFACES})
 
 GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN = $(patsubst %,${OUTROOT}/webdav_server_sockets_fs_main/headers/%,${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN_})
@@ -65,9 +68,10 @@ LIBDAVFUSE_SRC = \
     fd_utils.c \
     ${HTTP_SERVER_SRC} http_backend_sockets_fdevent.c \
     fdevent_${FDEVENT_IMPL}.c sockets_${SOCKETS_IMPL}.c util_sockets.c \
+    log_printer_${LOG_PRINTER_IMPL}.c \
     ${WEBDAV_SERVER_SRC} webdav_backend_async_fuse.c
 GEN_HEADERS_LIBDAVFUSE_ = \
-    fdevent.h sockets.h http_backend.h webdav_backend.h
+    fdevent.h sockets.h http_backend.h webdav_backend.h log_printer.h
 
 GEN_HEADERS_LIBDAVFUSE = $(patsubst %,${OUTROOT}/libdavfuse/headers/%,${GEN_HEADERS_LIBDAVFUSE_})
 LIBDAVFUSE_OBJ := $(patsubst %,${OUTROOT}/libdavfuse/obj/%.o,${LIBDAVFUSE_SRC})
@@ -91,11 +95,12 @@ options:
 	@echo "CXXFLAGS_DYN    = ${CXXFLAGS_DYN}"
 	@echo "CPPFLAGS        = ${CPPFLAGS}"
 	@echo "LDFLAGS         = ${LDFLAGS}"
-	@echo "SOCKETS_LDFLAGS = ${SOCKETS_LDFLAGS}"
-	@echo "WEBDAV_LDFLAGS  = ${WEBDAV_LDFLAGS}"
+	@echo "SOCKETS_LIBS    = ${SOCKETS_LIBS}"
+	@echo "WEBDAV_LIBS     = ${WEBDAV_LIBS}"
 	@echo "CC              = ${CC}"
 	@echo "CXX             = ${CXX}"
 	@echo "LINK_COMMAND    = ${LINK_COMMAND}"
+	@echo "WEBDAV_SERVER_CLINKFLAGS = ${WEBDAV_SERVER_CLINKFLAGS}"
 
 http_server_test_main: options ${HTTP_SERVER_TEST_MAIN_TARGET}
 webdav_server_sockets_fs_main: options ${WEBDAV_SERVER_SOCKETS_FS_MAIN_TARGET}
@@ -107,9 +112,9 @@ davfuse: options ${DAVFUSE_TARGET}
 ${OUTROOT}/http_server_test_main/headers/%.h: ${SRCROOT}/%.idef generate-interface-implementation.sh ${MAKEFILES}
 	@mkdir -p $(dir $@)
 	@echo Generating $(notdir $@)
-	@HTTP_BACKEND_IMPL=sockets_fdevent FDEVENT_IMPL=${FDEVENT_IMPL} SOCKETS_IMPL=${SOCKETS_IMPL} sh generate-interface-implementation.sh $^ > $@
+	@HTTP_BACKEND_IMPL=sockets_fdevent LOG_PRINTER_IMPL=${LOG_PRINTER_IMPL} FDEVENT_IMPL=${FDEVENT_IMPL} SOCKETS_IMPL=${SOCKETS_IMPL} sh generate-interface-implementation.sh $^ > $@
 
-${OUTROOT}/http_server_test_main/obj/%.c.o: ${SRCROOT}/%.c ${MAKEFILES} 
+${OUTROOT}/http_server_test_main/obj/%.c.o: ${SRCROOT}/%.c ${MAKEFILES}
 	@mkdir -p $(dir $@)
 	@${MAKEDEPEND_CC}
 	@echo CC $(notdir $<)
@@ -120,14 +125,14 @@ ${HTTP_SERVER_TEST_MAIN_OBJ}: ${GEN_HEADERS_HTTP_SERVER_TEST_MAIN}
 ${HTTP_SERVER_TEST_MAIN_TARGET}: ${HTTP_SERVER_TEST_MAIN_OBJ}
 	@mkdir -p $(dir $@)
 	@echo Linking $(notdir $@)
-	@${CC} -o $@ $^ ${LDFLAGS} ${SOCKETS_LDFLAGS}
+	@${CC} -o $@ $^ ${LDFLAGS} ${SOCKETS_LIBS}
 
 # webdav_server_sockets_fs_main rules
 
 ${OUTROOT}/webdav_server_sockets_fs_main/headers/%.h: ${SRCROOT}/%.idef generate-interface-implementation.sh ${MAKEFILES}
 	@mkdir -p $(dir $@)
 	@echo Generating $(notdir $@)
-	@WEBDAV_BACKEND_IMPL=fs HTTP_BACKEND_IMPL=sockets_fdevent FSTATAT_IMPL=${FSTATAT_IMPL} FS_IMPL=${FS_IMPL} FDEVENT_IMPL=${FDEVENT_IMPL} SOCKETS_IMPL=${SOCKETS_IMPL} sh generate-interface-implementation.sh $^ > $@
+	@WEBDAV_BACKEND_IMPL=fs HTTP_BACKEND_IMPL=sockets_fdevent LOG_PRINTER_IMPL=${LOG_PRINTER_IMPL} FSTATAT_IMPL=${FSTATAT_IMPL} FS_IMPL=${FS_IMPL} FDEVENT_IMPL=${FDEVENT_IMPL} SOCKETS_IMPL=${SOCKETS_IMPL} sh generate-interface-implementation.sh $^ > $@
 
 ${OUTROOT}/webdav_server_sockets_fs_main/obj/%.c.o: ${SRCROOT}/%.c ${MAKEFILES}
 	@mkdir -p $(dir $@)
@@ -146,14 +151,14 @@ ${WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ}: ${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAI
 ${WEBDAV_SERVER_SOCKETS_FS_MAIN_TARGET}: ${WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ}
 	@mkdir -p $(dir $@)
 	@echo Linking $(notdir $@)
-	@${CC} ${CFLAGS} -o $@ $^ ${LDFLAGS} ${WEBDAV_LDFLAGS} ${SOCKETS_LDFLAGS}
+	@${CC} ${WEBDAV_SERVER_CLINKFLAGS} ${CFLAGS} -o $@ $^ ${WEBDAV_LIBS} ${SOCKETS_LIBS}
 
 # libdavfuse rules
 
 ${OUTROOT}/libdavfuse/headers/%.h: ${SRCROOT}/%.idef generate-interface-implementation.sh ${MAKEFILES}
 	@mkdir -p $(dir $@)
 	@echo Generating $(notdir $@)
-	@WEBDAV_BACKEND_IMPL=async_fuse HTTP_BACKEND_IMPL=sockets_fdevent FDEVENT_IMPL=${FDEVENT_IMPL} SOCKETS_IMPL=${SOCKETS_IMPL} sh generate-interface-implementation.sh $^ > $@
+	@WEBDAV_BACKEND_IMPL=async_fuse HTTP_BACKEND_IMPL=sockets_fdevent LOG_PRINTER_IMPL=${LOG_PRINTER_IMPL} FDEVENT_IMPL=${FDEVENT_IMPL} SOCKETS_IMPL=${SOCKETS_IMPL} sh generate-interface-implementation.sh $^ > $@
 
 ${OUTROOT}/libdavfuse/obj/%.c.o: ${SRCROOT}/%.c ${MAKEFILES}
 	@mkdir -p $(dir $@)
@@ -172,7 +177,7 @@ ${LIBDAVFUSE_OBJ}: ${GEN_HEADERS_LIBDAVFUSE}
 ${LIBDAVFUSE_TARGET}: ${LIBDAVFUSE_OBJ}
 	@mkdir -p $(dir $@)
 	@echo Linking $(notdir $@)
-	@${LINK_COMMAND} ${LINK_FLAG_NAME} $(notdir $@) $(if ${LINK_FLAG_VERSION_SCRIPT}, ${LINK_FLAG_VERSION_SCRIPT} fuse_versionscript) ${LIBDAVFUSE_EXTRA_LINK_ARGS} -o $@ $^ ${LDFLAGS} ${WEBDAV_LDFLAGS} ${SOCKETS_LDFLAGS}
+	@${LINK_COMMAND} ${LINK_FLAG_NAME} $(notdir $@) $(if ${LINK_FLAG_VERSION_SCRIPT}, ${LINK_FLAG_VERSION_SCRIPT} fuse_versionscript) ${LIBDAVFUSE_EXTRA_LINK_ARGS} -o $@ $^ ${LDFLAGS} ${WEBDAV_LIBS} ${SOCKETS_LIBS}
 
 # davfuse rules
 

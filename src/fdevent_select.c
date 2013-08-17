@@ -10,6 +10,12 @@
 
 #include "fdevent_select.h"
 
+enum {
+  /* set to false to cause program to spin
+     instead of waiting on select */
+  ACTUALLY_WAIT_ON_SELECT=true,
+};
+
 /* opaque structures */
 typedef struct {
   fd_t fd;
@@ -125,6 +131,8 @@ _actually_free_link(FDEventLoop *loop, FDEventLink *ll) {
 
 bool
 fdevent_select_main_loop(fdevent_select_loop_t loop) {
+  log_info("fdevent select main loop started");
+
   while (true) {
     fd_set readfds, writefds;
     int nfds = -1;
@@ -132,7 +140,7 @@ fdevent_select_main_loop(fdevent_select_loop_t loop) {
     unsigned writefds_watched = 0;
     FDEventLink *ll = loop->ll;
 
-    log_info("Looping...");
+    log_debug("Looping...");
 
     FD_ZERO(&readfds);
     FD_ZERO(&writefds);
@@ -182,11 +190,13 @@ fdevent_select_main_loop(fdevent_select_loop_t loop) {
       return true;
     }
 
-    while (select(nfds + 1, &readfds, &writefds, NULL, NULL) < 0) {
-      if (last_socket_error() != SOCKET_EINTR) {
-        log_error("Error while doing select(): %s",
-                  last_socket_error_message());
-        return false;
+    if (ACTUALLY_WAIT_ON_SELECT) {
+      while (select(nfds + 1, &readfds, &writefds, NULL, NULL) < 0) {
+        if (last_socket_error() != SOCKET_EINTR) {
+          log_error("Error while doing select(): %s",
+                    last_socket_error_message());
+          return false;
+        }
       }
     }
 

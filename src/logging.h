@@ -3,24 +3,16 @@
 
 #include <stdarg.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "c_util.h"
+#include "logging_types.h"
+#include "log_printer.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef enum {
-  LOG_NOTHING,
-  LOG_CRITICAL,
-  LOG_ERROR,
-  LOG_WARNING,
-  LOG_INFO,
-  LOG_DEBUG,
-} log_level_t;
 
 /* initializes to zero so logging must be explicitly enabled */
 #ifndef _IS_LOGGING_C
@@ -31,7 +23,7 @@ extern log_level_t _logging_cur_level;
 #define log(level, ...)				 \
   do {						 \
     if ((level) <= _logging_cur_level) {	 \
-      _log(__FILE__, __LINE__, level, __VA_ARGS__);     \
+      log_printer_print(__FILE__, __LINE__, level, __VA_ARGS__);        \
     }						 \
   }						 \
   while (false)
@@ -47,14 +39,8 @@ extern log_level_t _logging_cur_level;
 #define log_error_errno(str) \
   log_error(str ": %s", strerror(errno))
 
-bool
-init_logging(FILE *log_destination, log_level_t level);
-
-HEADER_FUNCTION void
-shutdown_logging(void) {}
-
 void
-_log(const char *filename, int lineno, log_level_t level, const char *format, ...);
+logging_set_global_level(log_level_t new_level);
 
 #ifdef __cplusplus
 }

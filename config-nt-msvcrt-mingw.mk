@@ -1,9 +1,11 @@
 # Customize below to fit your system
 # This example is made for nt/msvcrt/mingw
+LOG_PRINTER_IMPL = outputdebugstring
 FDEVENT_IMPL = select
 SOCKETS_IMPL = winsock
 FS_IMPL = win32
-SOCKETS_LDFLAGS = -lws2_32
+SOCKETS_LIBS = -lws2_32
+WEBDAV_SERVER_CLINKFLAGS = -static
 
 # flags
 CPPFLAGS_RELEASE = -DNDEBUG
@@ -25,7 +27,7 @@ CXX = g++
 LINK_COMMAND = ld -shared
 LINK_FLAG_NAME = -soname
 LINK_FLAG_VERSION_SCRIPT = --version-script
-CXX_LDFLAGS = -lstdc++
+CXX_LIBS = -lstdc++
 
 # libfuse file name
 LIBFUSE_FILE_NAME = libfuse.so.2
