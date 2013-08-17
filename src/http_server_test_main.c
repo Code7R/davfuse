@@ -102,8 +102,12 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   hc->resp.num_headers = 1;
   strncpy(hc->resp.headers[0].name, "Content-Length", sizeof(hc->resp.headers[0].name));
   assert(sizeof(toret) - 1 <= UINT_MAX);
-  snprintf(hc->resp.headers[0].value, sizeof(hc->resp.headers[0].value),
-           "%u", (unsigned ) (sizeof(toret) - 1));
+  int ret_snprintf =
+    snprintf(hc->resp.headers[0].value, sizeof(hc->resp.headers[0].value),
+             "%u", (unsigned ) (sizeof(toret) - 1));
+  if (ret_snprintf < 0 || ret_snprintf >= sizeof(hc->resp.headers[0].value)) {
+    goto error;
+  }
 
   CRYIELD(hc->pos,
           http_request_write_headers(hc->rh, &hc->resp,
