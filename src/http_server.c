@@ -453,7 +453,7 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
 		     "HTTP/1.1 %d %s\r\n",
 		     whs->response_headers->code,
 		     whs->response_headers->message);
-  if (ret < 0) {
+  if (ret < 0 || (size_t) ret >= sizeof(whs->response_line)) {
     myerrno = ENOMEM;
     goto done;
   }

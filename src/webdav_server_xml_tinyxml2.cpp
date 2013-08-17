@@ -953,8 +953,9 @@ generate_propfind_response(struct handler_context *hc,
                str_equals(elt->ns_href, DAV_XML_NS) &&
                propfind_entry->length != INVALID_WEBDAV_RESOURCE_SIZE) {
         char length_str[400];
-        snprintf(length_str, sizeof(length_str), "%lu",
-                 (unsigned long) propfind_entry->length);
+        int ret_snprintf = snprintf(length_str, sizeof(length_str), "%lu",
+                                    (unsigned long) propfind_entry->length);
+        ASSERT_TRUE(!(ret_snprintf < 0 || (size_t) ret_snprintf >= sizeof(length_str)));
         newChildElementWithText(prop_success_elt, DAV_XML_NS_PREFIX,
                                 "getcontentlength", length_str);
       }
@@ -1273,10 +1274,8 @@ generate_success_lock_response_body(struct handler_context *hc,
   else {
     int len = snprintf(timeout_buf, sizeof(timeout_buf),
                        "Second-%u", (unsigned) timeout_in_seconds);
-    if (len == sizeof(timeout_buf) - 1) {
-      /* TODO: lazy */
-      abort();
-    }
+    /* TODO: lazy */
+    ASSERT_TRUE(!(len < 0 || (size_t) len >= sizeof(timeout_buf)));
     timeout_str = timeout_buf;
   }
 

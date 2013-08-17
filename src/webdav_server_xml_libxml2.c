@@ -234,8 +234,9 @@ generate_propfind_response(struct handler_context *hc,
                str_equals(elt->ns_href, DAV_XML_NS) &&
                !propfind_entry->is_collection) {
         char length_str[400];
-        snprintf(length_str, sizeof(length_str), "%lld",
-                 (long long) propfind_entry->length);
+        int ret_snprintf = snprintf(length_str, sizeof(length_str), "%lld",
+                                    (long long) propfind_entry->length);
+        ASSERT_TRUE(!(ret_snprintf < 0 || ret_snprintf >= sizeof(length_str)));
         xmlNodePtr getcontentlength_elt = xmlNewTextChild(prop_success_elt, dav_ns,
                                                           XMLSTR("getcontentlength"), XMLSTR(length_str));
         ASSERT_NOT_NULL(getcontentlength_elt);
@@ -598,7 +599,7 @@ generate_success_lock_response_body(struct handler_context *hc,
   else {
     int len = snprintf(timeout_buf, sizeof(timeout_buf),
                        "Second-%u", (unsigned) timeout_in_seconds);
-    if (len == sizeof(timeout_buf) - 1) {
+    if (len < 0 || len >= sizeof(timeout_buf)) {
       /* TODO: lazy */
       abort();
     }

@@ -269,7 +269,7 @@ perform_write_lock(struct webdav_server *ws,
   char s_lock_token[256];
   int len = snprintf(s_lock_token, sizeof(s_lock_token), "x-this-lock-token:///%ld.%ld",
                      (long) curtime.tv_sec, (long) curtime.tv_usec);
-  if (len == sizeof(s_lock_token) - 1) {
+  if (len < 0 || (size_t) len >= sizeof(s_lock_token)) {
     /* lock token string was too long */
     return false;
   }
@@ -1248,10 +1248,8 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
       char lock_token_header_value[256];
       int len_written = snprintf(lock_token_header_value, sizeof(lock_token_header_value),
                                  "<%s>", ctx->lock_token);
-      if (len_written == sizeof(lock_token_header_value) - 1) {
-        /* TODO: Lazy */
-        abort();
-      }
+      /* TODO: Lazy */
+      ASSERT_TRUE(!(len_written < 0 || (size_t) len_written >= sizeof(lock_token_header_value)));
       hp->value = strdup_x(lock_token_header_value);
       ctx->headers = linked_list_prepend(ctx->headers, hp);
     }
