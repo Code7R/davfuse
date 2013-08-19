@@ -45,31 +45,33 @@ main(int argc, char *argv[]) {
   logging_set_global_level(LOG_DEBUG);
   log_info("Logging initted.");
 
+  ASSERT_TRUE(argc > 4);
+
   /* parse command line */
-  port_t port;
-  if (argc > 1) {
-    long to_port = strtol(argv[1], NULL, 10);
-    if ((to_port == 0 && errno) ||
-	to_port < 0 ||
-	to_port > MAX_PORT) {
-      log_critical("Bad port: %s", argv[1]);
-      return -1;
-    }
-    port = (port_t) to_port;
+
+  /* get listen address */
+  /* TODO: accept other listen addresses, not just ports */
+  long to_port = strtol(argv[1], NULL, 10);
+  if ((to_port == 0 && errno) ||
+      to_port < 0 ||
+      to_port > MAX_PORT) {
+    log_critical("Bad port: %s", argv[1]);
+    return -1;
   }
-  else {
-    port = 8080;
-  }
+  struct sockaddr_in listen_addr;
+  init_sockaddr_in(&listen_addr, to_port);
 
-  const char *public_prefix = argc > 2
-    ? argv[2]
-    : "http://localhost:8080/";
-
-  ASSERT_TRUE(argc > 3);
-
+  /* get public uri root */
   /* TODO: handle bad input paths, or sanitize them, you know DWIM... */
-  char *base_path = strdup_x(argv[3]);
-  ASSERT_NOT_NULL(base_path);
+  const char *public_uri_root = argv[2];
+
+  /* get internal root */
+  /* TODO: handle bad input paths, or sanitize them, you know DWIM... */
+  const char *internal_root = argv[3];
+
+  /* get local path */
+  /* TODO: handle bad input paths, or sanitize them, you know DWIM... */
+  char *base_path = argv[4];
 
   /* init sockets */
   bool success_init_sockets = init_socket_subsystem();
@@ -84,10 +86,6 @@ main(int argc, char *argv[]) {
   ASSERT_TRUE(loop);
 
   /* create network IO backend (implemented by the Socket API) */
-  /* TODO: accept other listen addresses */
-  struct sockaddr_in listen_addr;
-  init_sockaddr_in(&listen_addr, port);
-
   http_backend_t http_backend =
     http_backend_sockets_fdevent_new(loop,
                                      (struct sockaddr *) &listen_addr,
@@ -106,7 +104,10 @@ main(int argc, char *argv[]) {
   init_xml_parser();
 
   /* start webdav server*/
-  webdav_server_t ws = webdav_server_start(http_backend, public_prefix, wd_backend);
+  webdav_server_t ws = webdav_server_start(http_backend,
+                                           public_uri_root,
+                                           internal_root,
+                                           wd_backend);
   ASSERT_TRUE(ws);
 
   log_info("Starting main loop");
@@ -130,9 +131,6 @@ main(int argc, char *argv[]) {
 
   log_info("Shutting down socket subsystem");
   shutdown_socket_subsystem();
-
-  log_info("Freeing base path");
-  free(base_path);
 
   log_info("Shutting down logging, bye!");
   log_printer_shutdown();

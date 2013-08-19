@@ -83,7 +83,8 @@ struct webdav_server {
   http_server_t http;
   linked_list_t locks;
   webdav_backend_t fs;
-  char *public_prefix;
+  char *public_uri_root;
+  char *internal_root;
   event_handler_t stop_cb;
   void *stop_ud;
 };
@@ -192,7 +193,7 @@ void
 free_webdav_proppatch_directive(WebdavProppatchDirective *wp);
 
 char *
-uri_from_path(struct handler_context *hc, const char *path);
+public_uri_from_path(struct handler_context *hc, const char *path);
 
 #ifdef __cplusplus
 }

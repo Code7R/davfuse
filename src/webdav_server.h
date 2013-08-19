@@ -50,13 +50,14 @@ typedef _WebdavGenericDoneEvent WebdavGetRequestSizeHintDoneEvent;
 typedef _WebdavGenericDoneEvent WebdavGetRequestWriteDoneEvent;
 
 typedef struct {
-  webdav_error_t error;;
+  webdav_error_t error;
   size_t nbyte;
 } WebdavPutRequestReadDoneEvent;
 
 webdav_server_t
 webdav_server_start(http_backend_t http_backend,
-                    const char *public_prefix,
+                    const char *public_uri_root,
+                    const char *internal_root,
 		    webdav_backend_t fs);
 
 void
