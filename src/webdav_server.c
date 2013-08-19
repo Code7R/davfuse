@@ -52,24 +52,40 @@ static EVENT_HANDLER_DECLARE(handle_put_request);
 static EVENT_HANDLER_DECLARE(handle_unlock_request);
 
 static char *
-path_from_uri(struct handler_context *hc, const char *uri) {
+path_from_request_uri(struct handler_context *hc, const char *uri) {
   const char *abs_path_start;
 
-  if (uri[0] != '/') {
-    /* we don't handle non-relative URIs that don't start with
-       our prefix, this includes '*' URIs
-     */
-    if (!str_startswith(uri, hc->serv->public_prefix)) {
-      return NULL;
-    }
-    /* -1 to account for and incorporate the trailing slash */
-    abs_path_start = &uri[strlen(hc->serv->public_prefix) - 1];
-  }
-  else {
-    abs_path_start = uri;
+  if (!str_startswith(uri, "/")) {
+    /* we don't handle non-relative URIs */
+    log_info("Invalid request path (\"%s\")! "
+             "we currently only support relative paths",
+             uri);
+
+    return NULL;
   }
 
-  /* okay now `real_uri` should point to a URI without the
+  size_t internal_root_len = strlen(hc->serv->internal_root);
+
+  abs_path_start = uri;
+
+  if (!str_equals(hc->serv->internal_root, "/")) {
+    if (str_equals(abs_path_start, hc->serv->internal_root)) {
+      return strdup_x("/");
+    }
+
+    /* now `abs_path_start` must start with the internal root,
+       otherwise this isn't a mapped resource */
+    if (!str_startswith(abs_path_start, hc->serv->internal_root) ||
+        abs_path_start[internal_root_len] != '/') {
+      log_info("Invalid request path (\"%s\")! "
+               "doesn't start with internal root: (\"%s\")",
+               abs_path_start, hc->serv->internal_root);
+      return NULL;
+    }
+    abs_path_start += internal_root_len;
+  }
+
+  /* okay now `abs_path_start` should point to a URI without the
      scheme/authority, now strip out the query part */
 
   const char *abs_path_end = strchr(abs_path_start, '?');
@@ -84,6 +100,17 @@ path_from_uri(struct handler_context *hc, const char *uri) {
 
   /* path could be something like /hai%20;there/sup, this fixes that */
   return decode_urlpath(abs_path_start, abs_path_end - abs_path_start);
+}
+
+static char *
+path_from_public_uri(struct handler_context *hc, const char *uri) {
+  if (!str_startswith(uri, hc->serv->public_uri_root)) {
+    return NULL;
+  }
+
+  const char *const relative_uri =
+    uri + (strlen(hc->serv->public_uri_root) - 1);
+  return path_from_request_uri(hc, relative_uri);
 }
 
 static webdav_depth_t
@@ -148,7 +175,9 @@ typedef enum {
 } if_lock_token_err_t;
 
 static if_lock_token_err_t
-webdav_get_if_lock_token(const HTTPRequestHeaders *rhs, char **resource_tag, char **lock_token) {
+webdav_get_if_lock_token(struct handler_context *hc, char **resource_tag, char **lock_token) {
+  const HTTPRequestHeaders *const rhs = &hc->rhs;
+
   const char *if_header = http_get_header_value(rhs, WEBDAV_HEADER_IF);
   if (!if_header) {
     return IF_LOCK_TOKEN_ERR_DOESNT_EXIST;
@@ -182,7 +211,14 @@ webdav_get_if_lock_token(const HTTPRequestHeaders *rhs, char **resource_tag, cha
   }
   else {
     /* no resource tag passed in, this lock token is related to the method uri */
-    *resource_tag = strdup_x(rhs->uri);
+    if (str_startswith(rhs->uri, "/")) {
+      /* if this was relative uri, make sure to make it into a public uri */
+      *resource_tag = super_strcat(hc->serv->public_uri_root,
+                                   &rhs->uri[1], NULL);
+    }
+    else {
+      *resource_tag = strdup_x(rhs->uri);
+    }
   }
 
   /* get left paren */
@@ -424,7 +460,7 @@ _can_modify_path(struct handler_context *hc,
 
   char *lock_token_fpath = NULL;
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS) {
-    lock_token_fpath = path_from_uri(hc, lock_resource_tag);
+    lock_token_fpath = path_from_public_uri(hc, lock_resource_tag);
   }
 
   if (is_locked &&
@@ -466,7 +502,7 @@ can_modify_path(struct handler_context *hc,
   /* parse if header */
   /* TODO: associate each lock token with a resource URL */
   if_lock_token_err_t if_lock_token_err =
-    webdav_get_if_lock_token(&hc->rhs, &lock_resource, &lock_token);
+    webdav_get_if_lock_token(hc, &lock_resource, &lock_token);
 
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_INTERNAL) {
     *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -504,7 +540,7 @@ can_unlink_path(struct handler_context *hc,
   /* parse if header */
   /* TODO: associate each lock token with a resource URL */
   if_lock_token_err_t if_lock_token_err =
-    webdav_get_if_lock_token(&hc->rhs, &lock_resource, &lock_token);
+    webdav_get_if_lock_token(hc, &lock_resource, &lock_token);
 
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_INTERNAL) {
     *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -668,7 +704,7 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   ctx->response_body_len = 0;
   ctx->dst_relative_uri = NULL;
 
-  ctx->src_relative_uri = path_from_uri(hc, hc->rhs.uri);
+  ctx->src_relative_uri = path_from_request_uri(hc, hc->rhs.uri);
   HANDLE_ERROR(!ctx->src_relative_uri,
                HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR,
                "couldn't get source path");
@@ -690,7 +726,7 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
                "request didn't have destination");
 
   /* destination file path */
-  ctx->dst_relative_uri = path_from_uri(hc, destination_url);
+  ctx->dst_relative_uri = path_from_public_uri(hc, destination_url);
   HANDLE_ERROR(!ctx->dst_relative_uri, HTTP_STATUS_CODE_BAD_REQUEST,
                "couldn't get path from destination URI");
 
@@ -823,7 +859,7 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
     goto done;
   }
 
-  ctx->request_relative_uri = path_from_uri(hc, hc->rhs.uri);
+  ctx->request_relative_uri = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->request_relative_uri) {
     log_info("Couldn't make file path from %s", hc->rhs.uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -947,7 +983,7 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
 
   http_status_code_t code;
 
-  ctx->resource_uri = path_from_uri(hc, hc->rhs.uri);
+  ctx->resource_uri = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->resource_uri) {
     code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
@@ -1080,7 +1116,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   ctx->timeout_in_seconds = webdav_get_timeout(&hc->rhs);
 
   /* get path */
-  ctx->file_path = path_from_uri(hc, hc->rhs.uri);
+  ctx->file_path = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->file_path) {
     log_debug("Invalid file path %s", hc->rhs.uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -1089,7 +1125,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
 
   /* read "If" header */
   if_lock_token_err_t if_lock_token_err =
-    webdav_get_if_lock_token(&hc->rhs, &ctx->resource_tag, &ctx->refresh_uri);
+    webdav_get_if_lock_token(hc, &ctx->resource_tag, &ctx->refresh_uri);
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_BAD_PARSE) {
     log_debug("Bad XML!");
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
@@ -1103,7 +1139,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   }
 
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS) {
-    ctx->resource_tag_path = path_from_uri(hc, ctx->resource_tag);
+    ctx->resource_tag_path = path_from_public_uri(hc, ctx->resource_tag);
     if (!ctx->resource_tag_path) {
       log_debug("Couldn't get normalized resource path from uri ...: %s",
                 ctx->resource_tag);
@@ -1327,7 +1363,7 @@ EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
     goto done;
   }
 
-  ctx->request_relative_uri = path_from_uri(hc, hc->rhs.uri);
+  ctx->request_relative_uri = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->request_relative_uri) {
     log_info("Couldn't make file path from %s", hc->rhs.uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -1403,24 +1439,33 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
     goto error;
   }
 
-  ctx->request_relative_uri = path_from_uri(hc, hc->rhs.uri);
-  if (!ctx->request_relative_uri) {
-    log_info("Couldn't make file path from %s", hc->rhs.uri);
-    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    goto error;
+  webdav_error_t propfind_error;
+  if (str_equals(hc->rhs.uri, "/")) {
+    propfind_error = WEBDAV_ERROR_DOES_NOT_EXIST;
   }
+  else {
+    ctx->request_relative_uri = path_from_request_uri(hc, hc->rhs.uri);
+    if (!ctx->request_relative_uri) {
+      log_info("Couldn't make file path from %s", hc->rhs.uri);
+      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      goto error;
+    }
 
-  CRYIELD(ctx->pos,
-          webdav_backend_propfind(hc->serv->fs,
-                                  ctx->request_relative_uri,
-                                  DEPTH_0, WEBDAV_PROPFIND_ALLPROP,
-                                  handle_options_request, hc));
-  assert(WEBDAV_PROPFIND_DONE_EVENT == ev_type);
-  WebdavPropfindDoneEvent *propfind_done_ev = ev;
-  if (propfind_done_ev->error != WEBDAV_ERROR_NONE &&
-      propfind_done_ev->error != WEBDAV_ERROR_DOES_NOT_EXIST) {
-    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-    goto error;
+    CRYIELD(ctx->pos,
+            webdav_backend_propfind(hc->serv->fs,
+                                    ctx->request_relative_uri,
+                                    DEPTH_0, WEBDAV_PROPFIND_ALLPROP,
+                                    handle_options_request, hc));
+    assert(WEBDAV_PROPFIND_DONE_EVENT == ev_type);
+    WebdavPropfindDoneEvent *propfind_done_ev = ev;
+    if (propfind_done_ev->error != WEBDAV_ERROR_NONE &&
+        propfind_done_ev->error != WEBDAV_ERROR_DOES_NOT_EXIST) {
+      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      goto error;
+    }
+
+    propfind_error = propfind_done_ev->error;
+    ctx->entries = propfind_done_ev->entries;
   }
 
   const bool success_set_code =
@@ -1440,15 +1485,13 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
     http_response_add_header(&hc->resp, HTTP_HEADER_CONTENT_LENGTH, "0");
   ASSERT_TRUE(success_add_cl_header);
 
-  if (propfind_done_ev->error == WEBDAV_ERROR_DOES_NOT_EXIST) {
+  if (propfind_error == WEBDAV_ERROR_DOES_NOT_EXIST) {
     const bool success_add_allow_header =
       http_response_add_header(&hc->resp, "Allow",
                                "OPTIONS,MKCOL,PUT,LOCK");
     ASSERT_TRUE(success_add_allow_header);
   }
   else {
-    ctx->entries = propfind_done_ev->entries;
-
     size_t allow_header_off = 0;
 
 #define ALLOW_METHOD(meth) \
@@ -1464,7 +1507,7 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
 
     ALLOW_METHOD("LOCK,UNLOCK,PROPFIND,DELETE,MOVE,COPY,OPTIONS,PROPPATCH");
 
-    struct webdav_propfind_entry *ent = linked_list_peekleft(propfind_done_ev->entries);
+    struct webdav_propfind_entry *ent = linked_list_peekleft(ctx->entries);
     ASSERT_NOT_NULL(ent);
 
     if (!ent->is_collection) {
@@ -1490,10 +1533,11 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
   if (false) {
   error:
     assert(status_code);
-    http_request_string_response(hc->rh,
-                                 status_code,
-                                 "",
-                                 request_proc, ud);
+    CRYIELD(ctx->pos,
+            http_request_string_response(hc->rh,
+                                         status_code,
+                                         "",
+                                         handle_options_request, ud));
   }
 
   linked_list_free(ctx->entries,
@@ -1541,7 +1585,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   ctx->out_buf = NULL;
   ctx->out_buf_size = 0;
 
-  ctx->request_relative_uri = path_from_uri(hc, hc->rhs.uri);
+  ctx->request_relative_uri = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->request_relative_uri) {
     log_info("couldn't create request relative uri: %s",
              hc->rhs.uri);
@@ -1736,7 +1780,7 @@ run_proppatch(struct handler_context *hc, const char *uri,
 
   /* NB: litmus "lock" tests fail because we don't support
      setting arbitrary properties */
-  char *file_path = path_from_uri(hc, uri);
+  char *file_path = path_from_request_uri(hc, uri);
   if (!file_path) {
     log_warning("Couldn't make file path from %s", uri);
     *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -1823,7 +1867,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
   ctx->response_body = NULL;
   ctx->response_body_len = 0;
 
-  ctx->request_relative_uri = path_from_uri(hc, hc->rhs.uri);
+  ctx->request_relative_uri = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->request_relative_uri) {
     log_warning("Couldn't make file path from %s", hc->rhs.uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -1968,7 +2012,7 @@ EVENT_HANDLER_DEFINE(handle_unlock_request, ev_type, ev, ud) {
   }
 
   /* unlock based on token */
-  file_path = path_from_uri(hc, hc->rhs.uri);
+  file_path = path_from_request_uri(hc, hc->rhs.uri);
   bool unlocked;
   bool success_unlock =
     unlock_resource(hc->serv, file_path, lock_token, &unlocked);
@@ -2009,14 +2053,26 @@ EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
 
 webdav_server_t
 webdav_server_start(http_backend_t http_backend,
-                    const char *public_prefix,
+                    const char *public_uri_root,
+                    const char *internal_root,
                     webdav_backend_t fs) {
-  char *public_prefix_copy = NULL;
+  char *public_uri_root_copy = NULL;
+  char *internal_root_copy = NULL;
   http_server_t http = (http_server_t) 0;
   struct webdav_server *serv = NULL;
 
-  public_prefix_copy = strdup_x(public_prefix);
-  if (!public_prefix_copy) {
+  if (!str_endswith(public_uri_root, "/")) {
+    log_info("public_uri_root must end in '/'");
+    goto error;
+  }
+
+  public_uri_root_copy = strdup_x(public_uri_root);
+  if (!public_uri_root_copy) {
+    goto error;
+  }
+
+  internal_root_copy = strdup_x(internal_root);
+  if (!internal_root_copy) {
     goto error;
   }
 
@@ -2035,7 +2091,8 @@ webdav_server_start(http_backend_t http_backend,
     .http = http,
     .locks = LINKED_LIST_INITIALIZER,
     .fs = fs,
-    .public_prefix = public_prefix_copy,
+    .public_uri_root = public_uri_root_copy,
+    .internal_root = internal_root_copy,
   };
 
   return serv;
@@ -2045,7 +2102,8 @@ webdav_server_start(http_backend_t http_backend,
     http_server_stop(http, NULL, NULL);
   }
   free(serv);
-  free(public_prefix_copy);
+  free(public_uri_root_copy);
+  free(internal_root_copy);
 
   return NULL;
 }
@@ -2060,7 +2118,8 @@ EVENT_HANDLER_DEFINE(_webdav_stop_cb, ev_type, ev, ud) {
   assert(ev_type == HTTP_SERVER_STOP_DONE_EVENT);
 
   linked_list_free(serv->locks, free_webdav_lock_descriptor);
-  free(serv->public_prefix);
+  free(serv->public_uri_root);
+  free(serv->internal_root);
 
   event_handler_t cb = serv->stop_cb;
   void *cb_ud = serv->stop_ud;
@@ -2198,44 +2257,25 @@ free_webdav_proppatch_directive(WebdavProppatchDirective *wp) {
 }
 
 char *
-uri_from_path(struct handler_context *hc, const char *path) {
-  /* TODO: urlencode `path` */
+public_uri_from_path(struct handler_context *hc, const char *path) {
   assert(str_startswith(path, "/"));
   assert(str_equals(path, "/") || !str_endswith(path, "/"));
 
-  char *encoded_path = encode_urlpath(path, strlen(path));
+  char *const encoded_path = encode_urlpath(path, strlen(path));
 
-  const char *request_uri = hc->rhs.uri;
+  const bool internal_root_is_root = str_equals(hc->serv->internal_root, "/");
+  const bool path_is_root = str_equals(path, "/");
 
-  /* NB: we should always be generating urls for paths
-     that are descendants of the request uri */
-
-  char *prefix = hc->serv->public_prefix;
-  char *real_uri;
-  if (str_startswith(request_uri, "/")) {
-    /* request uri was in relative format, generate a relative uri */
-    char *slashslash = strstr(hc->serv->public_prefix, "//");
-    prefix = strchr(slashslash + 2, '/');
-  }
-
-  size_t prefix_len = strlen(prefix);
-  size_t path_len = strlen(encoded_path);
-
-  /* make extra space for a trailing space */
-  real_uri = super_strcat(prefix, encoded_path + 1, "/", NULL);
+  char *const real_uri = super_strcat(/* hc->serv->public_uri_root, */
+                                      hc->serv->internal_root,
+                                      internal_root_is_root
+                                      ? ""
+                                      : (path_is_root
+                                         ? ""
+                                         : "/"),
+                                      encoded_path + 1, NULL);
   if (!real_uri) {
     goto done;
-  }
-
-  if (!str_equals(request_uri, real_uri)) {
-    real_uri[prefix_len - 1 + path_len] = '\0';
-  }
-
-  if (false) {
-    /* if (false) for now, copy/move might need to transform a path
-       that's not a child of the request uri */
-    /* 8.3 URL Handling, RFC 4918 */
-    assert(str_startswith(real_uri, request_uri));
   }
 
  done:

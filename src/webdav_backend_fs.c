@@ -85,7 +85,6 @@ webdav_backend_fs_new(fs_t fs, const char *root) {
     return NULL;
   }
 
-
   WebdavBackendFs *backend = malloc(sizeof(*backend));
   if (!backend) {
     return NULL;

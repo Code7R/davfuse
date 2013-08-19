@@ -896,7 +896,7 @@ generate_propfind_response(struct handler_context *hc,
   LINKED_LIST_FOR (struct webdav_propfind_entry, propfind_entry, entries) {
     auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
-    char *const uri = uri_from_path(hc, propfind_entry->relative_uri);
+    char *const uri = public_uri_from_path(hc, propfind_entry->relative_uri);
     ASSERT_NOT_NULL(uri);
     CStringFreer free_uri(uri);
 
@@ -1012,6 +1012,10 @@ generate_propfind_response(struct handler_context *hc,
       newChildElement(locktype_shared_elt, DAV_XML_NS_PREFIX, "write");
     }
 
+    if (false) {
+      newChildElement(prop_success_elt, DAV_XML_NS_PREFIX, "lockdiscovery");
+    }
+
     if (!prop_not_found_elt->FirstChildElement()) {
       unlinkNode(propstat_not_found_elt);
     }
@@ -1114,7 +1118,7 @@ generate_locked_response(struct handler_context *hc,
 
   newChildElement(error_elt, DAV_XML_NS_PREFIX, "lock-token-submitted");
 
-  char *const uri = uri_from_path(hc, locked_path);
+  char *const uri = public_uri_from_path(hc, locked_path);
   ASSERT_NOT_NULL(uri);
   CStringFreer free_uri(uri);
 
@@ -1149,7 +1153,7 @@ generate_locked_descendant_response(struct handler_context *hc,
 
   auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
-  char *const uri = uri_from_path(hc, locked_descendant);
+  char *const uri = public_uri_from_path(hc, locked_descendant);
   ASSERT_NOT_NULL(uri);
   CStringFreer free_uri(uri);
 
@@ -1193,7 +1197,7 @@ generate_failed_lock_response_body(struct handler_context *hc,
   if (!same_path) {
     auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
-    char *const status_uri = uri_from_path(hc, status_path);
+    char *const status_uri = public_uri_from_path(hc, status_path);
     ASSERT_NOT_NULL(status_uri);
     CStringFreer free_status_uri(status_uri);
 
@@ -1203,7 +1207,7 @@ generate_failed_lock_response_body(struct handler_context *hc,
 
   auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
-  char *const file_uri = uri_from_path(hc, file_path);
+  char *const file_uri = public_uri_from_path(hc, file_path);
   ASSERT_NOT_NULL(file_uri);
   CStringFreer free_file_uri(file_uri);
 
@@ -1285,7 +1289,7 @@ generate_success_lock_response_body(struct handler_context *hc,
 
   auto lockroot_elt = newChildElement(activelock_elt,  DAV_XML_NS_PREFIX, "lockroot");
 
-  char *const lockroot_uri = uri_from_path(hc, file_path);
+  char *const lockroot_uri = public_uri_from_path(hc, file_path);
   ASSERT_NOT_NULL(lockroot_uri);
   CStringFreer free_lockroot_uri(lockroot_uri);
   newChildElementWithText(lockroot_elt, DAV_XML_NS_PREFIX, "href", file_path);
