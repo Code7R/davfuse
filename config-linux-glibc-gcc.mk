@@ -3,6 +3,7 @@
 FDEVENT_IMPL = select
 FSTATAT_IMPL = native
 SOCKETS_IMPL = posix
+LOG_PRINTER_IMPL = stdio
 FS_IMPL = posix
 FS_IMPL_EXTRA_SOURCES = fstatat_native.c fd_utils.c
 FS_IMPL_EXTRA_INTERFACES = fstatat
@@ -25,13 +26,14 @@ CXXFLAGS_RELEASE = -O3
 CFLAGS_DYN = -fPIC
 CXXFLAGS_DYN = -fPIC
 
+CXX_LIBS = -lstdc++
+
 # compiler and linker
 CC = gcc
 CXX = g++
 LINK_COMMAND = gcc -shared
 LINK_FLAG_NAME = -Xlinker -soname -Xlinker
 LINK_FLAG_VERSION_SCRIPT = -Xlinker --version-script -Xlinker
-CXX_LDFLAGS = -lstdc++
 
 # libfuse file name
 LIBDAVFUSE_FILE_NAME = libfuse.so.2

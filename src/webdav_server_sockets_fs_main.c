@@ -35,9 +35,10 @@ main(int argc, char *argv[]) {
 #ifndef _WIN32
   /* this code makes this module become POSIX */
   char *const term_env = getenv("TERM");
-  const bool show_colors = (isatty(fileno(_logging_dest)) &&
+  FILE *logging_output = stderr;
+  const bool show_colors = (isatty(fileno(logging_output)) &&
                       term_env && !str_equals(term_env, "dumb"));
-  log_printer_stdio_init(stdout, show_colors);
+  log_printer_stdio_init(logging_output, show_colors);
 #else
   log_printer_default_init();
 #endif

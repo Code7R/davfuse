@@ -52,7 +52,7 @@ WEBDAV_SERVER_SOCKETS_FS_MAIN_SRC = \
     ${FS_IMPL_EXTRA_SOURCES}
 GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN_ := \
     fdevent.h sockets.h http_backend.h fs.h webdav_backend.h \
-    log_printer.h
+    log_printer.h \
     $(patsubst %,%.h,${FS_IMPL_EXTRA_INTERFACES})
 
 GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN = $(patsubst %,${OUTROOT}/webdav_server_sockets_fs_main/headers/%,${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN_})

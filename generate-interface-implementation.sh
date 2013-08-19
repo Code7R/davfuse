@@ -36,6 +36,7 @@ cat "$INTERFACE_DEF" | (
     while read LINE; do
         if ! ( echo "$LINE" | grep "$REGEX" > /dev/null ); then
             # bad file
+            echo "Bad line syntax: $LINE" > /dev/stderr
             kill "$PARENT_PID";
         fi
         COMMENT=$(echo "$LINE" | sed "s/${REGEX}/\4/g")

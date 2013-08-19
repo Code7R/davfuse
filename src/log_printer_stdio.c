@@ -17,18 +17,18 @@ static bool _show_colors;
 bool
 log_printer_stdio_init(FILE *log_destination, bool show_colors) {
   _logging_dest = log_destination;
-  _logging_cur_level = level;
+  _show_colors = show_colors;
   return true;
 }
 
 bool
-log_printer_default_init(void) {
+log_printer_stdio_default_init(void) {
   const bool show_colors = false;
-  return log_printer_stdio_init(stdio, show_colors);
+  return log_printer_stdio_init(stderr, show_colors);
 }
 
 void
-log_printer_posix_shutdown(void) {
+log_printer_stdio_shutdown(void) {
 }
 
 static const char *
@@ -58,7 +58,7 @@ color_for_filename(const char *filename) {
 }
 
 void
-log_printer_posix_print(const char *filename, int lineno,
+log_printer_stdio_print(const char *filename, int lineno,
                         log_level_t level,
                         const char *format, ...) {
   /* TODO: we should be able to register log handlers,
