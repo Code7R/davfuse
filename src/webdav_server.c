@@ -3,12 +3,7 @@
 */
 #define _ISOC99_SOURCE
 
-/*
-  TODO:
-  * Support 'If-Modified-Since'
- */
-
-/* replace this by something that is X-platform */
+/* TODO: replace this by something that is X-platform */
 #include <sys/time.h>
 
 #include <assert.h>
@@ -147,6 +142,80 @@ public_uri_from_path(struct handler_context *hc, const char *path, bool is_colle
   return real_uri;
 }
 
+static bool
+is_relative_uri_parent(const char *potential_parent_uri,
+                       const char *potential_child_uri) {
+  /* we don't support this yet */
+  ASSERT_TRUE(!strchr(potential_parent_uri, '?'));
+  ASSERT_TRUE(!strchr(potential_child_uri, '?'));
+  size_t parent_len = strlen(potential_parent_uri);
+  return (str_startswith(potential_child_uri, potential_parent_uri) &&
+          (potential_parent_uri[parent_len - 1] == '/' ||
+           potential_child_uri[parent_len] == '/'));
+}
+
+#define UTIL_WEBDAV_BACKEND_SINGLE_PROPFIND_DONE_EVENT GENERIC_EVENT
+
+typedef struct {
+  webdav_error_t error;
+  struct webdav_propfind_entry entry;
+} UtilWebdavBackendSinglePropfindDoneEvent;
+
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  webdav_backend_t backend;
+  const char *relative_uri;
+  event_handler_t cb;
+  void *cb_ud;
+  /* ctx */
+  UtilWebdavBackendSinglePropfindDoneEvent ev;
+} UtilWebdavBackendSinglePropfindCtx;
+
+static
+UTHR_DEFINE(_util_webdav_backend_single_propfind_uthr) {
+  UTHR_HEADER(UtilWebdavBackendSinglePropfindCtx, ctx);
+
+  UTHR_YIELD(ctx,
+             webdav_backend_propfind(ctx->backend,
+                                     ctx->relative_uri,
+                                     DEPTH_0, WEBDAV_PROPFIND_ALLPROP,
+                                     _util_webdav_backend_single_propfind_uthr,
+                                     ctx));
+  UTHR_RECEIVE_EVENT(WEBDAV_PROPFIND_DONE_EVENT,
+                     WebdavPropfindDoneEvent, propfind_done_ev);
+  if (propfind_done_ev->error) {
+    ctx->ev.error = propfind_done_ev->error;
+    goto done;
+  }
+
+  struct webdav_propfind_entry *const ent = linked_list_peekleft(propfind_done_ev->entries);
+  ctx->ev.error = WEBDAV_ERROR_NONE;
+  ctx->ev.entry = *ent;
+
+  linked_list_free(propfind_done_ev->entries,
+                   (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
+
+ done:
+  UTHR_RETURN(ctx,
+              ctx->cb(UTIL_WEBDAV_BACKEND_SINGLE_PROPFIND_DONE_EVENT,
+                      &ctx->ev, ctx->cb_ud));
+
+  UTHR_FOOTER();
+}
+
+static void
+util_webdav_backend_single_propfind(webdav_backend_t backend,
+                                    const char *relative_uri,
+                                    event_handler_t cb, void *cb_ud) {
+  UTHR_CALL4(_util_webdav_backend_single_propfind_uthr,
+             UtilWebdavBackendSinglePropfindCtx,
+             .backend = backend,
+             .relative_uri = relative_uri,
+             .cb = cb,
+             .cb_ud = cb_ud);
+}
+
 #define REQUEST_URI_IS_COLLECTION_DONE_EVENT GENERIC_EVENT
 
 typedef struct {
@@ -175,29 +244,25 @@ UTHR_DEFINE(_request_uri_is_collection_uthr) {
     goto done;
   }
 
-
   UTHR_YIELD(ctx,
-             webdav_backend_propfind(ctx->hc->serv->fs,
-                                     ctx->path,
-                                     DEPTH_0, WEBDAV_PROPFIND_ALLPROP,
-                                     _request_uri_is_collection_uthr, ctx));
-  UTHR_RECEIVE_EVENT(WEBDAV_PROPFIND_DONE_EVENT, WebdavPropfindDoneEvent, propfind_done_ev);
+             util_webdav_backend_single_propfind(ctx->hc->serv->fs, ctx->path,
+                                                 _request_uri_is_collection_uthr, ctx));
+  UTHR_RECEIVE_EVENT(UTIL_WEBDAV_BACKEND_SINGLE_PROPFIND_DONE_EVENT,
+                     UtilWebdavBackendSinglePropfindDoneEvent,
+                     propfind_done_ev);
   if (propfind_done_ev->error) {
     ctx->ev.error = propfind_done_ev->error;
     goto done;
   }
 
-  struct webdav_propfind_entry *const ent = linked_list_peekleft(propfind_done_ev->entries);
   ctx->ev.error = WEBDAV_ERROR_NONE;
-  ctx->ev.is_collection = ent->is_collection;
-
-  linked_list_free(propfind_done_ev->entries,
-                   (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
+  ctx->ev.is_collection = propfind_done_ev->entry.is_collection;
 
  done:
   free(ctx->path);
   UTHR_RETURN(ctx,
-              ctx->cb(REQUEST_URI_IS_COLLECTION_DONE_EVENT, &ctx->ev, ctx->cb_ud));
+              ctx->cb(REQUEST_URI_IS_COLLECTION_DONE_EVENT,
+                      &ctx->ev, ctx->cb_ud));
 
   UTHR_FOOTER();
 }
@@ -206,7 +271,7 @@ UTHR_DEFINE(_request_uri_is_collection_uthr) {
 static void
 request_uri_is_collection(struct handler_context *hc,
                           event_handler_t cb, void *cb_ud) {
-  UTHR_CALL2(_request_uri_is_collection_uthr, RequestUriIsCollectionCtx,
+  UTHR_CALL3(_request_uri_is_collection_uthr, RequestUriIsCollectionCtx,
              .hc = hc,
              .cb = cb,
              .cb_ud = cb_ud);
@@ -765,6 +830,17 @@ UTHR_DEFINE(request_proc) {
     }
   }
 
+  /* check if path isn't in our namespace so we can return 404 */
+  if (!is_relative_uri_parent(hc->rhs.uri, hc->serv->internal_root) &&
+      !is_relative_uri_parent(hc->serv->internal_root, hc->rhs.uri) &&
+      !str_equals(hc->serv->internal_root, hc->rhs.uri)) {
+    UTHR_YIELD(hc,
+               http_request_string_response(hc->rh,
+                                            HTTP_STATUS_CODE_NOT_FOUND,
+                                            "",
+                                            request_proc, hc));
+    goto done;
+  }
 
   /* TODO: move to hash-based dispatch where each method
      maps to a different bucket
@@ -1097,10 +1173,25 @@ webdav_get_request_size_hint(webdav_get_request_ctx_t hc,
   bool success_set_code = http_response_set_code(&hc->resp, HTTP_STATUS_CODE_OK);
   ASSERT_TRUE(success_set_code);
 
+  assert(size <= ULONG_MAX);
   bool success_add_header =
     http_response_add_header(&hc->resp,
-                             HTTP_HEADER_CONTENT_LENGTH, "%zu", size);
+                             HTTP_HEADER_CONTENT_LENGTH, "%lu",
+                             (unsigned long) size);
   ASSERT_TRUE(success_add_header);
+
+  if (ctx->entry.modified_time != INVALID_WEBDAV_RESOURCE_TIME) {
+    char time_buf[400];
+    bool success_generate =
+      generate_http_date(time_buf, sizeof(time_buf),
+                         ctx->entry.modified_time);
+    ASSERT_TRUE(success_generate);
+    bool success_add_last_modified_header =
+      http_response_add_header(&hc->resp,
+                               HTTP_HEADER_LAST_MODIFIED,
+                               "%s", time_buf);
+    ASSERT_TRUE(success_add_last_modified_header);
+  }
 
   ctx->set_size_hint = true;
   WebdavGetRequestSizeHintDoneEvent ev = {.error = WEBDAV_ERROR_NONE};
@@ -1142,12 +1233,59 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
 
   ctx->resource_uri = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->resource_uri) {
+    log_info("Error while getting resourece uri for request: \"%s\"",
+             hc->rhs.uri);
     code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
 
+  /* TODO: it might be better to put this logic in the backend */
+  CRYIELD(ctx->pos,
+          util_webdav_backend_single_propfind(hc->serv->fs,
+                                              ctx->resource_uri,
+                                              handle_get_request, ud));
+  assert(ev_type == UTIL_WEBDAV_BACKEND_SINGLE_PROPFIND_DONE_EVENT);
+  UtilWebdavBackendSinglePropfindDoneEvent *propfind_done_event = ev;
+  if (propfind_done_event->error) {
+    log_info("Error while getting properties for resource \"%s\"",
+             ctx->resource_uri);
+    code = propfind_done_event->error == WEBDAV_ERROR_DOES_NOT_EXIST
+      ? HTTP_STATUS_CODE_NOT_FOUND
+      : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  ctx->entry = propfind_done_event->entry;
+
+  const char *if_modified_since_value =
+    http_get_header_value(&hc->rhs, HTTP_HEADER_IF_MODIFIED_SINCE);
+  if (ctx->entry.modified_time != INVALID_WEBDAV_RESOURCE_TIME &&
+      if_modified_since_value) {
+    time_t if_modified_since_time_value;
+    bool success_parse =
+      parse_http_date(if_modified_since_value,
+                      &if_modified_since_time_value);
+    if (!success_parse) {
+      log_info("Bad if-modified-since header: \"%s\"",
+               if_modified_since_value);
+      code = HTTP_STATUS_CODE_BAD_REQUEST;
+      goto done;
+    }
+
+    log_debug("If modified since: %lu vs %lu",
+              (unsigned long) ctx->entry.modified_time,
+              (unsigned long) if_modified_since_time_value);
+
+    if (ctx->entry.modified_time <= if_modified_since_time_value) {
+      /* hasn't been modified recently, allow the request to skip */
+      code = HTTP_STATUS_CODE_NOT_MODIFIED;
+      goto done;
+    }
+  }
+
   CRYIELD(ctx->pos,
           webdav_backend_get(hc->serv->fs, ctx->resource_uri, hc));
+  ctx->amt_sent = 0;
   while (ev_type != WEBDAV_GET_REQUEST_END_EVENT) {
     assert(ev_type == WEBDAV_GET_REQUEST_WRITE_EVENT);
     ctx->rwev = *((WebdavGetRequestWriteEvent *) ev);
@@ -1180,6 +1318,7 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
       goto loop_error;
     }
 
+    ctx->amt_sent += ctx->rwev.nbyte;
     WebdavGetRequestWriteDoneEvent ev1 = {.error = WEBDAV_ERROR_NONE};
     if (false) {
     loop_error:
@@ -1193,6 +1332,9 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
 
   switch (request_end_ev->error){
   case WEBDAV_ERROR_NONE:
+    assert(ctx->amt_sent <= ULONG_MAX);
+    log_debug("Sent %lu bytes of \"%s\"",
+              ctx->amt_sent, ctx->resource_uri);
     code = HTTP_STATUS_CODE_OK;
     break;
   case WEBDAV_ERROR_IS_COL:
@@ -1494,7 +1636,8 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
  done:
   assert(status_code);
   log_debug("Response with status code: %d", status_code);
-  log_debug("Outgoing lock response XML (%lld bytes):");
+  log_debug("Outgoing lock response XML (%lu bytes):",
+            (unsigned long) ctx->response_body_len);
   pretty_print_xml(ctx->response_body, ctx->response_body_len, LOG_DEBUG);
 
   free(ctx->request_body);
@@ -1763,6 +1906,12 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   ctx->out_buf = NULL;
   ctx->out_buf_size = 0;
 
+  if (is_relative_uri_parent(hc->rhs.uri, hc->serv->internal_root)) {
+    log_debug("URI is a parent of us and we don't allow PROPFIND");
+    status_code = HTTP_STATUS_CODE_METHOD_NOT_ALLOWED;
+    goto done;
+  }
+
   ctx->request_relative_uri = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->request_relative_uri) {
     log_info("couldn't create request relative uri: %s",
@@ -1869,9 +2018,9 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
 
   assert(status_code);
   log_debug("Responding with status: %d", status_code);
-  assert(ctx->out_buf_size <= INT_MAX);
-  log_debug("XML response will be: (%d bytes)",
-            (int) ctx->out_buf_size);
+  assert(ctx->out_buf_size <= ULONG_MAX);
+  log_debug("XML response will be: (%lu bytes)",
+            (unsigned long) ctx->out_buf_size);
   pretty_print_xml(ctx->out_buf, ctx->out_buf_size, LOG_DEBUG);
 
   CRYIELD(ctx->pos,
@@ -1931,6 +2080,7 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
  done:
   assert(status_code);
 
+  assert(hc->sub.proppatch.response_body_size <= INT_MAX);
   log_debug("XML response will be: (%d bytes)",
             (int) hc->sub.proppatch.response_body_size);
   pretty_print_xml(hc->sub.proppatch.response_body,

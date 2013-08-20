@@ -121,6 +121,8 @@ struct handler_context {
       char *resource_uri;
       bool set_size_hint;
       bool sent_headers;
+      size_t amt_sent;
+      struct webdav_propfind_entry entry;
       WebdavGetRequestWriteEvent rwev;
     } get;
     struct lock_context {

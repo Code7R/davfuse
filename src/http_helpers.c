@@ -2,6 +2,9 @@
 
 #include <assert.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 
 #include "coroutine_io.h"
 #include "http_server.h"
@@ -331,5 +334,115 @@ encode_urlpath(const char *urlpath, size_t len) {
 
   assert(new_pos == new_size);
   toret[new_pos] = '\0';
+  return toret;
+}
+
+bool
+generate_http_date(char *buf, size_t buf_size, time_t time_) {
+  struct tm *const tm_ = gmtime(&time_);
+  const char *fmt = "%a, %d %b %Y %H:%M:%S GMT";
+  size_t num_chars = strftime(buf, buf_size, fmt, tm_);
+  return num_chars && num_chars < buf_size;
+}
+
+/* NB: this function is hell */
+static time_t
+my_timegm(struct tm *tm) {
+  enum {
+    /* XXX: HARDCODED TO CALIFORNIA */
+    GM_OFFSET=7*3600,
+  };
+  time_t ret = mktime(tm);
+  if (ret == (time_t) -1) {
+    return ret;
+  }
+
+  return ret - GM_OFFSET;
+}
+
+bool
+parse_http_date(const char *buf, time_t *time_) {
+  char day[4], mon[4];
+
+  int mday, year, hour, minute, second;
+  int ret_sscanf = sscanf(buf, "%3s, %02d %3s %d %02d:%02d:%02d GMT",
+                          day, &mday, mon, &year,
+                          &hour, &minute, &second);
+  if (ret_sscanf != 7) {
+    return false;
+  }
+
+  if (mday < 0 || mday > 31 ||
+      hour < 0 || hour > 23 ||
+      minute < 0 || minute > 59 ||
+      second < 0 || second > 60) {
+    return false;
+  }
+
+  int dmon;
+  if (str_equals(mon, "Jan")) {
+    dmon = 0;
+  }
+  else if (str_equals(mon, "Feb")) {
+    dmon = 1;
+  }
+  else if (str_equals(mon, "Mar")) {
+    dmon = 2;
+  }
+  else if (str_equals(mon, "Apr")) {
+    dmon = 3;
+  }
+  else if (str_equals(mon, "May")) {
+    dmon = 4;
+  }
+  else if (str_equals(mon, "Jun")) {
+    dmon = 5;
+  }
+  else if (str_equals(mon, "Jul")) {
+    dmon = 6;
+  }
+  else if (str_equals(mon, "Aug")) {
+    dmon = 7;
+  }
+  else if (str_equals(mon, "Sep")) {
+    dmon = 8;
+  }
+  else if (str_equals(mon, "Oct")) {
+    dmon = 9;
+  }
+  else if (str_equals(mon, "Nov")) {
+    dmon = 10;
+  }
+  else if (str_equals(mon, "Dec")) {
+    dmon = 11;
+  }
+  else {
+    return false;
+  }
+
+  struct tm time_tm = {
+    .tm_sec = second,
+    .tm_min = minute,
+    .tm_hour = hour,
+    .tm_mday = mday,
+    .tm_mon = dmon,
+    .tm_year = year - 1900,
+    .tm_isdst = -1,
+  };
+
+  *time_ = my_timegm(&time_tm);
+
+  bool toret;
+  if (*time_ == (time_t) -1) {
+    toret = false;
+  }
+  else {
+    toret = true;
+  }
+
+  if (!toret) {
+    log_debug("WHATS GOINS ON: %s", strerror(errno));
+  }
+
   return toret;
 }

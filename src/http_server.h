@@ -2,6 +2,7 @@
 #define HTTP_SERVER_H
 
 #include <stdint.h>
+#include <time.h>
 
 #include "c_util.h"
 #include "events.h"
@@ -15,7 +16,9 @@ extern "C" {
 #ifndef _IS_HTTP_SERVER__C
 extern const char *const HTTP_HEADER_CONTENT_LENGTH;
 extern const char *const HTTP_HEADER_CONTENT_TYPE;
+extern const char *const HTTP_HEADER_LAST_MODIFIED;
 extern const char *const HTTP_HEADER_HOST;
+extern const char *const HTTP_HEADER_IF_MODIFIED_SINCE;
 #endif
 
 enum {
@@ -65,6 +68,7 @@ typedef enum {
   HTTP_STATUS_CODE_NO_CONTENT=204,
   HTTP_STATUS_CODE_MULTI_STATUS=207,
   HTTP_STATUS_CODE_MOVED_PERMANENTLY=301,
+  HTTP_STATUS_CODE_NOT_MODIFIED=304,
   HTTP_STATUS_CODE_BAD_REQUEST=400,
   HTTP_STATUS_CODE_FORBIDDEN=403,
   HTTP_STATUS_CODE_NOT_FOUND=404,
@@ -96,6 +100,7 @@ typedef struct {
   /* state */
   int i;
   int c;
+  time_t header_read_start;
   size_t ei;
   size_t parsed;
   char tmpbuf[1024];
@@ -130,7 +135,6 @@ typedef enum {
   HTTP_REQUEST_READ_STATE_READING_HEADERS,
   HTTP_REQUEST_READ_STATE_READ_HEADERS,
   HTTP_REQUEST_READ_STATE_READING,
-  HTTP_REQUEST_READ_STATE_DONE,
 } http_request_read_state_t;
 
 typedef enum {
@@ -138,7 +142,6 @@ typedef enum {
   HTTP_REQUEST_WRITE_STATE_WRITING_HEADERS,
   HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS,
   HTTP_REQUEST_WRITE_STATE_WRITING,
-  HTTP_REQUEST_WRITE_STATE_DONE,
 } http_request_write_state_t;
 
 typedef struct {
@@ -228,6 +231,7 @@ http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
     SCS(HTTP_STATUS_CODE_NO_CONTENT, "No Content");
     SCS(HTTP_STATUS_CODE_MULTI_STATUS, "Multi-Status");
     SCS(HTTP_STATUS_CODE_MOVED_PERMANENTLY, "Moved Permanently");
+    SCS(HTTP_STATUS_CODE_NOT_MODIFIED, "Not Modified");
     SCS(HTTP_STATUS_CODE_BAD_REQUEST, "Bad Request");
     SCS(HTTP_STATUS_CODE_FORBIDDEN, "Forbidden");
     SCS(HTTP_STATUS_CODE_NOT_FOUND, "Not Found");

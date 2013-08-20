@@ -44,7 +44,6 @@ typedef struct _http_request_context {
   http_request_read_state_t read_state;
   size_t out_content_length;
   size_t bytes_written;
-  int last_error_number;
   bool is_chunked_request;
   union {
     struct chunked_read_persist_ctx {
@@ -53,6 +52,7 @@ typedef struct _http_request_context {
       size_t chunk_size;
       size_t chunk_read;
       size_t amt_parsed;
+      bool is_over;
     } chunked_coro_ctx;
     struct content_length_read_persist_ctx {
       size_t content_length;
@@ -79,6 +79,8 @@ typedef struct _http_connection {
   UTHR_CTX_BASE;
   struct _http_server *server;
   http_backend_handle_t handle;
+  time_t conn_end;
+  int last_error_number;
   ReadBuffer f;
   /* these might become per-request,
      right now we only do one request at a time,
@@ -96,6 +98,8 @@ const char *const HTTP_HEADER_CONTENT_LENGTH = "Content-Length";
 const char *const HTTP_HEADER_CONTENT_TYPE = "Content-Type";
 const char *const HTTP_HEADER_DATE = "Date";
 const char *const HTTP_HEADER_HOST = "Host";
+const char *const HTTP_HEADER_IF_MODIFIED_SINCE = "If-Modified-Since";
+const char *const HTTP_HEADER_LAST_MODIFIED = "Last-Modified";
 const char *const HTTP_HEADER_TRANSFER_ENCODING = "Transfer-Encoding";
 
 /* static forward decls */
@@ -106,6 +110,24 @@ EVENT_HANDLER_DECLARE(client_coroutine);
 static
 UTHR_DECLARE(c_get_request);
 
+/* TODO: make these runtime configurable,
+   we set them really high because this is on the localhost */
+enum {
+  MINIMUM_CONN_TIME=3600,
+  MAXIMUM_CONN_TIME=3600,
+};
+
+static PURE_FUNCTION const char *
+_get_header_value(const struct _header_pair *headers, size_t num_headers, const char *header_name) {
+  /* headers can only be ascii */
+  for (size_t i = 0; i < num_headers; ++i) {
+    if (ascii_strcaseequal(header_name, headers[i].name)) {
+      return headers[i].value;
+    }
+  }
+
+  return NULL;
+}
 
 /* small layer of indirection */
 typedef HttpBackendWriteDoneEvent HTTPConnectionWriteDoneEvent;
@@ -122,6 +144,31 @@ _http_connection_write(HTTPConnection *conn, const void *buf, size_t nbyte,
                        event_handler_t cb, void *ud){
   return http_backend_write(conn->server->backend, conn->handle,
                             buf, nbyte, cb, ud);
+}
+
+static bool
+_http_connection_is_close(HTTPConnection *conn) {
+  const char *connection_header_value =
+    _get_header_value(conn->rctx.rh.headers,
+                      conn->rctx.rh.num_headers,
+                      HTTP_HEADER_CONNECTION);
+  return (connection_header_value &&
+          str_case_startswith(connection_header_value, "close"));
+}
+
+static time_t
+_http_connection_time_left(HTTPConnection *conn) {
+  /* XXX: not using monotonic timer */
+  const time_t conn_end = conn->conn_end;
+  const time_t current_time = time(NULL);
+  return conn_end - current_time;
+}
+
+static bool
+_http_connection_close_condition(HTTPConnection *conn) {
+  return (conn->last_error_number ||
+          _http_connection_is_close(conn) ||
+          _http_connection_time_left(conn) < 0);
 }
 
 http_server_t
@@ -180,7 +227,7 @@ http_request_read_headers(http_request_handle_t rh,
     return cb(HTTP_REQUEST_READ_HEADERS_DONE_EVENT, &read_headers_ev, cb_ud);
   }
 
-  log_debug("FD %p Reading header", rctx->conn);
+  log_debug("conn %p Reading header", rctx->conn);
 
   /* read out client http request */
   rctx->read_state = HTTP_REQUEST_READ_STATE_READING_HEADERS;
@@ -202,7 +249,7 @@ EVENT_HANDLER_DEFINE(_handle_request_read, ev_type, ev, ud) {
 
   /* update request state */
   rctx->persist_ctx.content_length_read.bytes_read += c_read_done_ev->nbyte;
-  rctx->last_error_number = c_read_done_ev->error_number;
+  rctx->conn->last_error_number = c_read_done_ev->error_number;
   rctx->read_state = HTTP_REQUEST_READ_STATE_READ_HEADERS;
 
   HTTPRequestReadDoneEvent read_done_ev = {
@@ -348,7 +395,7 @@ EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
         .nbyte = 0,
       };
 
-      rctx->last_error_number = 1;
+      rctx->conn->last_error_number = 1;
       CRYIELD(cctx->pos,
               tctx->cb(HTTP_REQUEST_READ_DONE_EVENT, &read_done_ev, tctx->cb_ud));
       assert(ev_type == GENERIC_EVENT);
@@ -359,6 +406,7 @@ EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
   /* no more data, just keep returning EOF */
   log_debug("Chunked request is over");
   while (true) {
+    cctx->is_over = true;
     rctx->read_state = HTTP_REQUEST_READ_STATE_READ_HEADERS;
 
     HTTPRequestReadDoneEvent read_done_ev = {
@@ -420,18 +468,6 @@ http_request_read(http_request_handle_t rh,
   }
 }
 
-static PURE_FUNCTION const char *
-_get_header_value(const struct _header_pair *headers, size_t num_headers, const char *header_name) {
-  /* headers can only be ascii */
-  for (size_t i = 0; i < num_headers; ++i) {
-    if (ascii_strcaseequal(header_name, headers[i].name)) {
-      return headers[i].value;
-    }
-  }
-
-  return NULL;
-}
-
 static
 UTHR_DEFINE(_http_request_write_headers_coroutine) {
   UTHR_HEADER(WriteHeadersState, whs);
@@ -459,17 +495,17 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
 #define EMITS(c) EMITN(c, strnlen(c, sizeof(c)))
 
   /* output response code */
-  /* TODO: consider not using malloc/asprintf here */
-  int ret = snprintf(whs->response_line,
-		     sizeof(whs->response_line),
-		     "HTTP/1.1 %d %s\r\n",
-		     whs->response_headers->code,
-		     whs->response_headers->message);
+  const int ret = snprintf(whs->response_line,
+                           sizeof(whs->response_line),
+                           "HTTP/1.1 %d %s\r\n",
+                           whs->response_headers->code,
+                           whs->response_headers->message);
   if (ret < 0 || (size_t) ret >= sizeof(whs->response_line)) {
     myerrno = ENOMEM;
     goto done;
   }
-  log_debug("Writing response, code: %d, message: %s",
+  log_debug("conn %p Writing HTTP response, %d %s",
+            whs->request_context->conn,
             whs->response_headers->code,
             whs->response_headers->message);
   EMITN(whs->response_line, ret);
@@ -480,26 +516,57 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
   const char *const fmt = "Date: %a, %d %b %Y %H:%M:%S GMT\r\n";
   const int ret_sprint2 =
     strftime(whs->response_line, sizeof(whs->response_line), fmt, tm_);
-  if (ret_sprint2 < 0) {
+  if (!ret_sprint2) {
     myerrno = ENOMEM;
     goto done;
   }
+  log_debug("conn %p Writing response header: %.*s",
+            whs->request_context->conn,
+            ret_sprint2 - 2, whs->response_line);
   EMITN(whs->response_line, ret_sprint2);
 
   if (!_get_header_value(whs->response_headers->headers,
                          whs->response_headers->num_headers,
                          "Server")) {
+    log_debug("conn %p Writing response header: Server: Rian's HTTP Server",
+              whs->request_context->conn);
     EMITS("Server: Rian's HTTP Server\r\n");
   }
 
+  time_t time_left;
+  if (_http_connection_is_close(whs->request_context->conn) ||
+      (time_left = _http_connection_time_left(whs->request_context->conn)) < 0) {
+    EMITS("Connection: close\r\n");
+  }
+  else {
+    const time_t timeout = min(time_left, MINIMUM_CONN_TIME);
+    const time_t max_timeout = time_left;
+    assert(timeout >= 0 && timeout <= INT_MAX);
+    assert(max_timeout >= 0 && max_timeout <= INT_MAX);
+    const int ret_sprintf3 =
+      snprintf(whs->response_line, sizeof(whs->response_line),
+               "Keep-Alive: timeout=%d, max=%d\r\n",
+               (int) timeout, (int) max_timeout);
+    if (ret_sprintf3 < 0 ||
+        ret_sprintf3 == sizeof(whs->response_line)) {
+      myerrno = ENOMEM;
+      goto done;
+    }
+    log_debug("conn %p Writing response header: %.*s",
+              whs->request_context->conn,
+              ret_sprintf3 - 2, whs->response_line);
+    EMITN(whs->response_line, ret_sprintf3);
 
-  /* TODO: support persistent connections */
-  EMIT("Connection: close\r\n");
+    log_debug("conn %p Writing response header: Connection: Keep-Alive",
+              whs->request_context->conn);
+    EMITS("Connection: Keep-Alive\r\n");
+  }
 
   /* output each header */
   for (whs->header_idx = 0; whs->header_idx < whs->response_headers->num_headers;
        ++whs->header_idx) {
-    log_debug("Writing response header: %s: %s",
+    log_debug("conn %p Writing response header: %s: %s",
+              whs->request_context->conn,
               whs->response_headers->headers[whs->header_idx].name,
               whs->response_headers->headers[whs->header_idx].value);
     EMITS(whs->response_headers->headers[whs->header_idx].name);
@@ -513,7 +580,7 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
 
  done:
   if (myerrno) {
-    log_warning("Error while writing headers to client %p",
+    log_warning("conn %p Error while writing headers to client",
                 whs->request_context->conn);
   }
 
@@ -522,7 +589,7 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
     .request_handle = whs->request_context,
     .err = myerrno ? HTTP_GENERIC_ERROR : HTTP_SUCCESS,
   };
-  whs->request_context->last_error_number = myerrno;
+  whs->request_context->conn->last_error_number = myerrno;
   UTHR_RETURN(whs,
               whs->cb(HTTP_REQUEST_WRITE_HEADERS_DONE_EVENT,
                       &write_headers_ev, whs->cb_ud));
@@ -586,7 +653,7 @@ http_request_write_headers(http_request_handle_t rh,
   if (false) {
     HTTPRequestWriteHeadersDoneEvent write_headers_ev;
   error:
-    rctx->last_error_number = 1;
+    rctx->conn->last_error_number = 1;
     write_headers_ev = (HTTPRequestWriteHeadersDoneEvent) {
       .request_handle = rh,
       /* TODO set correct error */
@@ -610,13 +677,13 @@ EVENT_HANDLER_DEFINE(_handle_write_done, ev_type, ev, ud) {
   HTTPConnectionWriteDoneEvent *write_all_done_event = ev;
 
   if (write_all_done_event->error) {
-    log_warning("ON conn: %p, http_request_write failed",
+    log_warning("conn %p, http_request_write failed",
                 rws->request_context->conn);
-    rws->request_context->last_error_number = 1;
+    rws->request_context->conn->last_error_number = 1;
   }
   else {
     rws->request_context->bytes_written += write_all_done_event->nbyte;
-    rws->request_context->last_error_number = 0;
+    rws->request_context->conn->last_error_number = 0;
   }
 
   rws->request_context->write_state = HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS;
@@ -642,7 +709,7 @@ http_request_write(http_request_handle_t rh,
     /* TODO: right now have no facility to do short writes,
        could return write amount when done
     */
-    log_warning("ON conn: %p, "
+    log_warning("conn %p, "
                 "http_request_write will not do a short write, "
                 "request to write less. wanted to write %d, "
                 "but there was only %d left to write",
@@ -741,18 +808,19 @@ static
 UTHR_DEFINE(client_coroutine) {
   UTHR_HEADER(HTTPConnection, cc);
 
-  while (true) {
+  log_debug("conn %p new connection!", cc);
+  cc->conn_end = time(NULL) + MAXIMUM_CONN_TIME;
+
+  while (!_http_connection_close_condition(cc)) {
     /* initialize the request context */
     cc->rctx = (HTTPRequestContext) {
       .conn = cc,
-      .read_state = HTTP_REQUEST_READ_STATE_NONE,
-      .write_state = HTTP_REQUEST_WRITE_STATE_NONE,
-      .last_error_number = 0,
     };
 
     /* TODO: Prevent against "slowloris" style attacks
        with clients who send their headers very very slowly:
        give some timeout to total request processing
+       XXX: even more now because of indefinite keep-alive
      */
 
     /* create request event, we can do this on the stack
@@ -761,43 +829,50 @@ UTHR_DEFINE(client_coroutine) {
       .server = cc->server,
       .request_handle = &cc->rctx,
     };
+    log_debug("conn %p starting request", cc);
     UTHR_YIELD(cc,
                cc->server->handler(HTTP_NEW_REQUEST_EVENT,
                                    &new_request_ev,
                                    cc->server->ud));
     assert(UTHR_EVENT_TYPE() == HTTP_END_REQUEST_EVENT);
-    /* we'll come back when `http_request_end` is called,
-       or there is some error */
+    log_debug("conn %p request is over!", cc);
 
     /* read headers if they were ignored */
-    if (!cc->rctx.last_error_number &&
+    if (!_http_connection_close_condition(cc) &&
         cc->rctx.read_state == HTTP_REQUEST_READ_STATE_NONE) {
-      static HTTPRequestHeaders dirty_headers;
+      log_debug("conn %p handler didn't read headers...", cc);
       UTHR_YIELD(cc,
-                 http_request_read_headers(&cc->rctx, &dirty_headers,
+                 http_request_read_headers(&cc->rctx, &cc->rctx.rh,
                                            client_coroutine, cc));
       assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_READ_HEADERS_DONE_EVENT);
     }
 
     /* read out all data if it was ignored */
-    if (!cc->rctx.last_error_number &&
+    if (!_http_connection_close_condition(cc) &&
         cc->rctx.read_state == HTTP_REQUEST_READ_STATE_READ_HEADERS) {
-      while (true) {
+      if (cc->rctx.is_chunked_request
+          ? !cc->rctx.persist_ctx.chunked_coro_ctx.is_over
+          : (cc->rctx.persist_ctx.content_length_read.bytes_read <
+             cc->rctx.persist_ctx.content_length_read.content_length)) {
+        log_debug("conn %p handler didn't read entire body...", cc);
+      }
+      while (!_http_connection_close_condition(cc)) {
         UTHR_YIELD(cc,
                    http_request_read(&cc->rctx, cc->spare.buffer,
                                      sizeof(cc->spare.buffer),
                                      client_coroutine, cc));
         assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_READ_DONE_EVENT);
         HTTPRequestReadDoneEvent *read_done_ev = UTHR_EVENT();
-        if (read_done_ev->err || !read_done_ev->nbyte) {
+        if (!read_done_ev->err && !read_done_ev->nbyte) {
           break;
         }
       }
     }
 
     /* clean up write side of request */
-    if (!cc->rctx.last_error_number &&
+    if (!_http_connection_close_condition(cc) &&
         cc->rctx.write_state == HTTP_REQUEST_WRITE_STATE_NONE) {
+      log_debug("conn %p handler didn't send a response...", cc);
       UTHR_YIELD(cc,
                  _write_out_internal_server_error(&cc->rctx,
                                                   client_coroutine, cc));
@@ -805,9 +880,13 @@ UTHR_DEFINE(client_coroutine) {
     }
 
     /* write out rest of garbage if request ended prematurely */
-    if (!cc->rctx.last_error_number &&
+    if (!_http_connection_close_condition(cc) &&
         cc->rctx.write_state == HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS) {
-      while (cc->rctx.bytes_written < cc->rctx.out_content_length) {
+      if (cc->rctx.bytes_written < cc->rctx.out_content_length) {
+        log_debug("conn %p handler didn't finish response", cc);
+      }
+      while (!_http_connection_close_condition(cc) &&
+             cc->rctx.bytes_written < cc->rctx.out_content_length) {
         /* initted to zero because static */
         static char bytes[4096];
         /* just writing bytes */
@@ -818,28 +897,11 @@ UTHR_DEFINE(client_coroutine) {
                                       cc->rctx.out_content_length - cc->rctx.bytes_written,
                                       client_coroutine, cc));
         assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_WRITE_DONE_EVENT);
-        HTTPRequestWriteDoneEvent *write_done_ev = UTHR_EVENT();
-        /* bytes_written is incremented in http_request_write */
-        if (write_done_ev->err) {
-          break;
-        }
       }
-    }
-
-    /* TODO: support persistent connections */
-    break;
-
-    if (cc->rctx.last_error_number) {
-      /* break if there was an error */
-      break;
-    }
-    else {
-      cc->rctx.read_state = HTTP_REQUEST_READ_STATE_DONE;
-      cc->rctx.write_state = HTTP_REQUEST_WRITE_STATE_DONE;
     }
   }
 
-  log_debug("Client done, closing conn %p", cc);
+  log_debug("conn %p Client done, closing conn", cc);
   bool success_close = http_backend_close(cc->server->backend, cc->handle);
   if (!success_close) {
     abort();
@@ -944,10 +1006,23 @@ UTHR_DEFINE(c_get_request) {
   }                                                             \
   while (false)
 
+  state->header_read_start = time(NULL);
+
   PARSEVAR(state->request_headers->method, match_token);
+
+  /* TODO: we need better connection termination in general
+     but put it here since this is the most common place,
+     in theory all network IO should have a timeout */
+  if (time(NULL) - state->header_read_start >= MINIMUM_CONN_TIME ||
+      _http_connection_close_condition(state->rh->conn)) {
+    log_error("Connection! Timeout!");
+    goto error;
+  }
+
   EXPECT(' ');
 
-  log_debug("Got method '%s'", state->request_headers->method);
+  log_debug("conn %p Got method '%s'",
+            state->rh->conn, state->request_headers->method);
 
   /* request-uri = "*" | absoluteURI | abs_path | authority */
   /* we don't parse super intelligently here because
@@ -956,7 +1031,8 @@ UTHR_DEFINE(c_get_request) {
   PARSEVAR(state->request_headers->uri, match_non_null_or_space);
   EXPECT(' ');
 
-  log_debug("Got uri '%s'", state->request_headers->uri);
+  log_debug("conn %p Got uri '%s'",
+            state->rh->conn, state->request_headers->uri);
 
   EXPECTS("HTTP/");
   PARSEINTVAR(state->request_headers->major_version);
@@ -964,7 +1040,8 @@ UTHR_DEFINE(c_get_request) {
   PARSEINTVAR(state->request_headers->minor_version);
   EXPECTS("\r\n");
 
-  log_debug("Got version '%d.%d'",
+  log_debug("conn %p Got version '%d.%d'",
+            state->rh->conn,
             state->request_headers->major_version,
             state->request_headers->minor_version);
 
@@ -1129,7 +1206,7 @@ UTHR_DEFINE(c_get_request) {
   };
   /* TODO: use real error numbers or just pass http errors through
      last_error_number */
-  state->rh->last_error_number = err == HTTP_SUCCESS ? 0 : 1;
+  state->rh->conn->last_error_number = err == HTTP_SUCCESS ? 0 : 1;
   UTHR_RETURN(state,
               state->cb(HTTP_REQUEST_READ_HEADERS_DONE_EVENT,
                         &read_headers_events,

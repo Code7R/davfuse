@@ -51,4 +51,10 @@ decode_urlpath(const char *urlpath, size_t len);
 char *
 encode_urlpath(const char *urlpath, size_t len);
 
+bool
+generate_http_date(char *buf, size_t buf_size, time_t time);
+
+bool
+parse_http_date(const char *buf, time_t *time);
+
 #endif /* HTTP_HELPERS_H */

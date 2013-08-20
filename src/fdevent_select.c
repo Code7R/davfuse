@@ -148,20 +148,19 @@ fdevent_select_main_loop(fdevent_select_loop_t loop) {
     while (ll) {
       if (!ll->active) {
         FDEventLink *tmpll = ll->next;
-        log_debug("Freeing fd watch: %d (%p)", ll->ew.fd, ll);
         _actually_free_link(loop, ll);
         ll = tmpll;
         continue;
       }
 
-      if (ll->ew.events.read) {
-        log_debug("Adding fd %d (%p) to read set", ll->ew.fd, ll);
+      if (ll->ew.events.read && !FD_ISSET(ll->ew.fd, &readfds)) {
+        log_debug("Adding fd %d to read set", ll->ew.fd);
 	FD_SET(ll->ew.fd, &readfds);
         readfds_watched += 1;
       }
 
-      if (ll->ew.events.write) {
-        log_debug("Adding fd %d (%p) to write set", ll->ew.fd, ll);
+      if (ll->ew.events.write && !FD_ISSET(ll->ew.fd, &writefds)) {
+        log_debug("Adding fd %d to write set", ll->ew.fd);
 	FD_SET(ll->ew.fd, &writefds);
         writefds_watched += 1;
       }
