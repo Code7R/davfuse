@@ -489,7 +489,7 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
   if (!_get_header_value(whs->response_headers->headers,
                          whs->response_headers->num_headers,
                          "Server")) {
-    EMITS("Rian's HTTP Server");
+    EMITS("Server: Rian's HTTP Server\r\n");
   }
 
 
