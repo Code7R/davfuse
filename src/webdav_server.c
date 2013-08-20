@@ -133,7 +133,7 @@ public_uri_from_path(struct handler_context *hc, const char *path, bool is_colle
                                          ? ""
                                          : "/"),
                                       encoded_path + 1,
-                                      !path_is_root && is_collection
+                                      (!internal_root_is_root || !path_is_root) && is_collection
                                       ? "/"
                                       : "",
                                       NULL);
