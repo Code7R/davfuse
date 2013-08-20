@@ -3,6 +3,7 @@
 FDEVENT_IMPL = select
 FSTATAT_IMPL = emu
 SOCKETS_IMPL = posix
+LOG_PRINTER_IMPL = stdio
 FS_IMPL = posix
 FS_IMPL_EXTRA_SOURCES = fstatat_emu.c fd_utils.c
 FS_IMPL_EXTRA_INTERFACES = fstatat
@@ -27,7 +28,7 @@ CXX = clang++
 LINK_COMMAND = gcc -dynamiclib
 LINK_FLAG_NAME = -dylinker_install_name
 LINK_FLAG_VERSION_SCRIPT =
-CXX_LDFLAGS = -lc++
+CXX_LIBS = -lc++
 
 # libdavfuse file name
 LIBDAVFUSE_FILE_NAME = libfuse4x.2.dylib

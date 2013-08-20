@@ -39,9 +39,9 @@ typedef struct _http_server {
 
 typedef struct _http_request_context {
   struct _http_connection *conn;
-  HTTPRequestHeaders rh;
   http_request_write_state_t write_state;
   http_request_read_state_t read_state;
+  bool is_connection_close;
   size_t out_content_length;
   size_t bytes_written;
   bool is_chunked_request;
@@ -117,6 +117,8 @@ enum {
   MAXIMUM_CONN_TIME=3600,
 };
 
+static DEFINE_MIN(time_t);
+
 static PURE_FUNCTION const char *
 _get_header_value(const struct _header_pair *headers, size_t num_headers, const char *header_name) {
   /* headers can only be ascii */
@@ -148,12 +150,7 @@ _http_connection_write(HTTPConnection *conn, const void *buf, size_t nbyte,
 
 static bool
 _http_connection_is_close(HTTPConnection *conn) {
-  const char *connection_header_value =
-    _get_header_value(conn->rctx.rh.headers,
-                      conn->rctx.rh.num_headers,
-                      HTTP_HEADER_CONNECTION);
-  return (connection_header_value &&
-          str_case_startswith(connection_header_value, "close"));
+  return conn->rctx.is_connection_close;
 }
 
 static time_t
@@ -167,7 +164,6 @@ _http_connection_time_left(HTTPConnection *conn) {
 static bool
 _http_connection_close_condition(HTTPConnection *conn) {
   return (conn->last_error_number ||
-          _http_connection_is_close(conn) ||
           _http_connection_time_left(conn) < 0);
 }
 
@@ -536,10 +532,12 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
   time_t time_left;
   if (_http_connection_is_close(whs->request_context->conn) ||
       (time_left = _http_connection_time_left(whs->request_context->conn)) < 0) {
+    log_debug("conn %p Writing response header: Connection: close",
+              whs->request_context->conn);
     EMITS("Connection: close\r\n");
   }
   else {
-    const time_t timeout = min(time_left, MINIMUM_CONN_TIME);
+    const time_t timeout = min_time_t(time_left, MINIMUM_CONN_TIME);
     const time_t max_timeout = time_left;
     assert(timeout >= 0 && timeout <= INT_MAX);
     assert(max_timeout >= 0 && max_timeout <= INT_MAX);
@@ -811,7 +809,8 @@ UTHR_DEFINE(client_coroutine) {
   log_debug("conn %p new connection!", cc);
   cc->conn_end = time(NULL) + MAXIMUM_CONN_TIME;
 
-  while (!_http_connection_close_condition(cc)) {
+  while (!_http_connection_close_condition(cc) &&
+         !_http_connection_is_close(cc)) {
     /* initialize the request context */
     cc->rctx = (HTTPRequestContext) {
       .conn = cc,
@@ -842,7 +841,7 @@ UTHR_DEFINE(client_coroutine) {
         cc->rctx.read_state == HTTP_REQUEST_READ_STATE_NONE) {
       log_debug("conn %p handler didn't read headers...", cc);
       UTHR_YIELD(cc,
-                 http_request_read_headers(&cc->rctx, &cc->rctx.rh,
+                 http_request_read_headers(&cc->rctx, &cc->spare.req,
                                            client_coroutine, cc));
       assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_READ_HEADERS_DONE_EVENT);
     }
@@ -903,9 +902,9 @@ UTHR_DEFINE(client_coroutine) {
 
   log_debug("conn %p Client done, closing conn", cc);
   bool success_close = http_backend_close(cc->server->backend, cc->handle);
-  if (!success_close) {
-    abort();
-  }
+  /* XXX: this must succeed */
+  ASSERT_TRUE(success_close);
+
   /* NB: ordinarily we'd call UTHR_RETURN, but we need
      to free the memory first before calling the stop handler */
   HTTPServer *server = cc->server;
@@ -1103,6 +1102,11 @@ UTHR_DEFINE(c_get_request) {
   error:
     /* i see what you did there */
     err = HTTP_GENERIC_ERROR;
+  }
+
+  if (!err) {
+    state->rh->is_connection_close =
+      http_get_header_value(state->request_headers, HTTP_HEADER_CONNECTION);
   }
 
   /* deal with the request headers that dictate how the request body is tranferred */

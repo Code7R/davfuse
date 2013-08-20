@@ -325,11 +325,10 @@ http_backend_sockets_fdevent_close(http_backend_sockets_fdevent_t backend,
                                    http_backend_sockets_fdevent_handle_t handle) {
   UNUSED(backend);
   const int ret_shutdown = shutdown(handle, SD_BOTH);
-  if (ret_shutdown == SOCKET_ERROR) {
-    return false;
+  if (ret_shutdown == SOCKET_ERROR &&
+      last_socket_error() != SOCKET_ENOTCONN) {
+    log_warning("Error while trying to shutdown socket...");
   }
   const int ret_closesocket = closesocket(handle);
-  /* this currently can't fail */
-  ASSERT_TRUE(ret_closesocket != SOCKET_ERROR);
-  return true;
+  return ret_closesocket != SOCKET_ERROR;
 }
