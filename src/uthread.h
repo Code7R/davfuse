@@ -15,7 +15,7 @@
 #define UTHR_HEADER(type, name) \
   UNUSED(__ev_type);                                                    \
   UNUSED(__ev);                                                         \
-  type *name = __tctx;                                                  \
+  type *const name = __tctx;                                            \
   CRBEGIN(name->__coropos);                                             \
   assert(__ev_type == START_COROUTINE_EVENT)
 
@@ -38,7 +38,7 @@
 
 #define UTHR_CALL(fn, type, init)               \
   do {                                          \
-    type *__ctx = malloc(sizeof(*__ctx));       \
+    type *const __ctx = malloc(sizeof(*__ctx)); \
     if (!__ctx) { abort(); }                    \
     *__ctx = init;                              \
     UTHR_RUN(fn, __ctx);                        \
@@ -47,7 +47,7 @@
 
 #define _UTHR_CALL(fn, type, ...)               \
   do {                                          \
-    type *__ctx = malloc(sizeof(*__ctx));       \
+    type *const __ctx = malloc(sizeof(*__ctx)); \
     if (!__ctx) { abort(); }                    \
     *__ctx = (type) {__VA_ARGS__};              \
     UTHR_RUN(fn, __ctx);                        \

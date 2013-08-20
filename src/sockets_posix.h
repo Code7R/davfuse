@@ -32,6 +32,11 @@ typedef enum {
   SOCKET_EINTR=EINTR,
 } socket_error_t;
 
+
+enum {
+  SD_BOTH=SHUT_RDWR,
+};
+
 HEADER_FUNCTION socket_error_t
 last_socket_error(void) {
   return (socket_error_t) errno;

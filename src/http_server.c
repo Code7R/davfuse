@@ -420,6 +420,18 @@ http_request_read(http_request_handle_t rh,
   }
 }
 
+static PURE_FUNCTION const char *
+_get_header_value(const struct _header_pair *headers, size_t num_headers, const char *header_name) {
+  /* headers can only be ascii */
+  for (size_t i = 0; i < num_headers; ++i) {
+    if (ascii_strcaseequal(header_name, headers[i].name)) {
+      return headers[i].value;
+    }
+  }
+
+  return NULL;
+}
+
 static
 UTHR_DEFINE(_http_request_write_headers_coroutine) {
   UTHR_HEADER(WriteHeadersState, whs);
@@ -474,6 +486,13 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
   }
   EMITN(whs->response_line, ret_sprint2);
 
+  if (!_get_header_value(whs->response_headers->headers,
+                         whs->response_headers->num_headers,
+                         "Server")) {
+    EMITS("Rian's HTTP Server");
+  }
+
+
   /* TODO: support persistent connections */
   EMIT("Connection: close\r\n");
 
@@ -513,18 +532,6 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
 #undef EMIT
 #undef EMITN
 #undef EMITS
-}
-
-static PURE_FUNCTION const char *
-_get_header_value(const struct _header_pair *headers, size_t num_headers, const char *header_name) {
-  /* headers can only be ascii */
-  for (size_t i = 0; i < num_headers; ++i) {
-    if (ascii_strcaseequal(header_name, headers[i].name)) {
-      return headers[i].value;
-    }
-  }
-
-  return NULL;
 }
 
 void

@@ -19,11 +19,14 @@ extern "C" {
 extern log_level_t _logging_cur_level;
 #endif
 
+#define logging_should_print(level) ((level) <= _logging_cur_level)
+
 /* NB: perhaps this should just be a header function */
 #define log(level, ...)				 \
   do {						 \
-    if ((level) <= _logging_cur_level) {	 \
-      log_printer_print(__FILE__, __LINE__, level, __VA_ARGS__);        \
+    log_level_t level_ = level;                                         \
+    if (logging_should_print(level_)) {                                 \
+      log_printer_print(__FILE__, __LINE__, level_, __VA_ARGS__);       \
     }						 \
   }						 \
   while (false)

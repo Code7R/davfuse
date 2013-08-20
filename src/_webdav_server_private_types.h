@@ -55,6 +55,7 @@ typedef struct {
   owner_xml_t owner_xml;
   char *lock_token;
   webdav_timeout_t timeout_in_seconds;
+  bool is_collection;
 } WebdavLockDescriptor;
 
 typedef enum {
@@ -95,7 +96,9 @@ struct handler_context {
   HTTPRequestHeaders rhs;
   HTTPResponseHeaders resp;
   http_request_handle_t rh;
-  event_handler_t handler;
+  struct header_context {
+    event_handler_t handler;
+  } header;
   union {
     struct copy_context {
       coroutine_position_t pos;
@@ -128,6 +131,7 @@ struct handler_context {
       size_t request_body_len;
       linked_list_t headers;
       char *file_path;
+      bool is_collection;
       owner_xml_t owner_xml;
       char *resource_tag;
       char *resource_tag_path;
@@ -135,6 +139,7 @@ struct handler_context {
       bool is_locked;
       const char *lock_token;
       const char *status_path;
+      bool status_path_is_collection;
       bool is_exclusive;
       webdav_depth_t depth;
       bool created;
@@ -146,9 +151,8 @@ struct handler_context {
     } mkcol;
     struct options_context {
       coroutine_position_t pos;
-      char *request_relative_uri;
+      bool uri_is_collection;
       char allow_header[256];
-      linked_list_t entries;
     } options;
     struct propfind_context {
       coroutine_position_t pos;
@@ -191,9 +195,6 @@ create_webdav_proppatch_directive(webdav_proppatch_directive_type_t type,
 
 void
 free_webdav_proppatch_directive(WebdavProppatchDirective *wp);
-
-char *
-public_uri_from_path(struct handler_context *hc, const char *path);
 
 #ifdef __cplusplus
 }

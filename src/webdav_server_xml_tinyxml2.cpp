@@ -272,7 +272,9 @@ unlinkNode(XMLNode *elt) {
 
 static bool
 serializeDoc(const XMLDocument & doc, char **out_data, size_t *out_size) {
-  XMLPrinter streamer;
+  /* Windows XP can't handle newlines in XML gracefully... */
+  bool compact = true;
+  XMLPrinter streamer(NULL, compact);
   doc.Print(&streamer);
 
   /* copy the data in streamer to a pointer that the caller
@@ -287,6 +289,11 @@ serializeDoc(const XMLDocument & doc, char **out_data, size_t *out_size) {
   *out_size = streamer.CStrSize() - 1;
 
   return true;
+}
+
+static void
+initDoc(XMLDocument & doc) {
+  doc.InsertEndChild(doc.NewDeclaration("xml version=\"1.0\" encoding=\"utf-8\""));
 }
 
 /* owner xml abstraction */
@@ -860,8 +867,7 @@ default_props_to_get(void) {
 }
 
 bool
-generate_propfind_response(struct handler_context *hc,
-                           webdav_propfind_req_type_t req_type,
+generate_propfind_response(webdav_propfind_req_type_t req_type,
                            linked_list_t props_to_get_,
                            linked_list_t entries,
                            char **out_data,
@@ -882,7 +888,7 @@ generate_propfind_response(struct handler_context *hc,
     : props_to_get_;
 
   XMLDocument doc;
-  doc.InsertEndChild(doc.NewDeclaration());
+  initDoc(doc);
 
   auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
 
@@ -896,11 +902,8 @@ generate_propfind_response(struct handler_context *hc,
   LINKED_LIST_FOR (struct webdav_propfind_entry, propfind_entry, entries) {
     auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
-    char *const uri = public_uri_from_path(hc, propfind_entry->relative_uri);
-    ASSERT_NOT_NULL(uri);
-    CStringFreer free_uri(uri);
-
-    newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "href", uri);
+    newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "href",
+                            propfind_entry->relative_uri);
 
     auto propstat_not_found_elt = newChildElement(response_elt, DAV_XML_NS_PREFIX, "propstat");
     auto prop_not_found_elt = newChildElement(propstat_not_found_elt, DAV_XML_NS_PREFIX, "prop");
@@ -1012,9 +1015,7 @@ generate_propfind_response(struct handler_context *hc,
       newChildElement(locktype_shared_elt, DAV_XML_NS_PREFIX, "write");
     }
 
-    if (false) {
-      newChildElement(prop_success_elt, DAV_XML_NS_PREFIX, "lockdiscovery");
-    }
+    /* TODO: add lock discovery here */
 
     if (!prop_not_found_elt->FirstChildElement()) {
       unlinkNode(propstat_not_found_elt);
@@ -1101,13 +1102,12 @@ parse_lock_request_body(const char *body, size_t body_len,
 }
 
 bool
-generate_locked_response(struct handler_context *hc,
-                         const char *locked_path,
+generate_locked_response(const char *locked_path,
                          http_status_code_t *status_code,
                          char **response_body,
                          size_t *response_body_len) {
   XMLDocument doc;
-  doc.InsertEndChild(doc.NewDeclaration());
+  initDoc(doc);
 
   auto error_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "error");
 
@@ -1118,11 +1118,7 @@ generate_locked_response(struct handler_context *hc,
 
   newChildElement(error_elt, DAV_XML_NS_PREFIX, "lock-token-submitted");
 
-  char *const uri = public_uri_from_path(hc, locked_path);
-  ASSERT_NOT_NULL(uri);
-  CStringFreer free_uri(uri);
-
-  newChildElementWithText(error_elt, DAV_XML_NS_PREFIX, "href", uri);
+  newChildElementWithText(error_elt, DAV_XML_NS_PREFIX, "href", locked_path);
 
   bool success_serialize =
     serializeDoc(doc, response_body, response_body_len);
@@ -1136,13 +1132,12 @@ generate_locked_response(struct handler_context *hc,
 }
 
 bool
-generate_locked_descendant_response(struct handler_context *hc,
-                                    const char *locked_descendant,
+generate_locked_descendant_response(const char *locked_descendant,
                                     http_status_code_t *status_code,
                                     char **response_body,
                                     size_t *response_body_len) {
   XMLDocument doc;
-  doc.InsertEndChild(doc.NewDeclaration());
+  initDoc(doc);
 
   auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
 
@@ -1153,11 +1148,7 @@ generate_locked_descendant_response(struct handler_context *hc,
 
   auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
 
-  char *const uri = public_uri_from_path(hc, locked_descendant);
-  ASSERT_NOT_NULL(uri);
-  CStringFreer free_uri(uri);
-
-  newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "href", uri);
+  newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "href", locked_descendant);
   newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "status", "HTTP/1.1 423 Locked");
 
   auto error_elt = newChildElement(response_elt, DAV_XML_NS_PREFIX, "error");
@@ -1175,14 +1166,13 @@ generate_locked_descendant_response(struct handler_context *hc,
 }
 
 bool
-generate_failed_lock_response_body(struct handler_context *hc,
-                                   const char *file_path,
-                                   const char *status_path,
+generate_failed_lock_response_body(const char *file_uri,
+                                   const char *status_uri,
                                    http_status_code_t *status_code,
                                    char **response_body,
                                    size_t *response_body_len) {
   XMLDocument doc;
-  doc.InsertEndChild(doc.NewDeclaration());
+  initDoc(doc);
 
   auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
 
@@ -1191,25 +1181,17 @@ generate_failed_lock_response_body(struct handler_context *hc,
   CStringFreer free_xmlns_attr_name(xmlns_attr_name);
   multistatus_elt->SetAttribute(xmlns_attr_name, DAV_XML_NS);
 
-  bool same_path = str_equals(file_path, status_path);
+  bool same_path = str_equals(file_uri, status_uri);
   const char *locked_status = "HTTP/1.1 423 Locked";
 
   if (!same_path) {
     auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
-
-    char *const status_uri = public_uri_from_path(hc, status_path);
-    ASSERT_NOT_NULL(status_uri);
-    CStringFreer free_status_uri(status_uri);
 
     newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "href", status_uri);
     newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "status", locked_status);
   }
 
   auto response_elt = newChildElement(multistatus_elt, DAV_XML_NS_PREFIX, "response");
-
-  char *const file_uri = public_uri_from_path(hc, file_path);
-  ASSERT_NOT_NULL(file_uri);
-  CStringFreer free_file_uri(file_uri);
 
   newChildElementWithText(response_elt, DAV_XML_NS_PREFIX, "href", file_uri);
   newChildElementWithText(response_elt, DAV_XML_NS_PREFIX,
@@ -1228,8 +1210,7 @@ generate_failed_lock_response_body(struct handler_context *hc,
 }
 
 bool
-generate_success_lock_response_body(struct handler_context *hc,
-                                    const char *file_path,
+generate_success_lock_response_body(const char *file_uri,
                                     webdav_timeout_t timeout_in_seconds,
                                     webdav_depth_t depth,
                                     bool is_exclusive,
@@ -1240,7 +1221,7 @@ generate_success_lock_response_body(struct handler_context *hc,
                                     char **response_body,
                                     size_t *response_body_len) {
   XMLDocument doc;
-  doc.InsertEndChild(doc.NewDeclaration());
+  initDoc(doc);
 
   auto prop_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "prop");
 
@@ -1289,10 +1270,7 @@ generate_success_lock_response_body(struct handler_context *hc,
 
   auto lockroot_elt = newChildElement(activelock_elt,  DAV_XML_NS_PREFIX, "lockroot");
 
-  char *const lockroot_uri = public_uri_from_path(hc, file_path);
-  ASSERT_NOT_NULL(lockroot_uri);
-  CStringFreer free_lockroot_uri(lockroot_uri);
-  newChildElementWithText(lockroot_elt, DAV_XML_NS_PREFIX, "href", file_path);
+  newChildElementWithText(lockroot_elt, DAV_XML_NS_PREFIX, "href", file_uri);
 
   bool success_serialize =
     serializeDoc(doc, response_body, response_body_len);
@@ -1395,7 +1373,7 @@ generate_proppatch_response(const char *uri,
                             char **output, size_t *output_size,
                             http_status_code_t *status_code) {
   XMLDocument doc;
-  doc.InsertEndChild(doc.NewDeclaration());
+  initDoc(doc);
 
   auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
 
@@ -1460,4 +1438,33 @@ init_xml_parser(void) {
 void
 shutdown_xml_parser(void) {
   /* DO NOTHING */
+}
+
+void
+pretty_print_xml(const char *xml_body, size_t len, log_level_t level) {
+  if (!logging_should_print(level)) {
+    return;
+  }
+
+  if (!len) {
+    log(level, "<empty xml body>");
+    return;
+  }
+
+  XMLDocument doc;
+
+  auto xml_error = doc.Parse(xml_body, len);
+  if (xml_error) {
+    assert(len <= INT_MAX);
+    log(level, "%.*s", (int) len, xml_body);
+    return;
+  }
+
+  XMLPrinter printer;
+
+  doc.Print(&printer);
+
+  log(level, "%s", printer.CStr());
+
+  return;
 }

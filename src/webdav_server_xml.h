@@ -8,6 +8,7 @@
 #include <stddef.h>
 
 #include "http_server.h"
+#include "logging.h"
 #include "util.h"
 
 #ifdef __cplusplus
@@ -41,8 +42,7 @@ parse_propfind_request(const char *req_data,
                        linked_list_t *out_props_to_get);
 
 bool
-generate_propfind_response(struct handler_context *hc,
-                           webdav_propfind_req_type_t req_type,
+generate_propfind_response(webdav_propfind_req_type_t req_type,
                            linked_list_t props_to_get,
                            linked_list_t entries,
                            char **out_data,
@@ -55,30 +55,26 @@ parse_lock_request_body(const char *body, size_t body_len,
                         bool *is_exclusive, owner_xml_t *owner_xml);
 
 bool
-generate_locked_response(struct handler_context *hc,
-                         const char *locked_path,
+generate_locked_response(const char *locked_path,
                          http_status_code_t *status_code,
                          char **response_body,
                          size_t *response_body_len);
 
 bool
-generate_locked_descendant_response(struct handler_context *hc,
-                                    const char *locked_descendant,
+generate_locked_descendant_response(const char *locked_descendant,
                                     http_status_code_t *status_code,
                                     char **response_body,
                                     size_t *response_body_len);
 
 bool
-generate_failed_lock_response_body(struct handler_context *hc,
-                                   const char *file_path,
+generate_failed_lock_response_body(const char *file_path,
                                    const char *status_path,
                                    http_status_code_t *status_code,
                                    char **response_body,
                                    size_t *response_body_len);
 
 bool
-generate_success_lock_response_body(struct handler_context *hc,
-                                    const char *file_path,
+generate_success_lock_response_body(const char *file_path,
                                     webdav_timeout_t timeout_in_seconds,
                                     webdav_depth_t depth,
                                     bool is_exclusive,
@@ -106,6 +102,9 @@ init_xml_parser(void);
 
 void
 shutdown_xml_parser(void);
+
+void
+pretty_print_xml(const char *xml_body, size_t len, log_level_t level);
 
 #ifdef __cplusplus
 }

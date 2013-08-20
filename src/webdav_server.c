@@ -113,6 +113,105 @@ path_from_public_uri(struct handler_context *hc, const char *uri) {
   return path_from_request_uri(hc, relative_uri);
 }
 
+
+static char *
+public_uri_from_path(struct handler_context *hc, const char *path, bool is_collection) {
+  UNUSED(is_collection);
+  assert(str_startswith(path, "/"));
+  assert(str_equals(path, "/") || !str_endswith(path, "/"));
+
+  char *const encoded_path = encode_urlpath(path, strlen(path));
+
+  const bool internal_root_is_root = str_equals(hc->serv->internal_root, "/");
+  const bool path_is_root = str_equals(path, "/");
+
+  char *const real_uri = super_strcat(hc->serv->public_uri_root,
+                                      hc->serv->internal_root + 1,
+                                      internal_root_is_root
+                                      ? ""
+                                      : (path_is_root
+                                         ? ""
+                                         : "/"),
+                                      encoded_path + 1,
+                                      is_collection
+                                      ? "/"
+                                      : "",
+                                      NULL);
+  if (!real_uri) {
+    goto done;
+  }
+
+ done:
+  free(encoded_path);
+
+  return real_uri;
+}
+
+#define REQUEST_URI_IS_COLLECTION_DONE_EVENT GENERIC_EVENT
+
+typedef struct {
+  webdav_error_t error;
+  bool is_collection;
+} RequestUriIsCollectionDoneEvent;
+
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  struct handler_context *hc;
+  event_handler_t cb;
+  void *cb_ud;
+  /* ctx */
+  char *path;
+  RequestUriIsCollectionDoneEvent ev;
+} RequestUriIsCollectionCtx;
+
+static
+UTHR_DEFINE(_request_uri_is_collection_uthr) {
+  UTHR_HEADER(RequestUriIsCollectionCtx, ctx);
+
+  ctx->path = path_from_request_uri(ctx->hc, ctx->hc->rhs.uri);
+  if (!ctx->path) {
+    log_info("Couldn't make file path from \"%s\"", ctx->hc->rhs.uri);
+    goto done;
+  }
+
+
+  UTHR_YIELD(ctx,
+             webdav_backend_propfind(ctx->hc->serv->fs,
+                                     ctx->path,
+                                     DEPTH_0, WEBDAV_PROPFIND_ALLPROP,
+                                     _request_uri_is_collection_uthr, ctx));
+  UTHR_RECEIVE_EVENT(WEBDAV_PROPFIND_DONE_EVENT, WebdavPropfindDoneEvent, propfind_done_ev);
+  if (propfind_done_ev->error) {
+    ctx->ev.error = propfind_done_ev->error;
+    goto done;
+  }
+
+  struct webdav_propfind_entry *const ent = linked_list_peekleft(propfind_done_ev->entries);
+  ctx->ev.error = WEBDAV_ERROR_NONE;
+  ctx->ev.is_collection = ent->is_collection;
+
+  linked_list_free(propfind_done_ev->entries,
+                   (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
+
+ done:
+  free(ctx->path);
+  UTHR_RETURN(ctx,
+              ctx->cb(REQUEST_URI_IS_COLLECTION_DONE_EVENT, &ctx->ev, ctx->cb_ud));
+
+  UTHR_FOOTER();
+}
+
+
+static void
+request_uri_is_collection(struct handler_context *hc,
+                          event_handler_t cb, void *cb_ud) {
+  UTHR_CALL2(_request_uri_is_collection_uthr, RequestUriIsCollectionCtx,
+             .hc = hc,
+             .cb = cb,
+             .cb_ud = cb_ud);
+}
+
 static webdav_depth_t
 webdav_get_depth(const HTTPRequestHeaders *rhs) {
   webdav_depth_t depth;
@@ -271,13 +370,15 @@ free_webdav_lock_descriptor(void *ld) {
 static bool
 perform_write_lock(struct webdav_server *ws,
                    const char *file_path,
+                   bool is_collection,
                    webdav_timeout_t timeout_in_seconds,
                    webdav_depth_t depth,
                    bool is_exclusive,
                    owner_xml_t owner_xml,
                    bool *is_locked,
                    const char **lock_token,
-                   const char **status_path) {
+                   const char **status_path,
+                   bool *status_path_is_collection) {
   /* go through lock list and see if this path (or any descendants if depth != 0)
      have an incompatible lock
      if so then set that path as the status_path and return *is_locked = true
@@ -290,6 +391,7 @@ perform_write_lock(struct webdav_server *ws,
         (is_exclusive || elt->is_exclusive)) {
       *is_locked = true;
       *status_path = parent_locks_us ? file_path : elt->path;
+      *status_path_is_collection = parent_locks_us ? is_collection : elt->is_collection;
       /* if the strdup_x failed then we return false */
       return *status_path;
     }
@@ -320,6 +422,7 @@ perform_write_lock(struct webdav_server *ws,
     .owner_xml = owner_xml_copy(owner_xml),
     .lock_token = strdup_x(s_lock_token),
     .timeout_in_seconds = timeout_in_seconds,
+    .is_collection = is_collection,
   };
 
   if (!new_lock->path ||
@@ -393,7 +496,8 @@ is_resource_locked(struct webdav_server *ws,
                    const char *file_path,
                    bool *is_locked,
                    const char **locked_path,
-                   const char **locked_lock_token) {
+                   const char **locked_lock_token,
+                   bool *is_locked_path_collection) {
   *is_locked = false;
 
   LINKED_LIST_FOR (WebdavLockDescriptor, elt, ws->locks) {
@@ -401,8 +505,15 @@ is_resource_locked(struct webdav_server *ws,
         (elt->depth == DEPTH_INF &&
          is_parent_path(elt->path, file_path))) {
       *is_locked = true;
-      *locked_path = elt->path;
-      *locked_lock_token = elt->lock_token;
+      if (locked_path) {
+        *locked_path = elt->path;
+      }
+      if (locked_lock_token) {
+        *locked_lock_token = elt->lock_token;
+      }
+      if (is_locked_path_collection) {
+        *is_locked_path_collection = elt->is_collection;
+      }
       break;
     }
   }
@@ -414,13 +525,15 @@ static bool
 are_any_descendants_locked(struct webdav_server *ws,
                            const char *file_path,
                            bool *is_descendant_locked,
-                           const char **locked_descendant) {
+                           const char **locked_descendant,
+                           bool *locked_descendant_is_collection) {
   *is_descendant_locked = false;
 
   LINKED_LIST_FOR (WebdavLockDescriptor, elt, ws->locks) {
     if (is_parent_path(file_path, elt->path)) {
       *is_descendant_locked = true;
       *locked_descendant = elt->path;
+      *locked_descendant_is_collection = elt->is_collection;
       break;
     }
   }
@@ -451,8 +564,9 @@ _can_modify_path(struct handler_context *hc,
   const char *locked_path;
   const char *locked_lock_token;
   bool is_locked;
+  bool path_is_collection;
   bool success_locked =
-    is_resource_locked(hc->serv, fpath, &is_locked, &locked_path, &locked_lock_token);
+    is_resource_locked(hc->serv, fpath, &is_locked, &locked_path, &locked_lock_token, &path_is_collection);
   if (!success_locked) {
     *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     return;
@@ -468,11 +582,13 @@ _can_modify_path(struct handler_context *hc,
        !str_equals(lock_token_fpath, locked_path) ||
        !str_equals(locked_lock_token, lock_token))) {
     /* this is locked, fail */
+    char *const public_uri = public_uri_from_path(hc, locked_path, path_is_collection);
     bool success_generate =
-      generate_locked_response(hc, locked_path,
+      generate_locked_response(public_uri,
                                status_code,
                                response_body,
                                response_body_len);
+    free(public_uri);
     if (!success_generate) {
       *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     }
@@ -563,20 +679,26 @@ can_unlink_path(struct handler_context *hc,
     /* check if any descendant is locked */
     bool is_descendant_locked;
     const char *locked_descendant;
+    bool locked_descendant_is_collection;
     bool success_child_locked =
       are_any_descendants_locked(hc->serv, fpath,
-                                 &is_descendant_locked, &locked_descendant);
+                                 &is_descendant_locked, &locked_descendant, &locked_descendant_is_collection);
     if (!success_child_locked) {
       *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
       goto done;
     }
 
     if (is_descendant_locked) {
+      char *const public_uri = public_uri_from_path(hc, locked_descendant, locked_descendant_is_collection);
+      ASSERT_NOT_NULL(public_uri);
+
       bool success_generate =
-        generate_locked_descendant_response(hc, locked_descendant,
+        generate_locked_descendant_response(locked_descendant,
                                             status_code,
                                             response_body,
                                             response_body_len);
+      free(public_uri);
+
       if (!success_generate) {
         *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
       }
@@ -591,6 +713,8 @@ can_unlink_path(struct handler_context *hc,
 
 static
 UTHR_DEFINE(request_proc) {
+  struct header_context *ctx = &((struct handler_context *) UTHR_USER_DATA())->header;
+
   UTHR_HEADER(struct handler_context, hc);
 
   log_info("New request! %p", hc);
@@ -609,58 +733,91 @@ UTHR_DEFINE(request_proc) {
     goto done;
   }
 
+  /* potentially redirect based on directory */
+  if (!str_endswith(hc->rhs.uri, "/")) {
+    UTHR_YIELD(hc,
+               request_uri_is_collection(hc, request_proc, hc));
+    UTHR_RECEIVE_EVENT(REQUEST_URI_IS_COLLECTION_DONE_EVENT, RequestUriIsCollectionDoneEvent, is_collection_done_ev);
+
+    if (!is_collection_done_ev->error &&
+        is_collection_done_ev->is_collection) {
+      /* it's a collection and it doesn't end in a slash,
+         => redirect */
+      bool success_init = http_response_init(&hc->resp);
+      ASSERT_TRUE(success_init);
+
+      bool success_set_moved_code =
+        http_response_set_code(&hc->resp, HTTP_STATUS_CODE_MOVED_PERMANENTLY);
+      ASSERT_TRUE(success_set_moved_code);
+
+      bool success_set_location_header =
+        http_response_add_header(&hc->resp, "Location", "%s/", hc->rhs.uri);
+      ASSERT_TRUE(success_set_location_header);
+
+      bool success_set_content_length_header =
+        http_response_add_header(&hc->resp, HTTP_HEADER_CONTENT_LENGTH, "0");
+      ASSERT_TRUE(success_set_content_length_header);
+
+      UTHR_YIELD(hc,
+                 http_request_write_headers(hc->rh, &hc->resp,
+                                            request_proc, hc));
+      goto done;
+    }
+  }
+
+
   /* TODO: move to hash-based dispatch where each method
      maps to a different bucket
   */
   if (str_case_equals(hc->rhs.method, "COPY")) {
-    hc->handler = handle_copy_request;
+    ctx->handler = handle_copy_request;
     hc->sub.copy.is_move = false;
   }
   else if (str_case_equals(hc->rhs.method, "DELETE")) {
-    hc->handler = handle_delete_request;
+    ctx->handler = handle_delete_request;
   }
   else if (str_case_equals(hc->rhs.method, "GET")) {
-    hc->handler = handle_get_request;
+    ctx->handler = handle_get_request;
   }
   else if (str_case_equals(hc->rhs.method, "LOCK")) {
-    hc->handler = handle_lock_request;
+    ctx->handler = handle_lock_request;
   }
   else if (str_case_equals(hc->rhs.method, "MKCOL")) {
-    hc->handler = handle_mkcol_request;
+    ctx->handler = handle_mkcol_request;
   }
   else if (str_case_equals(hc->rhs.method, "MOVE")) {
     /* move is essentially copy, then delete source */
     /* allows for servers to optimize as well */
-    hc->handler = handle_copy_request;
+    ctx->handler = handle_copy_request;
     hc->sub.copy.is_move = true;
   }
   else if (str_case_equals(hc->rhs.method, "OPTIONS")) {
-    hc->handler = handle_options_request;
+    ctx->handler = handle_options_request;
   }
   else if (str_case_equals(hc->rhs.method, "POST")) {
-    hc->handler = handle_post_request;
+    ctx->handler = handle_post_request;
   }
   else if (str_case_equals(hc->rhs.method, "PROPFIND")) {
-    hc->handler = handle_propfind_request;
+    ctx->handler = handle_propfind_request;
   }
   else if (str_case_equals(hc->rhs.method, "PROPPATCH")) {
-    hc->handler = handle_proppatch_request;
+    ctx->handler = handle_proppatch_request;
   }
   else if (str_case_equals(hc->rhs.method, "PUT")) {
-    hc->handler = handle_put_request;
+    ctx->handler = handle_put_request;
   }
   else if (str_case_equals(hc->rhs.method, "UNLOCK")) {
-    hc->handler = handle_unlock_request;
+    ctx->handler = handle_unlock_request;
   }
   else {
-    hc->handler = NULL;
+    ctx->handler = NULL;
   }
 
   bool ret = http_response_init(&hc->resp);
   ASSERT_TRUE(ret);
 
-  if (hc->handler) {
-    UTHR_YIELD(hc, hc->handler(GENERIC_EVENT, NULL, hc));
+  if (ctx->handler) {
+    UTHR_YIELD(hc, ctx->handler(GENERIC_EVENT, NULL, hc));
   }
   else {
     UTHR_YIELD(hc,
@@ -759,7 +916,7 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
     bool is_src_locked;
     bool success_is_locked =
       is_resource_locked(hc->serv, ctx->src_relative_uri,
-                         &is_src_locked, NULL, NULL);
+                         &is_src_locked, NULL, NULL, NULL);
     if (!success_is_locked || is_src_locked) {
       abort();
     }
@@ -881,7 +1038,7 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
   bool is_locked;
   bool success_is_locked =
     is_resource_locked(hc->serv, ctx->request_relative_uri,
-                       &is_locked, NULL, NULL);
+                       &is_locked, NULL, NULL, NULL);
   if (!success_is_locked || is_locked) {
     abort();
   }
@@ -1109,11 +1266,28 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   ctx->request_body = rbev->body;
   ctx->request_body_len = rbev->length;
 
-  log_debug("Incoming lock request XML:\n%.*s",
-            (int) ctx->request_body_len, ctx->request_body);
+  log_debug("Incoming lock request XML");
+  pretty_print_xml(ctx->request_body, ctx->request_body_len, LOG_DEBUG);
 
   /* get timeout */
   ctx->timeout_in_seconds = webdav_get_timeout(&hc->rhs);
+
+  /* get if path is a collection */
+  CRYIELD(ctx->pos,
+          request_uri_is_collection(hc, handle_lock_request, ud));
+  assert(ev_type == REQUEST_URI_IS_COLLECTION_DONE_EVENT);
+  RequestUriIsCollectionDoneEvent *is_collection_done_ev = ev;
+  if (is_collection_done_ev->error &&
+      is_collection_done_ev->error != WEBDAV_ERROR_DOES_NOT_EXIST) {
+    log_debug("Couldn't determine if uri was a collection \"%s\": %d",
+              hc->rhs.uri, is_collection_done_ev->error);
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
+  ctx->is_collection = is_collection_done_ev->error
+    ? false
+    : is_collection_done_ev->is_collection;
 
   /* get path */
   ctx->file_path = path_from_request_uri(hc, hc->rhs.uri);
@@ -1172,13 +1346,16 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
     }
 
     bool was_created = false;
+    char *const public_uri = public_uri_from_path(hc, ctx->file_path, ctx->is_collection);
+    ASSERT_NOT_NULL(public_uri);
     bool success_generate =
-      generate_success_lock_response_body(hc, ctx->file_path, ctx->timeout_in_seconds,
+      generate_success_lock_response_body(public_uri, ctx->timeout_in_seconds,
                                           depth, is_exclusive, owner_xml_not_owned,
                                           ctx->refresh_uri, was_created,
                                           &status_code,
                                           &ctx->response_body,
                                           &ctx->response_body_len);
+    free(public_uri);
 
     if (!success_generate) {
       status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -1220,8 +1397,9 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   ctx->status_path = NULL;
   bool success_perform =
     perform_write_lock(hc->serv,
-                       ctx->file_path, ctx->timeout_in_seconds, ctx->depth, ctx->is_exclusive, ctx->owner_xml,
-                       &ctx->is_locked, &ctx->lock_token, &ctx->status_path);
+                       ctx->file_path, ctx->is_collection,
+                       ctx->timeout_in_seconds, ctx->depth, ctx->is_exclusive, ctx->owner_xml,
+                       &ctx->is_locked, &ctx->lock_token, &ctx->status_path, &ctx->status_path_is_collection);
   if (!success_perform) {
     log_debug("Error while performing lock");
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -1254,28 +1432,45 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   if (ctx->is_locked) {
     log_debug("Resource is already locked");
     if (str_equals(ctx->status_path, ctx->file_path)) {
+      char *const public_uri = public_uri_from_path(hc, ctx->status_path, ctx->status_path_is_collection);
+      ASSERT_NOT_NULL(public_uri);
       success_generate =
-        generate_locked_response(hc, ctx->status_path,
+        generate_locked_response(public_uri,
                                  &status_code,
                                  &ctx->response_body,
                                  &ctx->response_body_len);
+      free(public_uri);
     }
     else {
+      char *const public_uri = public_uri_from_path(hc, ctx->file_path, ctx->is_collection);
+      ASSERT_NOT_NULL(public_uri);
+
+      char *const public_status_uri = public_uri_from_path(hc, ctx->status_path, ctx->status_path_is_collection);
+      ASSERT_NOT_NULL(public_uri);
+
       success_generate =
-        generate_failed_lock_response_body(hc, ctx->file_path, ctx->status_path,
+        generate_failed_lock_response_body(public_uri, public_status_uri,
                                            &status_code,
                                            &ctx->response_body,
                                            &ctx->response_body_len);
+
+      free(public_uri);
+      free(public_status_uri);
     }
   }
   else {
+    char *const public_uri = public_uri_from_path(hc, ctx->file_path, ctx->is_collection);
+    ASSERT_NOT_NULL(public_uri);
+
     success_generate =
-      generate_success_lock_response_body(hc, ctx->file_path, ctx->timeout_in_seconds,
+      generate_success_lock_response_body(public_uri, ctx->timeout_in_seconds,
                                           ctx->depth, ctx->is_exclusive, ctx->owner_xml,
                                           ctx->lock_token, ctx->created,
                                           &status_code,
                                           &ctx->response_body,
                                           &ctx->response_body_len);
+
+    free(public_uri);
 
     if (success_generate) {
       /* add lock token header if we were locked */
@@ -1299,10 +1494,8 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
  done:
   assert(status_code);
   log_debug("Response with status code: %d", status_code);
-  log_debug("Outgoing lock response XML (%lld bytes):\n%.*s",
-            (long long) ctx->response_body_len,
-            (int) ctx->response_body_len,
-            ctx->response_body);
+  log_debug("Outgoing lock response XML (%lld bytes):");
+  pretty_print_xml(ctx->response_body, ctx->response_body_len, LOG_DEBUG);
 
   free(ctx->request_body);
   free(ctx->file_path);
@@ -1426,8 +1619,6 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
 
   CRBEGIN(ctx->pos);
 
-  ctx->entries = (linked_list_t) 0;
-
   /* read body first */
   CRYIELD(ctx->pos,
           http_request_ignore_body(hc->rh,
@@ -1439,33 +1630,27 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
     goto error;
   }
 
-  webdav_error_t propfind_error;
+  webdav_error_t collection_error;
+  /* Windows XP has a bug where it needs to read the root
+     of the webdav resource its mounting, so we special case this */
   if (str_equals(hc->rhs.uri, "/")) {
-    propfind_error = WEBDAV_ERROR_DOES_NOT_EXIST;
+    collection_error = WEBDAV_ERROR_DOES_NOT_EXIST;
   }
   else {
-    ctx->request_relative_uri = path_from_request_uri(hc, hc->rhs.uri);
-    if (!ctx->request_relative_uri) {
-      log_info("Couldn't make file path from %s", hc->rhs.uri);
-      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
-      goto error;
-    }
-
     CRYIELD(ctx->pos,
-            webdav_backend_propfind(hc->serv->fs,
-                                    ctx->request_relative_uri,
-                                    DEPTH_0, WEBDAV_PROPFIND_ALLPROP,
-                                    handle_options_request, hc));
-    assert(WEBDAV_PROPFIND_DONE_EVENT == ev_type);
-    WebdavPropfindDoneEvent *propfind_done_ev = ev;
-    if (propfind_done_ev->error != WEBDAV_ERROR_NONE &&
-        propfind_done_ev->error != WEBDAV_ERROR_DOES_NOT_EXIST) {
+            request_uri_is_collection(hc, handle_options_request, hc));
+    assert(ev_type == REQUEST_URI_IS_COLLECTION_DONE_EVENT);
+    RequestUriIsCollectionDoneEvent *is_collection_done_ev = ev;
+    if (is_collection_done_ev->error &&
+        is_collection_done_ev->error != WEBDAV_ERROR_DOES_NOT_EXIST) {
+      log_info("Error while checking if \"%s\" was a collection: %d",
+               hc->rhs.uri, is_collection_done_ev->error);
       status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
       goto error;
     }
 
-    propfind_error = propfind_done_ev->error;
-    ctx->entries = propfind_done_ev->entries;
+    collection_error = is_collection_done_ev->error;
+    ctx->uri_is_collection = is_collection_done_ev->is_collection;
   }
 
   const bool success_set_code =
@@ -1485,7 +1670,7 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
     http_response_add_header(&hc->resp, HTTP_HEADER_CONTENT_LENGTH, "0");
   ASSERT_TRUE(success_add_cl_header);
 
-  if (propfind_error == WEBDAV_ERROR_DOES_NOT_EXIST) {
+  if (collection_error == WEBDAV_ERROR_DOES_NOT_EXIST) {
     const bool success_add_allow_header =
       http_response_add_header(&hc->resp, "Allow",
                                "OPTIONS,MKCOL,PUT,LOCK");
@@ -1507,10 +1692,7 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
 
     ALLOW_METHOD("LOCK,UNLOCK,PROPFIND,DELETE,MOVE,COPY,OPTIONS,PROPPATCH");
 
-    struct webdav_propfind_entry *ent = linked_list_peekleft(ctx->entries);
-    ASSERT_NOT_NULL(ent);
-
-    if (!ent->is_collection) {
+    if (!ctx->uri_is_collection) {
       ALLOW_METHOD(",GET,PUT");
     }
 
@@ -1539,11 +1721,6 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
                                          "",
                                          handle_options_request, ud));
   }
-
-  linked_list_free(ctx->entries,
-                   (linked_list_elt_handler_t) webdav_destroy_propfind_entry);
-
-  free(ctx->request_relative_uri);
 
   CRRETURN(ctx->pos,
            request_proc(GENERIC_EVENT, NULL, hc));
@@ -1615,8 +1792,8 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   }
 
   assert(ctx->buf_used <= INT_MAX);
-  log_debug("XML request: Depth: %d, %.*s",
-            depth, (int) ctx->buf_used, ctx->buf);
+  log_debug("XML request: Depth: %d", depth);
+  pretty_print_xml(ctx->buf, ctx->buf_used, LOG_DEBUG);
 
   /* parse request */
   const xml_parse_code_t success_parse =
@@ -1660,12 +1837,17 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
     if (propfind_entry->is_collection) {
       propfind_entry->modified_time = INVALID_WEBDAV_RESOURCE_TIME;
     }
+    /* convert relative uri to public uris for generator */
+    char *const relative_uri = propfind_entry->relative_uri;
+    propfind_entry->relative_uri = public_uri_from_path(hc, relative_uri,
+                                                        propfind_entry->is_collection);
+    ASSERT_NOT_NULL(propfind_entry->relative_uri);
+    free(relative_uri);
   }
 
   /* now generate response */
   const bool success_generate =
-    generate_propfind_response(hc,
-                               ctx->propfind_req_type,
+    generate_propfind_response(ctx->propfind_req_type,
                                ctx->props_to_get,
                                run_propfind_ev->entries,
                                &ctx->out_buf,
@@ -1687,16 +1869,16 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   assert(status_code);
   log_debug("Responding with status: %d", status_code);
   assert(ctx->out_buf_size <= INT_MAX);
-  log_debug("XML response will be: (%d bytes) %.*s",
-            (int) ctx->out_buf_size,
-            (int) ctx->out_buf_size, ctx->out_buf);
+  log_debug("XML response will be: (%d bytes)",
+            (int) ctx->out_buf_size);
+  pretty_print_xml(ctx->out_buf, ctx->out_buf_size, LOG_DEBUG);
 
   CRYIELD(ctx->pos,
           http_request_simple_response(hc->rh,
                                        status_code,
                                        ctx->out_buf,
                                        ctx->out_buf_size,
-                                       "application/xml; charset=\"utf-8\"",
+                                       "text/xml; charset=\"utf-8\"",
                                        LINKED_LIST_INITIALIZER,
                                        handle_propfind_request, hc));
 
@@ -1748,10 +1930,11 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
  done:
   assert(status_code);
 
-  log_debug("XML response will be: (%d bytes) %.*s",
-            (int) hc->sub.proppatch.response_body_size,
-            (int) hc->sub.proppatch.response_body_size,
-            hc->sub.proppatch.response_body);
+  log_debug("XML response will be: (%d bytes)",
+            (int) hc->sub.proppatch.response_body_size);
+  pretty_print_xml(hc->sub.proppatch.response_body,
+                   hc->sub.proppatch.response_body_size,
+                   LOG_DEBUG);
 
   CRYIELD(hc->sub.proppatch.pos,
           http_request_simple_response(hc->rh,
@@ -1797,7 +1980,8 @@ run_proppatch(struct handler_context *hc, const char *uri,
 
   /* now parse the xml */
   assert(input_size <= INT_MAX);
-  log_debug("XML request:\n%.*s", (int) input_size, input);
+  log_debug("XML request:");
+  pretty_print_xml(input, input_size, LOG_DEBUG);
 
   linked_list_t props_to_patch;
   xml_parse_code_t error_parse =
@@ -2254,32 +2438,4 @@ free_webdav_proppatch_directive(WebdavProppatchDirective *wp) {
   free(wp->ns_href);
   free(wp->value);
   free(wp);
-}
-
-char *
-public_uri_from_path(struct handler_context *hc, const char *path) {
-  assert(str_startswith(path, "/"));
-  assert(str_equals(path, "/") || !str_endswith(path, "/"));
-
-  char *const encoded_path = encode_urlpath(path, strlen(path));
-
-  const bool internal_root_is_root = str_equals(hc->serv->internal_root, "/");
-  const bool path_is_root = str_equals(path, "/");
-
-  char *const real_uri = super_strcat(/* hc->serv->public_uri_root, */
-                                      hc->serv->internal_root,
-                                      internal_root_is_root
-                                      ? ""
-                                      : (path_is_root
-                                         ? ""
-                                         : "/"),
-                                      encoded_path + 1, NULL);
-  if (!real_uri) {
-    goto done;
-  }
-
- done:
-  free(encoded_path);
-
-  return real_uri;
 }
