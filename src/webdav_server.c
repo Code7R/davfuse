@@ -1878,7 +1878,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
                                        status_code,
                                        ctx->out_buf,
                                        ctx->out_buf_size,
-                                       "text/xml; charset=\"utf-8\"",
+                                       "application/xml; charset=\"utf-8\"",
                                        LINKED_LIST_INITIALIZER,
                                        handle_propfind_request, hc));
 
