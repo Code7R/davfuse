@@ -133,7 +133,7 @@ public_uri_from_path(struct handler_context *hc, const char *path, bool is_colle
                                          ? ""
                                          : "/"),
                                       encoded_path + 1,
-                                      is_collection
+                                      !path_is_root && is_collection
                                       ? "/"
                                       : "",
                                       NULL);
@@ -1633,7 +1633,8 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
   webdav_error_t collection_error;
   /* Windows XP has a bug where it needs to read the root
      of the webdav resource its mounting, so we special case this */
-  if (str_equals(hc->rhs.uri, "/")) {
+  if (str_equals(hc->rhs.uri, "/") &&
+      !str_equals(hc->serv->internal_root, "/")) {
     collection_error = WEBDAV_ERROR_DOES_NOT_EXIST;
   }
   else {
