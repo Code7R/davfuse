@@ -1,7 +1,8 @@
 #ifndef _WEBDAV_BACKEND_FS_H
 #define _WEBDAV_BACKEND_FS_H
 
-#include "fs.h"
+#include "iface_util.h"
+#include "webdav_backend_fs_fs.h"
 #include "_webdav_server_types.h"
 
 #ifdef __cplusplus
@@ -60,6 +61,8 @@ webdav_backend_fs_copy(webdav_backend_fs_t backend,
                        const char *src_relative_uri, const char *dst_relative_uri,
                        bool overwrite, webdav_depth_t depth,
                        event_handler_t cb, void *cb_ud);
+
+CREATE_IMPL_TAG(WEBDAV_BACKEND_FS_IMPL);
 
 #ifdef __cplusplus
 }

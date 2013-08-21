@@ -26,6 +26,7 @@ INVALID_TIME
 INVALID_OFF
 
 # functions
+default_new
 open
 fgetattr
 ftruncate

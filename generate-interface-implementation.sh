@@ -1,37 +1,69 @@
 #!/bin/sh
 
-INTERFACE_DEF="$1"
-INTERFACE=$(basename "$1" | sed 's/\..\{1,\}//')
-INTERFACE_UPPER=$(echo "$INTERFACE" | tr '[a-z]' '[A-Z]')
-eval "IMPLEMENTATION=\${${INTERFACE_UPPER}_IMPL}"
+IDEF_SRC_DIR=src
 
-if ! (echo "$INTERFACE" | grep "^[a-z]\([a-z_0-9]*[a-z0-9]\)\{0,1\}$" > /dev/null); then
-    echo "Bad interface name: $INTERFACE" > /dev/stderr
-    exit -1
+LOOKUP=$(echo "$1" | tr '[a-z]' '[A-Z]')
+eval "TRIPLE=\${${LOOKUP}_DEF}"
+
+if [ -z "$TRIPLE" ]; then
+    echo "Interface file \"${LOOKUP}_DEF\" was not defined"  > /dev/stderr
+    exit 255
 fi
 
-if ! (echo "$IMPLEMENTATION" | grep "^[a-z]\([a-z_0-9]*[a-z0-9]\)\{0,1\}$" > /dev/null); then
-    echo "Bad implementation name: $IMPLEMENTATION" > /dev/stderr
-    exit -1
+USER=$(echo "$TRIPLE" | sed 's|\([^/]*\)/\([^/]*\)/\([^/]*\)|\1|')
+IFACE=$(echo "$TRIPLE" | sed 's|\([^/]*\)/\([^/]*\)/\([^/]*\)|\2|')
+IMPL=$(echo "$TRIPLE" | sed 's|\([^/]*\)/\([^/]*\)/\([^/]*\)|\3|')
+
+if ! (echo "$USER" | grep "^[a-z]\([a-z_0-9]*[a-z0-9]\)\{0,1\}$" > /dev/null); then
+    echo "Bad interface name: $USER" > /dev/stderr
+    exit 255
 fi
 
-IMPLEMENTATION_UPPER=$(echo "$IMPLEMENTATION" | tr '[a-z]' '[A-Z]')
+if ! (echo "$IFACE" | grep "^[a-z]\([a-z_0-9]*[a-z0-9]\)\{0,1\}$" > /dev/null); then
+    echo "Bad interface name: $IFACE" > /dev/stderr
+    exit 255
+fi
 
-INTERFACE_TITLE=$(echo "$INTERFACE" | perl -pe 's/^([a-z])/\U$1/' | perl -pe 's/_([a-z])/\U$1/')
-IMPLEMENTATION_TITLE=$(echo "$IMPLEMENTATION" | perl -pe 's/^([a-z])/\U$1/' | perl -pe 's/_([a-z])/\U$1/')
+if ! (echo "$IMPL" | grep "^[a-z]\([a-z_0-9]*[a-z0-9]\)\{0,1\}$" > /dev/null); then
+    echo "Bad implementation name: $IMPL" > /dev/stderr
+    exit 255
+fi
+
+USER_UPPER=$(echo "$USER" | tr '[a-z]' '[A-Z]')
+IFACE_UPPER=$(echo "$IFACE" | tr '[a-z]' '[A-Z]')
+IMPL_UPPER=$(echo "$IMPL" | tr '[a-z]' '[A-Z]')
+
+USER_TITLE=$(echo "$USER" | perl -pe 's/^([a-z])/\U$1/' | perl -pe 's/_([a-z])/\U$1/g')
+IFACE_TITLE=$(echo "$IFACE" | perl -pe 's/^([a-z])/\U$1/' | perl -pe 's/_([a-z])/\U$1/g')
+IMPL_TITLE=$(echo "$IMPL" | perl -pe 's/^([a-z])/\U$1/' | perl -pe 's/_([a-z])/\U$1/g')
+
+HEADER_FILE="${USER}_${IFACE}"
+IDEF_PATH="${IDEF_SRC_DIR}/${IFACE}.idef"
+
+IMPL_HASH=0x$(echo "$IMPL" | md5sum | cut -b 1-8)
 
 cat <<EOF
-/* AUTOMATICALLY GENERATED from "$INTERFACE_DEF" on $(date),
+/* AUTOMATICALLY GENERATED from "$IDEF_PATH" on $(date),
    DO NOT EDIT MANUALLY */
-#ifndef __${INTERFACE}_h
-#define __${INTERFACE}_h
+#ifndef __${USER}_${IFACE}_h
+#define __${USER}_${IFACE}_h
 
-#include "${INTERFACE}_${IMPLEMENTATION}.h"
+#include "${IFACE}_${IMPL}.h"
+
+#ifdef __${IFACE}_HEADER
+
+#if __${IFACE}_HEADER != ${IMPL_HASH}
+#error "Multiple implementations of the '${IFACE}' interface included. This one is '${IMPL}'."
+#endif
+
+#else
+
+#define __${IFACE}_HEADER ${IMPL_HASH}
 
 EOF
 
 export PARENT_PID=$$
-cat "$INTERFACE_DEF" | (
+cat "$IDEF_PATH" | (
     REGEX='^ *\([a-zA-Z]\([0-9a-zA-Z_]*[0-9a-zA-Z]\)\{0,1\}\)\{0,1\} *\(# *\(.*\) *\)\{0,1\}$'
     while read LINE; do
         if ! ( echo "$LINE" | grep "$REGEX" > /dev/null ); then
@@ -54,17 +86,20 @@ cat "$INTERFACE_DEF" | (
 
         if echo "$SYMBOL" | grep "^[A-Z_]\{1,\}$" > /dev/null; then
             # it's all uppercase, generate an uppercase SYMBOL
-            echo "#define ${INTERFACE_UPPER}_${SYMBOL} ${INTERFACE_UPPER}_${IMPLEMENTATION_UPPER}_${SYMBOL}"
+            echo "#define ${IFACE_UPPER}_${SYMBOL} ${IFACE_UPPER}_${IMPL_UPPER}_${SYMBOL}"
         elif echo "$SYMBOL" | grep "^[A-Z][a-z]" > /dev/null; then
-            echo "#define ${INTERFACE_TITLE}${SYMBOL} ${INTERFACE_TITLE}${IMPLEMENTATION_TITLE}${SYMBOL}"
+            echo "#define ${IFACE_TITLE}${SYMBOL} ${IFACE_TITLE}${IMPL_TITLE}${SYMBOL}"
         else
-            echo "#define ${INTERFACE}_${SYMBOL} ${INTERFACE}_${IMPLEMENTATION}_${SYMBOL}"
+            echo "#define ${IFACE}_${SYMBOL} ${IFACE}_${IMPL}_${SYMBOL}"
         fi
-        PRINTED_SYMBOL=1
     done;
     )
 
 cat <<EOF
+
+#endif
+
+#define ${USER_UPPER}_${IFACE_UPPER}_IMPL ${IFACE_UPPER}_${IMPL_UPPER}_IMPL
 
 #endif
 EOF

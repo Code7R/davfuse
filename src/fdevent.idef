@@ -9,7 +9,7 @@ watch_key_t
 Event
 
 # functions
-new
+default_new
 add_watch
 remove_watch
 main_loop

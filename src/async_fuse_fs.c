@@ -14,7 +14,7 @@
 #undef FUSE_USE_VERSION
 
 #include "async_rdwr_lock.h"
-#include "fdevent.h"
+#include "async_fuse_fs_fdevent.h"
 #include "fd_utils.h"
 #include "logging.h"
 #include "uthread.h"
@@ -267,10 +267,10 @@ UTHR_DEFINE(_send_message) {
 
     if (errno == EAGAIN) {
       bool ret = fdevent_add_watch(ctx->loop, ctx->to_chan->named.in,
-                                   create_stream_events(false, true),
-                                   _send_message,
-                                   ctx,
-                                   NULL);
+                                                 create_stream_events(false, true),
+                                                 _send_message,
+                                                 ctx,
+                                                 NULL);
       ASSERT_TRUE(ret);
       UTHR_YIELD(ctx, 0);
     }
@@ -329,11 +329,11 @@ UTHR_DEFINE(_receive_reply_message) {
 
     if (errno == EAGAIN) {
       bool ret = fdevent_add_watch(ctx->loop, ctx->from_chan->named.out,
-                                   create_stream_events(true, false),
-                                   _receive_reply_message,
-                                   ctx,
-                                   NULL);
-      if (!ret) { abort(); }
+                                                 create_stream_events(true, false),
+                                                 _receive_reply_message,
+                                                 ctx,
+                                                 NULL);
+      ASSERT_TRUE(ret);
       UTHR_YIELD(ctx, 0);
     }
     else {

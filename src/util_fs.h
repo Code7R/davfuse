@@ -3,8 +3,12 @@
 
 #include <stdbool.h>
 
-#include "fs.h"
 #include "util.h"
+#include "util_fs_fs.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 const char *
 util_fs_strerror(fs_error_t error);
@@ -43,5 +47,9 @@ util_fs_path_dirname(fs_t fs, const char *path);
 
 char *
 util_fs_path_join(fs_t fs, const char *path, const char *name);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

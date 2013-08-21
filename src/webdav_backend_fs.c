@@ -3,13 +3,17 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "fs.h"
+#include "iface_util.h"
 #include "uthread.h"
 #include "util.h"
 #include "util_fs.h"
-
+#include "util_fs_fs.h"
+#include "webdav_backend_fs_fs.h"
 #include "webdav_server.h"
+
 #include "webdav_backend_fs.h"
+
+ASSERT_SAME_IMPL(UTIL_FS_FS_IMPL, WEBDAV_BACKEND_FS_FS_IMPL);
 
 enum {
   //  TRANSFER_BUF_SIZE=4096,
@@ -262,8 +266,10 @@ UTHR_DEFINE(_webdav_backend_fs_put_uthr) {
   }
 
   bool created;
+  bool create = true;
   const fs_error_t ret_open =
-    fs_open(ctx->pbctx->fs, ctx->file_path, true, &ctx->fd, &created);
+    fs_open(ctx->pbctx->fs, ctx->file_path,
+            create, &ctx->fd, &created);
   if (ret_open) {
     log_info("Error opening \"%s\": %s", ctx->file_path,
              util_fs_strerror(ret_open));
@@ -687,7 +693,8 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
   if (copy_failed) {
     if (depth == DEPTH_0) {
       bool is_dir;
-      fs_error_t ret_isdir = util_fs_file_is_dir(pbctx->fs, file_path, &is_dir);
+      const fs_error_t ret_isdir =
+        util_fs_file_is_dir(pbctx->fs, file_path, &is_dir);
       if (ret_isdir) {
         log_info("Error while determining if %s was a dir", file_path);
         err = WEBDAV_ERROR_GENERAL;
@@ -695,7 +702,8 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
       }
 
       if (is_dir) {
-	fs_error_t ret_mkdir = fs_mkdir(pbctx->fs, destination_path);
+	const fs_error_t ret_mkdir =
+          fs_mkdir(pbctx->fs, destination_path);
 	if (ret_mkdir) {
 	  log_info("Failure to mkdir(\"%s\")",
 		   destination_path);
@@ -704,7 +712,7 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
 	}
       }
       else {
-	fs_error_t ret_copyfile =
+	const fs_error_t ret_copyfile =
           util_fs_copyfile(pbctx->fs,
                            file_path, destination_path);
 	if (ret_copyfile) {
@@ -717,7 +725,7 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
       copy_failed = false;
     }
     else {
-      linked_list_t failed_to_copy =
+      const linked_list_t failed_to_copy =
 	util_fs_copytree(pbctx->fs, file_path, destination_path, is_move);
       copy_failed = failed_to_copy;
       linked_list_free(failed_to_copy, free);

@@ -8,7 +8,7 @@
 
 #include "c_util.h"
 #include "logging_types.h"
-#include "log_printer.h"
+#include "logging_log_printer.h"
 
 #ifdef __cplusplus
 extern "C" {

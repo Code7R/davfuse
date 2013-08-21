@@ -4,7 +4,7 @@
 #include "http_server.h"
 #include "uthread.h"
 #include "util.h"
-#include "webdav_backend.h"
+#include "webdav_server_webdav_backend.h"
 #include "_webdav_server_types.h"
 
 #ifdef __cplusplus

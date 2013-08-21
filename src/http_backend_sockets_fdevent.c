@@ -2,13 +2,13 @@
 #include <string.h>
 
 #include "events.h"
-#include "fdevent.h"
-#include "sockets.h"
+#include "http_backend_sockets_fdevent_fdevent.h"
+#include "http_backend_sockets_fdevent_sockets.h"
 #include "uthread.h"
 #include "util.h"
 #include "util_sockets.h"
 
-#include "http_backend.h"
+#include "http_backend_sockets_fdevent.h"
 
 /* forward decl */
 struct _accept_ctx;
@@ -125,7 +125,7 @@ UTHR_DEFINE(_http_backend_sockets_fdevent_accept_uthr) {
     }
   }
 
-  HttpBackendAcceptDoneEvent ev = {
+  HttpBackendSocketsFdeventAcceptDoneEvent ev = {
     .error = (socket == INVALID_SOCKET
               ? HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_UNKNOWN
               : HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_NONE),
@@ -143,7 +143,7 @@ http_backend_sockets_fdevent_accept(http_backend_sockets_fdevent_t backend,
                                     event_handler_t cb,
                                     void *cb_ud) {
   if (backend->cur_accept) {
-    HttpBackendAcceptDoneEvent ev = {
+    HttpBackendSocketsFdeventAcceptDoneEvent ev = {
       /* TODO: get better error code */
       .error = HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_UNKNOWN,
     };
@@ -212,7 +212,7 @@ UTHR_DEFINE(_http_backend_sockets_fdevent_read_uthr) {
     }
   }
 
-  HttpBackendReadDoneEvent ev = {
+  HttpBackendSocketsFdeventReadDoneEvent ev = {
     .error = (ret == SOCKET_ERROR
               ? HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_UNKNOWN
               : HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_NONE),
@@ -292,7 +292,7 @@ UTHR_DEFINE(_http_backend_sockets_fdevent_write_uthr) {
     state->buf_loc += ret;
   }
 
-  HttpBackendWriteDoneEvent ev = {
+  HttpBackendSocketsFdeventWriteDoneEvent ev = {
     .error = (state->count_left
               ? HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_UNKNOWN
               : HTTP_BACKEND_SOCKETS_FDEVENT_ERROR_NONE),

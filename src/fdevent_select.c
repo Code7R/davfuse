@@ -4,8 +4,8 @@
 
 #include "c_util.h"
 #include "events.h"
+#include "fdevent_select_sockets.h"
 #include "logging.h"
-#include "sockets.h"
 #include "util_sockets.h"
 
 #include "fdevent_select.h"
@@ -36,7 +36,7 @@ typedef struct _fd_event_loop {
 } FDEventLoop;
 
 NON_NULL_ARGS0() fdevent_select_loop_t
-fdevent_select_new(void) {
+fdevent_select_default_new(void) {
   FDEventLoop *loop = malloc(sizeof(*loop));
   if (!loop) {
     return NULL;

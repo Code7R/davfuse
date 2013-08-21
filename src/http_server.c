@@ -1,6 +1,6 @@
 /*
   An async HTTP server
- */
+*/
 #define _ISOC99_SOURCE
 
 #include <assert.h>
@@ -17,7 +17,7 @@
 #include "coroutine.h"
 #include "coroutine_io.h"
 #include "events.h"
-#include "http_backend.h"
+#include "http_server_http_backend.h"
 #include "logging.h"
 #include "util.h"
 #include "uthread.h"
@@ -736,7 +736,7 @@ http_request_write(http_request_handle_t rh,
   rctx->write_state = HTTP_REQUEST_WRITE_STATE_WRITING;
 
   _http_connection_write(rctx->conn,
-                          buf, nbyte,
+                         buf, nbyte,
                          _handle_write_done,
                          &rctx->sub.rws);
 }
@@ -820,7 +820,7 @@ UTHR_DEFINE(client_coroutine) {
        with clients who send their headers very very slowly:
        give some timeout to total request processing
        XXX: even more now because of indefinite keep-alive
-     */
+    */
 
     /* create request event, we can do this on the stack
        because the handler shouldn't use this after */
@@ -927,28 +927,28 @@ static
 UTHR_DEFINE(c_get_request) {
   UTHR_HEADER(GetRequestState, state);
 
-#define PEEK()                                                  \
-  do {                                                          \
-    if ((state->c = fbpeek(&state->rh->conn->f)) < 0) {          \
-      UTHR_YIELD(state,                                         \
-                 c_fbpeek(&state->rh->conn->f,                   \
-                          &state->c,                            \
-                          c_get_request, state));               \
-      assert(UTHR_EVENT_TYPE() == C_FBPEEK_DONE_EVENT);         \
-    }                                                           \
-  }                                                             \
+#define PEEK()                                          \
+  do {                                                  \
+    if ((state->c = fbpeek(&state->rh->conn->f)) < 0) { \
+      UTHR_YIELD(state,                                 \
+                 c_fbpeek(&state->rh->conn->f,          \
+                          &state->c,                    \
+                          c_get_request, state));       \
+      assert(UTHR_EVENT_TYPE() == C_FBPEEK_DONE_EVENT); \
+    }                                                   \
+  }                                                     \
   while (false)
 
 #define EXPECT(_c)                                              \
   do {                                                          \
     /* first check the synchronous interface, to avoid          \
        many layers of nesting */                                \
-    if ((state->c = fbgetc(&state->rh->conn->f)) < 0) {             \
-      UTHR_YIELD(state,                                            \
-                 c_fbgetc(&state->rh->conn->f,                     \
-                          &state->c,                               \
-                          c_get_request, state));                  \
-      assert(UTHR_EVENT_TYPE() == C_FBGETC_DONE_EVENT);            \
+    if ((state->c = fbgetc(&state->rh->conn->f)) < 0) {         \
+      UTHR_YIELD(state,                                         \
+                 c_fbgetc(&state->rh->conn->f,                  \
+                          &state->c,                            \
+                          c_get_request, state));               \
+      assert(UTHR_EVENT_TYPE() == C_FBGETC_DONE_EVENT);         \
     }                                                           \
     if ((char) state->c != (_c)) {                              \
       if (state->c == EOF) {                                    \
@@ -1132,7 +1132,7 @@ UTHR_DEFINE(c_get_request) {
     else {
       long converted_content_length;
       if (content_length_str) {
-      /* get the "Content-Length" header */
+        /* get the "Content-Length" header */
         converted_content_length = strtol(content_length_str, NULL, 10);
       }
       else {

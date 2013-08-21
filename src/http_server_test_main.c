@@ -1,17 +1,38 @@
+/*
+  A test HTTP server that uses sockets at the frontend
+ */
+#define _ISOC99_SOURCE
+
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200112L
+#include <unistd.h>
+#endif
+
 #include <assert.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdlib.h>
 
 #include "events.h"
-#include "fdevent.h"
 #include "http_backend_sockets_fdevent.h"
+#include "http_backend_sockets_fdevent_fdevent.h"
 #include "http_server.h"
+#include "iface_util.h"
 #include "logging.h"
+#include "logging_log_printer.h"
 #include "util.h"
 #include "util_sockets.h"
 
-#define BUF_SIZE 4096
+#ifndef _WIN32
+#include "log_printer_stdio.h"
+ASSERT_SAME_IMPL(LOGGING_LOG_PRINTER_IMPL, LOG_PRINTER_STDIO_IMPL);
+#endif
+
+ASSERT_SAME_IMPL(HTTP_SERVER_HTTP_BACKEND_IMPL, HTTP_BACKEND_SOCKETS_FDEVENT_IMPL);
+
+enum {
+  BUF_SIZE=4096,
+};
 
 struct handler_context {
   coroutine_position_t pos;
@@ -104,8 +125,8 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
   assert(sizeof(toret) - 1 <= UINT_MAX);
   int ret_snprintf =
     snprintf(hc->resp.headers[0].value, sizeof(hc->resp.headers[0].value),
-             "%u", (unsigned ) (sizeof(toret) - 1));
-  if (ret_snprintf < 0 || ret_snprintf >= sizeof(hc->resp.headers[0].value)) {
+             "%lu", (unsigned long) (sizeof(toret) - 1));
+  if (ret_snprintf < 0 || (size_t) ret_snprintf >= sizeof(hc->resp.headers[0].value)) {
     goto error;
   }
 
@@ -141,8 +162,19 @@ handle_request(event_type_t ev_type, void *ev, void *ud) {
 }
 
 int main() {
-  bool success_init_logging = init_logging(stdout, LOG_DEBUG);
-  ASSERT_TRUE(success_init_logging);
+  /* init logging */
+#ifndef _WIN32
+  /* this code makes this module become POSIX */
+  char *const term_env = getenv("TERM");
+  FILE *const logging_output = stderr;
+  const bool show_colors = (isatty(fileno(logging_output)) &&
+                            term_env && !str_equals(term_env, "dumb"));
+  log_printer_stdio_init(logging_output, show_colors);
+#else
+  log_printer_default_init();
+#endif
+
+  logging_set_global_level(LOG_DEBUG);
   log_info("Logging initted.");
 
   /* init sockets */
@@ -154,7 +186,7 @@ int main() {
   ASSERT_TRUE(success_ignore);
 
   /* create event loop */
-  fdevent_loop_t loop = fdevent_new();
+  fdevent_loop_t loop = fdevent_default_new();
   ASSERT_TRUE(loop);
 
   /* create backend */

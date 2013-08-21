@@ -5,7 +5,12 @@
 
 #include "c_util.h"
 #include "events.h"
-#include "sockets.h"
+#include "fdevent_select_sockets.h"
+#include "iface_util.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* event subsystem */
 
@@ -29,7 +34,7 @@ typedef struct {
 #define FDEVENT_SELECT_INVALID_WATCH_KEY NULL
 
 fdevent_select_loop_t
-fdevent_select_new();
+fdevent_select_default_new();
 
 bool
 fdevent_select_add_watch(fdevent_select_loop_t loop,
@@ -48,5 +53,11 @@ fdevent_select_main_loop(fdevent_select_loop_t loop);
 
 bool
 fdevent_select_destroy(fdevent_select_loop_t loop);
+
+CREATE_IMPL_TAG(FDEVENT_SELECT_IMPL);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

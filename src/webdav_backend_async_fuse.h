@@ -2,6 +2,7 @@
 #define _WEBDAV_BACKEND_ASYNC_FUSE_H
 
 #include "async_fuse_fs.h"
+#include "iface_util.h"
 #include "_webdav_server_types.h"
 
 #ifdef __cplusplus
@@ -60,6 +61,8 @@ webdav_backend_async_fuse_copy(webdav_backend_async_fuse_t backend,
                                const char *src_relative_uri, const char *dst_relative_uri,
                                bool overwrite, webdav_depth_t depth,
                                event_handler_t cb, void *cb_ud);
+
+CREATE_IMPL_TAG(WEBDAV_BACKEND_ASYNC_FUSE_IMPL);
 
 #ifdef __cplusplus
 }

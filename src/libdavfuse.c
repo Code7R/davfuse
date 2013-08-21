@@ -1,11 +1,12 @@
 /*
  * Implements a WebDAV server using a set of FUSE callbacks
  */
-
-#define _ISOC99_SOURCE
 #define _BSD_SOURCE
+#define _ISOC99_SOURCE
+#define _POSIX_C_SOURCE 200112L
 
 #include <pthread.h>
+#include <unistd.h>
 
 #include <assert.h>
 #include <limits.h>
@@ -20,16 +21,23 @@
 #include "fuse.h"
 #undef FUSE_USE_VERSION
 
-#include "async_fuse_fs.h"
+#include "async_fuse_fs_fdevent.h"
 #include "c_util.h"
-#include "fdevent.h"
 #include "http_backend_sockets_fdevent.h"
+#include "http_backend_sockets_fdevent_fdevent.h"
+#include "iface_util.h"
 #include "logging.h"
-#include "sockets.h"
+#include "logging_log_printer.h"
+#include "log_printer_stdio.h"
 #include "webdav_backend_async_fuse.h"
 #include "webdav_server.h"
+#include "webdav_server_webdav_backend.h"
 #include "util.h"
 #include "util_sockets.h"
+
+ASSERT_SAME_IMPL(ASYNC_FUSE_FS_FDEVENT_IMPL, HTTP_BACKEND_SOCKETS_FDEVENT_FDEVENT_IMPL);
+ASSERT_SAME_IMPL(LOGGING_LOG_PRINTER_IMPL, LOG_PRINTER_STDIO_IMPL);
+ASSERT_SAME_IMPL(WEBDAV_SERVER_WEBDAV_BACKEND_IMPL, WEBDAV_BACKEND_ASYNC_FUSE_IMPL);
 
 typedef struct {
   bool singlethread : 1;
@@ -44,7 +52,8 @@ typedef struct {
 typedef struct {
   async_fuse_fs_t async_fuse_fs;
   char *listen_str;
-  char *public_prefix;
+  char *public_uri_root;
+  char *internal_root;
   fdevent_loop_t loop;
 } HTTPThreadArguments;
 
@@ -113,7 +122,6 @@ http_thread(void *ud) {
     goto done;
   }
 
-
   /* create webdav backend */
   log_info("Create webdav server backend");
   webdav_backend = webdav_backend_async_fuse_new(args->async_fuse_fs);
@@ -125,7 +133,8 @@ http_thread(void *ud) {
   /* start webdav server */
   log_info("Create webdav server");
   webdav_server_t wd_serv = webdav_server_start(http_backend,
-                                                args->public_prefix,
+                                                args->public_uri_root,
+                                                args->internal_root,
                                                 webdav_backend);
   /* the server owns the fd now */
   if (!wd_serv) {
@@ -234,17 +243,24 @@ fuse_main_real(int argc,
   int ret_create_context = -1;
   bool success_init_sockets = false;
 
+  /* this code makes this module become POSIX */
+  char *const term_env = getenv("TERM");
+  FILE *const logging_output = stderr;
+  const bool show_colors = (isatty(fileno(logging_output)) &&
+                            term_env && !str_equals(term_env, "dumb"));
+  initted_logging = log_printer_stdio_init(logging_output, show_colors);
+  if (!initted_logging) {
+    log_critical("Error initting logging");
+    goto error;
+  }
+
   const bool success_parse_environment = parse_environment(&dav_options);
   if (!success_parse_environment) {
     log_critical("Error parsing DAVFUSE_OPTIONS environment variable");
     goto error;
   }
 
-  initted_logging = init_logging(stderr, dav_options.log_level);
-  if (!initted_logging) {
-    log_critical("Error initting logging");
-    goto error;
-  }
+  logging_set_global_level(dav_options.log_level);
 
   /* create fuse context structure */
   log_info("Creating context");
@@ -284,7 +300,7 @@ fuse_main_real(int argc,
 
   /* create event loop */
   log_info("Creating event loop");
-  loop = fdevent_new();
+  loop = fdevent_default_new();
   if (!loop) {
     log_critical_errno("Couldn't initialize fdevent loop");
     goto error;
@@ -304,8 +320,9 @@ fuse_main_real(int argc,
     .async_fuse_fs = async_fuse_fs,
     .loop = loop,
     .listen_str = dav_options.listen_str,
-    .public_prefix = dav_options.public_prefix,
   };
+  ASSERT_NOT_NULL(http_thread_args.internal_root);
+  ASSERT_NOT_NULL(http_thread_args.public_uri_root);
   pthread_t new_thread;
   const int ret_pthread_create =
     pthread_create(&new_thread, NULL, http_thread, &http_thread_args);
@@ -355,7 +372,7 @@ fuse_main_real(int argc,
 
   if (initted_logging) {
     log_info("Shutting down logging, bye!");
-    shutdown_logging();
+    log_printer_stdio_shutdown();
   }
 
   return toret;

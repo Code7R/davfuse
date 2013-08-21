@@ -2,8 +2,9 @@
 #define _HTTP_BACKEND_FDEVENT_H
 
 #include "coroutine_io.h"
-#include "fdevent.h"
-#include "sockets.h"
+#include "http_backend_sockets_fdevent_fdevent.h"
+#include "http_backend_sockets_fdevent_sockets.h"
+#include "iface_util.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -61,6 +62,8 @@ http_backend_sockets_fdevent_write(http_backend_sockets_fdevent_t backend,
 bool
 http_backend_sockets_fdevent_close(http_backend_sockets_fdevent_t backend,
                                    http_backend_sockets_fdevent_handle_t handle);
+
+CREATE_IMPL_TAG(HTTP_BACKEND_SOCKETS_FDEVENT_IMPL);
 
 #ifdef __cplusplus
 }

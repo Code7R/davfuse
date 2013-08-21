@@ -1,5 +1,5 @@
-#ifndef _SOCKET_WINSOCK_H
-#define _SOCKET_WINSOCK_H
+#ifndef _SOCKETS_POSIX_H
+#define _SOCKETS_POSIX_H
 
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "c_util.h"
+#include "iface_util.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,5 +60,7 @@ closesocket(fd_t sock) {
 #define _INCLUDE_SOCKET_COMMON_H
 #include "_socket_common.h"
 #undef _INCLUDE_SOCKET_COMMON_H
+
+CREATE_IMPL_TAG(SOCKETS_POSIX_IMPL);
 
 #endif

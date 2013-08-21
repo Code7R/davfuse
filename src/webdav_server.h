@@ -2,9 +2,9 @@
 #define WEBDAV_SERVER_H
 
 #include "events.h"
-#include "http_backend.h"
+#include "http_server_http_backend.h"
 #include "util.h"
-#include "webdav_backend.h"
+#include "webdav_server_webdav_backend.h"
 
 #include "_webdav_server_types.h"
 

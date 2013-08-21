@@ -17,9 +17,11 @@
 #include "events.h"
 #include "http_helpers.h"
 #include "http_server.h"
+#include "http_server_http_backend.h"
 #include "logging.h"
 #include "uthread.h"
 #include "util.h"
+#include "webdav_server_webdav_backend.h"
 #include "webdav_server_xml.h"
 #include "_webdav_server_types.h"
 #include "_webdav_server_private_types.h"
@@ -988,7 +990,7 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
   if (ctx->is_move) {
     /* TODO: XXX: destroy all locks held for the source resource,
        for now just assert there is are no source locks
-     */
+    */
     bool is_src_locked;
     bool success_is_locked =
       is_resource_locked(hc->serv, ctx->src_relative_uri,
@@ -1823,10 +1825,10 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
   else {
     size_t allow_header_off = 0;
 
-#define ALLOW_METHOD(meth) \
+#define ALLOW_METHOD(meth)                                              \
     do {                                                                \
       if (allow_header_off >= sizeof(ctx->allow_header)) {              \
-        status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;          \
+        status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;           \
         goto error;                                                     \
       }                                                                 \
       memcpy(ctx->allow_header + allow_header_off, meth, sizeof(meth) - 1); \
@@ -2416,8 +2418,7 @@ webdav_server_start(http_backend_t http_backend,
     goto error;
   }
 
-  http = http_server_start(http_backend,
-                           handle_request, serv);
+  http = http_server_start(http_backend, handle_request, serv);
   if (!http) {
     goto error;
   }

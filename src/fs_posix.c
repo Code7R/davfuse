@@ -14,7 +14,7 @@
 #include <errno.h>
 
 #include "fd_utils.h"
-#include "fstatat.h"
+#include "fs_posix_fstatat.h"
 #include "util.h"
 
 #include "fs_posix.h"
@@ -89,7 +89,7 @@ fill_attrs(FsPosixAttrs *attrs, struct stat *st) {
 }
 
 fs_posix_t
-fs_posix_blank_new(void) {
+fs_posix_default_new(void) {
   /* don't need context */
   return _FS_POSIX_SINGLETON;
 }

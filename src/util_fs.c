@@ -9,6 +9,7 @@
 #include "dfs.h"
 #include "logging.h"
 #include "util.h"
+#include "util_fs_fs.h"
 
 #include "util_fs.h"
 

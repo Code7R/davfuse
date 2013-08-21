@@ -6,7 +6,7 @@
 #undef FUSE_USE_VERSION
 
 #include "events.h"
-#include "fdevent.h"
+#include "async_fuse_fs_fdevent.h"
 
 struct async_fuse_fs;
 

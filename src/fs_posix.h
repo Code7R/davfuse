@@ -47,7 +47,7 @@ typedef struct {
 } FsPosixAttrs;
 
 fs_posix_t
-fs_posix_blank_new(void);
+fs_posix_default_new(void);
 
 fs_posix_error_t
 fs_posix_open(fs_posix_t fs,
@@ -126,6 +126,8 @@ bool
 fs_posix_path_is_parent(fs_posix_t fs,
                         const char *potential_parent,
                         const char *potential_child);
+
+CREATE_IMPL_TAG(FS_POSIX_IMPL);
 
 #ifdef __cplusplus
 }

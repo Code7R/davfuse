@@ -13,10 +13,13 @@
 #include <signal.h>
 
 #include "c_util.h"
-#include "fdevent.h"
 #include "http_backend_sockets_fdevent.h"
+#include "http_backend_sockets_fdevent_fdevent.h"
+#include "iface_util.h"
 #include "logging.h"
+#include "logging_log_printer.h"
 #include "webdav_backend_fs.h"
+#include "webdav_backend_fs_fs.h"
 #include "webdav_server.h"
 #include "webdav_server_xml.h"
 #include "uthread.h"
@@ -25,9 +28,11 @@
 
 #ifndef _WIN32
 #include "log_printer_stdio.h"
-#else
-#include "log_printer.h"
+ASSERT_SAME_IMPL(LOGGING_LOG_PRINTER_IMPL, LOG_PRINTER_STDIO_IMPL);
 #endif
+
+ASSERT_SAME_IMPL(HTTP_SERVER_HTTP_BACKEND_IMPL, HTTP_BACKEND_SOCKETS_FDEVENT_IMPL);
+ASSERT_SAME_IMPL(WEBDAV_SERVER_WEBDAV_BACKEND_IMPL, WEBDAV_BACKEND_FS_IMPL);
 
 int
 main(int argc, char *argv[]) {
@@ -35,9 +40,9 @@ main(int argc, char *argv[]) {
 #ifndef _WIN32
   /* this code makes this module become POSIX */
   char *const term_env = getenv("TERM");
-  FILE *logging_output = stderr;
+  FILE *const logging_output = stderr;
   const bool show_colors = (isatty(fileno(logging_output)) &&
-                      term_env && !str_equals(term_env, "dumb"));
+                            term_env && !str_equals(term_env, "dumb"));
   log_printer_stdio_init(logging_output, show_colors);
 #else
   log_printer_default_init();
@@ -83,28 +88,28 @@ main(int argc, char *argv[]) {
   ASSERT_TRUE(success_ignore);
 
   /* create event loop (implemented by file descriptors) */
-  fdevent_loop_t loop = fdevent_new();
+  fdevent_loop_t loop = fdevent_default_new();
   ASSERT_TRUE(loop);
 
   /* create network IO backend (implemented by the Socket API) */
-  http_backend_t http_backend =
+  http_backend_sockets_fdevent_t http_backend =
     http_backend_sockets_fdevent_new(loop,
                                      (struct sockaddr *) &listen_addr,
                                      sizeof(listen_addr));
   ASSERT_TRUE(http_backend);
 
   /* create fs (implementation is compile-time configurable) */
-  fs_t fs = fs_blank_new();
+  fs_t fs = fs_default_new();
   ASSERT_TRUE(fs);
 
   /* create storage backend (implemented by the file system) */
-  webdav_backend_t wd_backend = webdav_backend_fs_new(fs, base_path);
+  webdav_backend_fs_t wd_backend = webdav_backend_fs_new(fs, base_path);
   ASSERT_TRUE(wd_backend);
 
   /* init xml parser */
   init_xml_parser();
 
-  /* start webdav server*/
+  /* start webdav server */
   webdav_server_t ws = webdav_server_start(http_backend,
                                            public_uri_root,
                                            internal_root,

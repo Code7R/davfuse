@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "sockets.h"
+#include "util_sockets_sockets.h"
 
 #ifdef __cplusplus
 extern "C" {
