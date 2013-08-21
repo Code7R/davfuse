@@ -151,7 +151,8 @@ is_relative_uri_parent(const char *potential_parent_uri,
   ASSERT_TRUE(!strchr(potential_parent_uri, '?'));
   ASSERT_TRUE(!strchr(potential_child_uri, '?'));
   size_t parent_len = strlen(potential_parent_uri);
-  return (str_startswith(potential_child_uri, potential_parent_uri) &&
+  return (!str_equals(potential_parent_uri, potential_child_uri) &&
+          str_startswith(potential_child_uri, potential_parent_uri) &&
           (potential_parent_uri[parent_len - 1] == '/' ||
            potential_child_uri[parent_len] == '/'));
 }
@@ -2025,14 +2026,36 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
             (unsigned long) ctx->out_buf_size);
   pretty_print_xml(ctx->out_buf, ctx->out_buf_size, LOG_DEBUG);
 
-  CRYIELD(ctx->pos,
-          http_request_simple_response(hc->rh,
-                                       status_code,
-                                       ctx->out_buf,
-                                       ctx->out_buf_size,
-                                       "application/xml; charset=\"utf-8\"",
-                                       LINKED_LIST_INITIALIZER,
+  if (status_code == HTTP_STATUS_CODE_METHOD_NOT_ALLOWED) {
+    bool success_init = http_response_init(&hc->resp);
+    ASSERT_TRUE(success_init);
+
+    bool success_set_moved_code =
+      http_response_set_code(&hc->resp, HTTP_STATUS_CODE_METHOD_NOT_ALLOWED);
+    ASSERT_TRUE(success_set_moved_code);
+
+    bool success_set_location_header =
+      http_response_add_header(&hc->resp, "Allow", "GET,HEAD,POST,OPTIONS");
+    ASSERT_TRUE(success_set_location_header);
+
+    bool success_set_content_length_header =
+      http_response_add_header(&hc->resp, HTTP_HEADER_CONTENT_LENGTH, "0");
+    ASSERT_TRUE(success_set_content_length_header);
+
+    CRYIELD(ctx->pos,
+            http_request_write_headers(hc->rh, &hc->resp,
                                        handle_propfind_request, hc));
+  }
+  else {
+    CRYIELD(ctx->pos,
+            http_request_simple_response(hc->rh,
+                                         status_code,
+                                         ctx->out_buf,
+                                         ctx->out_buf_size,
+                                         "application/xml; charset=\"utf-8\"",
+                                         LINKED_LIST_INITIALIZER,
+                                         handle_propfind_request, hc));
+  }
 
   if (ctx->out_buf) {
     free(ctx->out_buf);

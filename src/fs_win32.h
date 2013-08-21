@@ -8,6 +8,7 @@
 #include <stddef.h>
 
 #include "c_util.h"
+#include "iface_util.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,7 +51,7 @@ typedef struct {
 } FsWin32Attrs;
 
 fs_win32_t
-fs_win32_blank_new(void);
+fs_win32_default_new(void);
 
 fs_win32_error_t
 fs_win32_open(fs_win32_t fs,
@@ -129,6 +130,8 @@ fs_win32_path_is_parent(fs_win32_t fs,
 
 const char *
 fs_win32_path_sep(fs_win32_t fs);
+
+CREATE_IMPL_TAG(FS_WIN32_IMPL);
 
 #ifdef __cplusplus
 }

@@ -93,6 +93,7 @@ typedef struct _http_connection {
   struct _http_request_context rctx;
 } HTTPConnection;
 
+const char *const HTTP_HEADER_ALLOW = "Allow";
 const char *const HTTP_HEADER_CONNECTION = "Connection";
 const char *const HTTP_HEADER_CONTENT_LENGTH = "Content-Length";
 const char *const HTTP_HEADER_CONTENT_TYPE = "Content-Type";
@@ -634,6 +635,15 @@ http_request_write_headers(http_request_handle_t rh,
     rctx->out_content_length = content_length;
   }
 
+  if (response_headers->code == HTTP_STATUS_CODE_METHOD_NOT_ALLOWED &&
+      !_get_header_value(response_headers->headers,
+                         response_headers->num_headers,
+                         HTTP_HEADER_ALLOW)) {
+    log_error("Handler must specific an allow header with a "
+              "method not allowed status code!");
+    goto error;
+  }
+
   if (_get_header_value(response_headers->headers,
                         response_headers->num_headers,
                         HTTP_HEADER_CONNECTION)) {
@@ -1105,8 +1115,11 @@ UTHR_DEFINE(c_get_request) {
   }
 
   if (!err) {
+    const char *connection_header;
     state->rh->is_connection_close =
-      http_get_header_value(state->request_headers, HTTP_HEADER_CONNECTION);
+      ((connection_header =
+        http_get_header_value(state->request_headers, HTTP_HEADER_CONNECTION)) &&
+       str_case_equals(connection_header, "close"));
   }
 
   /* deal with the request headers that dictate how the request body is tranferred */

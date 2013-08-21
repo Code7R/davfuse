@@ -140,7 +140,7 @@ mb_to_utf8(LPWSTR s) {
 }
 
 fs_win32_t
-fs_win32_blank_new(void) {
+fs_win32_default_new(void) {
   return _FS_WIN32_SINGLETON;
 }
 
