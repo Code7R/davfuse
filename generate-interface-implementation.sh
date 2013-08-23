@@ -40,7 +40,14 @@ IMPL_TITLE=$(echo "$IMPL" | perl -pe 's/^([a-z])/\U$1/' | perl -pe 's/_([a-z])/\
 HEADER_FILE="${USER}_${IFACE}"
 IDEF_PATH="${IDEF_SRC_DIR}/${IFACE}.idef"
 
-IMPL_HASH=0x$(echo "$IMPL" | md5sum | cut -b 1-8)
+if which md5sum > /dev/null; then
+    IMPL_HASH=0x$(echo "$IMPL" | md5sum | cut -b 1-8)
+elif which md5 > /dev/null; then
+    IMPL_HASH=0x$(echo "$IMPL" | md5 | cut -b 1-8)
+else
+    echo "No MD5 program available!" > /dev/stderr
+    exit 255
+fi
 
 cat <<EOF
 /* AUTOMATICALLY GENERATED from "$IDEF_PATH" on $(date),

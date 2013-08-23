@@ -15,14 +15,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "c_util.h"
+
 /* We import the public FUSE header because we interact
    with code that uses the public API */
 #define FUSE_USE_VERSION 26
+#define FUSE_SHARED_DECL DYNAMICALLY_LINKED_FUNCTION_ATTR
 #include "fuse.h"
 #undef FUSE_USE_VERSION
 
 #include "async_fuse_fs_fdevent.h"
-#include "c_util.h"
 #include "http_backend_sockets_fdevent.h"
 #include "http_backend_sockets_fdevent_fdevent.h"
 #include "iface_util.h"
@@ -46,7 +48,8 @@ typedef struct {
 typedef struct {
   log_level_t log_level;
   char *listen_str;
-  char *public_prefix;
+  char *public_uri_root;
+  char *internal_root;
 } DavOptions;
 
 typedef struct {
@@ -84,15 +87,17 @@ parse_environment(DavOptions *options) {
   /* default for now */
   options->log_level = LOG_DEBUG;
   options->listen_str = NULL;
-  options->public_prefix = strdup_x("http://localhost:8080/");
+  options->public_uri_root = strdup_x("http://localhost:8080/");
+  options->internal_root = strdup_x("/");
 
   return true;
 }
 
 static void
 free_dav_options(DavOptions *options) {
-  free(options->public_prefix);
+  free(options->public_uri_root);
   free(options->listen_str);
+  free(options->internal_root);
 }
 
 static void *
@@ -176,7 +181,7 @@ static pthread_key_t fuse_context_key;
 static pthread_mutex_t fuse_context_lock = PTHREAD_MUTEX_INITIALIZER;
 static int fuse_context_ref;
 
-struct fuse_context *
+DYNAMICALLY_LINKED_FUNCTION_ATTR struct fuse_context *
 fuse_get_context(void) {
   struct fuse_context *c = pthread_getspecific(fuse_context_key);
   if (!c) {
@@ -229,7 +234,7 @@ fuse_delete_context_key(void) {
 }
 
 /* From "fuse_versionscript" the version of this symbol is FUSE_2.6 */
-int
+DYNAMICALLY_LINKED_FUNCTION_ATTR int
 fuse_main_real(int argc,
 	       char *argv[],
 	       const struct fuse_operations *op,
@@ -320,9 +325,9 @@ fuse_main_real(int argc,
     .async_fuse_fs = async_fuse_fs,
     .loop = loop,
     .listen_str = dav_options.listen_str,
+    .public_uri_root = dav_options.public_uri_root,
+    .internal_root = dav_options.internal_root,
   };
-  ASSERT_NOT_NULL(http_thread_args.internal_root);
-  ASSERT_NOT_NULL(http_thread_args.public_uri_root);
   pthread_t new_thread;
   const int ret_pthread_create =
     pthread_create(&new_thread, NULL, http_thread, &http_thread_args);
@@ -378,7 +383,7 @@ fuse_main_real(int argc,
   return toret;
 }
 
-void
+DYNAMICALLY_LINKED_FUNCTION_ATTR void
 fuse_unmount_compat22(const char *mountpoint, struct fuse_chan *ch) {
   /* TODO: implement */
   UNUSED(mountpoint);

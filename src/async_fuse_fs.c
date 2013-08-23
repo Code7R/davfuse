@@ -208,7 +208,16 @@ static bool
 send_atomic_message(Channel *chan, Message *msg) {
   assert(sizeof(*msg) <= PIPE_BUF);
   /* TODO: read the necessary size depending on the message type */
-  ssize_t ret = write(chan->named.in, msg, sizeof(*msg));
+  ssize_t ret;
+  while (true) {
+    ret = write(chan->named.in, msg, sizeof(*msg));
+    if (!(ret < 0 && errno == EINTR)) {
+      break;
+    }
+  }
+  if (ret < 0) {
+    log_error("Erroring while sending atomic message: %s", strerror(errno));
+  }
   assert(ret < 0 || ret == sizeof(*msg));
   return ret >= 0;
 }
@@ -217,7 +226,16 @@ static bool
 receive_atomic_message(Channel *chan, Message *msg) {
   assert(sizeof(*msg) <= PIPE_BUF);
   /* TODO: send the necessary size depending on the message type */
-  ssize_t ret = read(chan->named.out, msg, sizeof(*msg));
+  ssize_t ret;
+  while (true) {
+    ret = read(chan->named.out, msg, sizeof(*msg));
+    if (!(ret < 0 && errno == EINTR)) {
+      break;
+    }
+  }
+  if (ret < 0) {
+    log_error("Erroring while receiving atomic message: %s", strerror(errno));
+  }
   assert(ret < 0 || ret == sizeof(*msg));
   return ret >= 0;
 }

@@ -38,6 +38,15 @@ extern "C" {
 
 #endif /* __GNUC__ */
 
+#ifdef _WIN32
+#define DYNAMICALLY_LINKED_FUNCTION_ATTR __declspec(dllexport)
+#elif __GNUC__
+#define DYNAMICALLY_LINKED_FUNCTION_ATTR __attribute__ ((visibility("default")))
+#else
+#warning "DYNAMICALLY_LINKED_FUNCTION_ATTR will be empty on unknown platform"
+#define DYNAMICALLY_LINKED_FUNCTION_ATTR
+#endif
+
 #define HEADER_FUNCTION static UNUSED_FUNCTION_ATTR
 #define HEADER_CONST static UNUSED_CONST_ATTR
 

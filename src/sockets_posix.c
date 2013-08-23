@@ -35,6 +35,12 @@ set_socket_non_blocking(fd_t fd) {
 }
 
 bool ignore_sigpipe() {
+  /* reset errno */
+  errno = 0;
   void (*ret_signal)(int) = signal(SIGPIPE, SIG_IGN);
-  return ret_signal != SIG_ERR && !errno;
+  bool success = ret_signal != SIG_ERR && !errno;
+  if (!success) {
+    log_error("Error ignoring SIGPIPE: %p %s", ret_signal, strerror(errno));
+  }
+  return success;
 }

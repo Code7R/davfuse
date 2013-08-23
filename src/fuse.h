@@ -9,6 +9,14 @@
 #ifndef _FUSE_H_
 #define _FUSE_H_
 
+#ifndef FUSE_SHARED_DECL
+#if _WIN32
+#define FUSE_SHARED_DECL __declspec(dllimport)
+#else
+#define FUSE_SHARED_DECL
+#endif
+#endif
+
 /** @file
  *
  * This file defines the library interface of FUSE
@@ -260,11 +268,19 @@ struct fuse_operations {
 	 */
 	int (*fsync) (const char *, int, struct fuse_file_info *);
 
+#ifdef __APPLE__
+	/** Set extended attributes */
+        int (*setxattr) (const char *, const char *, const char *, size_t, int, uint32_t);
+
+	/** Get extended attributes */
+        int (*getxattr) (const char *, const char *, char *, size_t, uint32_t);
+#else
 	/** Set extended attributes */
 	int (*setxattr) (const char *, const char *, const char *, size_t, int);
 
 	/** Get extended attributes */
 	int (*getxattr) (const char *, const char *, char *, size_t);
+#endif
 
 	/** List extended attributes */
 	int (*listxattr) (const char *, char *, size_t);
@@ -764,6 +780,7 @@ int fuse_is_lib_option(const char *opt);
  *
  * Do not call this directly, use fuse_main()
  */
+FUSE_SHARED_DECL
 int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
 		   size_t op_size, void *user_data);
 

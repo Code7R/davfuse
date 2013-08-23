@@ -640,8 +640,9 @@ UTHR_DEFINE(_fuse_propfind_uthr) {
   }
 
   /* TODO: support this */
-  if (ctx->propfind_req_type != WEBDAV_PROPFIND_PROP) {
-    log_info("We only support 'prop' requests");
+  if (ctx->propfind_req_type != WEBDAV_PROPFIND_PROP &&
+      ctx->propfind_req_type != WEBDAV_PROPFIND_ALLPROP) {
+    log_info("We don't support 'propname' requests");
     ctx->ev.error = WEBDAV_ERROR_GENERAL;
     goto done;
   }
