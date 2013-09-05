@@ -34,7 +34,9 @@ class CFreer {
 private:
   const T & myt;
 public:
-  CFreer(const T & var) : myt(var) {}
+  CFreer(const T & var) : myt(var) {
+  }
+  CFreer(const CFreer & var) = delete;
   ~CFreer() {
     func(myt);
   }
