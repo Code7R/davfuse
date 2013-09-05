@@ -269,7 +269,7 @@ fs_posix_readdir(fs_posix_t fs, fs_posix_directory_handle_t dir_handle,
 
   while (true) {
     errno = 0;
-    struct dirent *ent = readdir(dir_handle);
+    struct dirent *const ent = readdir(dir_handle);
     if (!ent && errno) {
       return errno_to_fs_error();
     }
@@ -279,7 +279,7 @@ fs_posix_readdir(fs_posix_t fs, fs_posix_directory_handle_t dir_handle,
       break;
     }
 
-    const char *const ent_name = ent->d_name;
+    char *const ent_name = ent->d_name;
 
     if (str_equals(ent_name, ".") ||
         str_equals(ent_name, "..")) {
@@ -291,10 +291,10 @@ fs_posix_readdir(fs_posix_t fs, fs_posix_directory_handle_t dir_handle,
       *attrs_is_filled = false;
     }
 
-    int dir_fd = dirfd(dir_handle);
+    const int dir_fd = dirfd(dir_handle);
     if (dir_fd >= 0) {
       struct stat entry_st;
-      int fstatatx_ret = fstatat_x(dir_fd, ent_name, &entry_st, 0);
+      const int fstatatx_ret = fstatat_x(dir_fd, ent_name, &entry_st, 0);
       if (!fstatatx_ret) {
         if (attrs_is_filled) {
           *attrs_is_filled = true;

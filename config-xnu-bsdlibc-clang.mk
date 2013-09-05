@@ -3,7 +3,6 @@
 SOCKETS_IMPL = posix
 LOG_PRINTER_IMPL = stdio
 
-
 FS_IMPL = posix
 FS_IMPL_EXTRA_SOURCES = fstatat_emu.c fd_utils.c
 FS_IMPL_EXTRA_GEN_HEADERS = fs_posix_fstatat.h
@@ -18,7 +17,9 @@ FDEVENT_IMPL_EXTRA_IFACE_DEFS = FDEVENT_SELECT_SOCKETS_DEF=fdevent_select/socket
 CPPFLAGS_RELEASE = -DNDEBUG
 
 CFLAGS += -std=c99 -Wall -Wextra -Werror
-CFLAGS_DEBUG = -g
+# we can't use -fcatch-undefined-behavior because it catches false positives
+# i.e. readdir() http://clang-developers.42468.n3.nabble.com/fcatch-undefined-behavior-false-positive-with-readdir-td4026941.html
+CFLAGS_DEBUG = -g -ftrapv
 CFLAGS_RELEASE = -O4
 
 CXXFLAGS += -std=c++11 -Wall -Wextra -Werror -stdlib=libc++
