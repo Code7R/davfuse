@@ -786,7 +786,7 @@ parse_propfind_request(const char *req_data,
         !node_is(root_element, DAV_XML_NS, "propfind")) {
       /* root element is not propfind, this is bad */
       log_info("root element is not DAV:propfind: %s",
-               root_element->Name());
+               root_element ? root_element->Name() : NULL);
       toret = XML_PARSE_ERROR_STRUCTURE;
       goto done;
     }

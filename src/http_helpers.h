@@ -15,7 +15,7 @@ typedef struct {
   char *value;
 } HeaderPair;
 
-NON_NULL_ARGS4(1, 3, 5, 7) void
+NON_NULL_ARGS3(1, 5, 7) void
 http_request_simple_response(http_request_handle_t rh,
 			     http_status_code_t code,
                              const char *body, size_t body_len,

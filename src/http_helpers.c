@@ -94,14 +94,14 @@ UTHR_DEFINE(_simple_response_uthr) {
   UTHR_FOOTER();
 }
 
-
-NON_NULL_ARGS4(1, 3, 5, 7) void
+void
 http_request_simple_response(http_request_handle_t rh,
 			     http_status_code_t code,
                              const char *body, size_t body_len,
                              const char *content_type,
                              linked_list_t extra_headers,
 			     event_handler_t cb, void *ud) {
+  assert(!body_len || body);
   UTHR_CALL7(_simple_response_uthr, SimpleResponseCtx,
              .request_handle = rh,
              .code = code,
@@ -114,12 +114,13 @@ http_request_simple_response(http_request_handle_t rh,
              );
 }
 
-NON_NULL_ARGS3(1, 3, 4) void
+void
 http_request_string_response(http_request_handle_t rh,
                              http_status_code_t code,
                              const char *body,
                              event_handler_t cb, void *cb_ud) {
-  http_request_simple_response(rh, code, body, strlen(body), "text/plain",
+  const size_t body_len = body ? strlen(body) : 0;
+  http_request_simple_response(rh, code, body, body_len, "text/plain",
                                LINKED_LIST_INITIALIZER, cb, cb_ud);
 }
 

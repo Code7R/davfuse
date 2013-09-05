@@ -343,11 +343,16 @@ typedef enum {
 
 static if_lock_token_err_t
 webdav_get_if_lock_token(struct handler_context *hc, char **resource_tag, char **lock_token) {
+  if_lock_token_err_t toret;
+  *resource_tag = NULL;
+  *lock_token = NULL;
+
   const HTTPRequestHeaders *const rhs = &hc->rhs;
 
   const char *if_header = http_get_header_value(rhs, WEBDAV_HEADER_IF);
   if (!if_header) {
-    return IF_LOCK_TOKEN_ERR_DOESNT_EXIST;
+    toret = IF_LOCK_TOKEN_ERR_DOESNT_EXIST;
+    goto error;
   }
 
   /* we do the simplest if header parsing right now,
@@ -361,7 +366,8 @@ webdav_get_if_lock_token(struct handler_context *hc, char **resource_tag, char *
     i++;
     const char *end_of_uri = strchr(if_header + i, ASCII_RIGHT_BRACKET);
     if (!end_of_uri) {
-      return IF_LOCK_TOKEN_ERR_BAD_PARSE;
+      toret = IF_LOCK_TOKEN_ERR_BAD_PARSE;
+      goto error;
     }
 
     size_t len_of_uri = end_of_uri - (if_header + i);
@@ -369,7 +375,8 @@ webdav_get_if_lock_token(struct handler_context *hc, char **resource_tag, char *
       strndup_x(if_header + i, len_of_uri);
 
     if (!*resource_tag) {
-      return IF_LOCK_TOKEN_ERR_INTERNAL;
+      toret = IF_LOCK_TOKEN_ERR_INTERNAL;
+      goto error;
     }
 
     /* skip resource tag */
@@ -390,32 +397,44 @@ webdav_get_if_lock_token(struct handler_context *hc, char **resource_tag, char *
 
   /* get left paren */
   if (if_header[i++] != ASCII_LEFT_PAREN) {
-    free(*resource_tag);
-    return IF_LOCK_TOKEN_ERR_BAD_PARSE;
+    toret = IF_LOCK_TOKEN_ERR_BAD_PARSE;
+    goto error;
   }
 
   i = skip_bnf_lws(if_header, i);
 
   /* get left bracket */
   if (if_header[i++] != ASCII_LEFT_BRACKET) {
-    free(*resource_tag);
-    return IF_LOCK_TOKEN_ERR_BAD_PARSE;
+    toret = IF_LOCK_TOKEN_ERR_BAD_PARSE;
+    goto error;
   }
 
   /* read uri */
   const char *end_of_uri = strchr(if_header + i, ASCII_RIGHT_BRACKET);
   if (!end_of_uri) {
-    free(*resource_tag);
-    return IF_LOCK_TOKEN_ERR_BAD_PARSE;
+    toret = IF_LOCK_TOKEN_ERR_BAD_PARSE;
+    goto error;
   }
+
   *lock_token =
     strndup_x(if_header + i, end_of_uri - (if_header + i));
   if (!*lock_token) {
-    free(*resource_tag);
-    return IF_LOCK_TOKEN_ERR_INTERNAL;
+    toret = IF_LOCK_TOKEN_ERR_INTERNAL;
+    goto error;
   }
 
-  return IF_LOCK_TOKEN_ERR_SUCCESS;
+  if (false) {
+  error:
+    free(*resource_tag);
+    *resource_tag = NULL;
+    free(*lock_token);
+    *lock_token = NULL;
+  }
+  else {
+    toret = IF_LOCK_TOKEN_ERR_SUCCESS;
+  }
+
+  return toret;
 }
 
 static PURE_FUNCTION bool
@@ -2088,6 +2107,7 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
   /* read all posted data */
   CRYIELD(hc->sub.proppatch.pos,
           http_request_read_body(hc->rh, handle_proppatch_request, hc));
+  assert(ev);
   HTTPRequestReadBodyDoneEvent *rbev = ev;
   if (rbev->error) {
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -2121,10 +2141,9 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
                                        LINKED_LIST_INITIALIZER,
                                        handle_proppatch_request, hc));
 
-  if (hc->sub.proppatch.response_body) {
-    free(hc->sub.proppatch.response_body);
-  }
+  free(hc->sub.proppatch.response_body);
   free(hc->sub.proppatch.request_body);
+
   CRRETURN(hc->sub.proppatch.pos, request_proc(GENERIC_EVENT, NULL, hc));
 
   CREND();
