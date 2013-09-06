@@ -14,9 +14,17 @@
 extern "C" {
 #endif
 
-/* initializes to zero so logging must be explicitly enabled */
+#ifdef STATIC_LOGGING_LEVEL
+enum {
+  _logging_cur_level=STATIC_LOGGING_LEVEL,
+};
+#else
 #ifndef _IS_LOGGING_C
 extern log_level_t _logging_cur_level;
+#endif
+
+void
+logging_set_global_level(log_level_t new_level);
 #endif
 
 #define logging_should_print(level) ((level) <= _logging_cur_level)
@@ -41,9 +49,6 @@ extern log_level_t _logging_cur_level;
   log_critical(str ": %s", strerror(errno))
 #define log_error_errno(str) \
   log_error(str ": %s", strerror(errno))
-
-void
-logging_set_global_level(log_level_t new_level);
 
 #ifdef __cplusplus
 }
