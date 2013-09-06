@@ -24,7 +24,7 @@ extern log_level_t _logging_cur_level;
 /* NB: perhaps this should just be a header function */
 #define log(level, ...)				 \
   do {						 \
-    log_level_t level_ = level;                                         \
+    const log_level_t level_ = level;                                   \
     if (logging_should_print(level_)) {                                 \
       log_printer_print(__FILE__, __LINE__, level_, __VA_ARGS__);       \
     }						 \

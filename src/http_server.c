@@ -713,16 +713,17 @@ http_request_write(http_request_handle_t rh,
   }
 
   assert(rctx->out_content_length >= rctx->bytes_written);
-  if (nbyte > rctx->out_content_length - rctx->bytes_written) {
+  const size_t left_to_write = rctx->out_content_length - rctx->bytes_written;
+  if (nbyte > left_to_write) {
     /* TODO: right now have no facility to do short writes,
        could return write amount when done
     */
     log_warning("conn %p, "
                 "http_request_write will not do a short write, "
-                "request to write less. wanted to write %d, "
-                "but there was only %d left to write",
-                rctx->conn, nbyte,
-                rctx->out_content_length - rctx->bytes_written);
+                "request to write less. wanted to write %lu, "
+                "but there was only %lu left to write",
+                rctx->conn, (unsigned long) nbyte,
+                (unsigned long) left_to_write);
     goto error;
   }
 

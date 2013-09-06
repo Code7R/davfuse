@@ -316,7 +316,7 @@ UTHR_DEFINE(_webdav_backend_fs_put_uthr) {
                                             &new_amount_written);
       if (ret_write) {
         log_error("Couldn't write to resource \"%s\" (fd: %p)",
-                  ctx->relative_uri, ctx->fd);
+                  ctx->relative_uri, (void *) ctx->fd);
         error = WEBDAV_ERROR_GENERAL;
         goto done;
       }
@@ -716,7 +716,8 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
           util_fs_copyfile(pbctx->fs,
                            file_path, destination_path);
 	if (ret_copyfile) {
-	  log_info("Failure to copyfile(\"%s\", \"%s\")", file_path);
+	  log_info("Failure to copyfile(\"%s\", \"%s\")",
+                   file_path, destination_path);
 	  err = WEBDAV_ERROR_GENERAL;
 	  goto done;
 	}

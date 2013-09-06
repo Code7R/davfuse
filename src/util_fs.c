@@ -325,7 +325,7 @@ util_fs_copytree(fs_t fs,
         const fs_error_t ret_remove = fs_remove(fs, path);
         if (ret_remove && ret_remove != FS_ERROR_DOES_NOT_EXIST) {
           log_warning("Failed to delete %s after copying: %s",
-                      path);
+                      path, dest_path);
         }
       }
     }

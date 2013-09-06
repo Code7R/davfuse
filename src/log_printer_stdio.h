@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+#include "c_util.h"
 #include "iface_util.h"
 #include "logging_types.h"
 
@@ -20,7 +21,7 @@ log_printer_stdio_default_init(void);
 void
 log_printer_stdio_shutdown(void);
 
-void
+PRINTF(4, 5) void
 log_printer_stdio_print(const char *filename, int lineno,
                         log_level_t level,
                         const char *format, ...);

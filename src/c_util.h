@@ -22,6 +22,8 @@ extern "C" {
 #define NON_NULL_ARGS3(a, b, c) __attribute__ ((nonnull (a, b, c)))
 #define NON_NULL_ARGS4(a, b, c, d) __attribute__ ((nonnull (a, b, c, d)))
 
+#define PRINTF(FMT,X) __attribute__ ((format (printf, FMT, X)))
+
 #else /* __GNUC__ */
 
 #define UNUSED_FUNCTION_ATTR
@@ -35,6 +37,8 @@ extern "C" {
 #define NON_NULL_ARGS2(a, b)
 #define NON_NULL_ARGS3(a, b, c)
 #define NON_NULL_ARGS4(a, b, c, d)
+
+#define PRINTF(FMT,X)
 
 #endif /* __GNUC__ */
 
@@ -58,17 +62,18 @@ extern "C" {
 
 #define ASSERT_CONCAT_(a, b) a##b
 #define ASSERT_CONCAT(a, b) ASSERT_CONCAT_(a, b)
-  /* These can't be used after statements in c89. */
+
+/* These should only be used before local variable declarations in c89. */
 #ifdef __COUNTER__
 #define STATIC_ASSERT(e, m)                                             \
-  enum { ASSERT_CONCAT(static_assert_, __COUNTER__) = 1/(!!(e)) }
+  enum { ASSERT_CONCAT(__static_assert_, __COUNTER__) = 1/(!!(e)) }
 #else
 /* This can't be used twice on the same line so ensure if using in headers
  * that the headers are not included twice (by wrapping in #ifndef...#endif)
- * Note it doesn't cause an issue when used on same line of separate modules
- * compiled with gcc -combine -fwhole-program.  */
+ * Note it doesn't cause an issue when used on same line of separate modules.
+ */
 #define STATIC_ASSERT(e, m)                                             \
-  enum { ASSERT_CONCAT(assert_line_, __LINE__) = 1/(!!(e)) }
+  enum { ASSERT_CONCAT(__assert_line_, __LINE__) = 1/(!!(e)) }
 #endif
 
 #ifdef __cplusplus
