@@ -76,7 +76,7 @@ All files except those excluded below are copyrighted under the following notice
     You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>
 
-Regarding inclusion of `fuse.h`, `fuse_common.h`, and `fuse_opt.h`:
+Regarding inclusion of `fuse.h`, `fuse_common.h`, `fuse_opt.h` and `fuse_versionscript`:
 
     FUSE: Filesystem in Userspace
     Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
