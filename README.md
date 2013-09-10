@@ -28,7 +28,7 @@ with the wonderful [encfs](http://www.arg0.net/encfs) program.
 
 Test with `curl` (store a file called foo on your FUSE file system):
 
-    $ cat <<EOF | curl -T - 'http://localhost/foo.txt'
+    $ cat <<EOF | curl -T - 'http://localhost:8080/foo.txt'
     fizz buzz
     EOF
 
