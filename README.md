@@ -51,7 +51,7 @@ Compiling davfuse is simple and fun!
 
 Binaries will be places in `out/targets`.
 
-Also included is a test WebDAV server, it'll build on Windows :)
+Also included is a test WebDAV server, it'll build on Windows (using MinGW) :)
 
     $ make RELEASE=1 webdav_server_sockets_fs_main
 
