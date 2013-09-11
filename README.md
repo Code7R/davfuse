@@ -39,7 +39,7 @@ davfuse has been compiled and tested on Mac OS X 10.8 and Debian Wheezy
 GNU/Linux. The author has no reason to believe that it should not
 compile and run on other versions of Mac OS X and GNU/Linux but YMMV.
 Additionally, The pure WebDAV component has been compiled and run
-on Windows XP and Windows 7 using [MingGW](http://mingw.org/).
+on Windows XP and Windows 7 using [MinGW](http://mingw.org/).
 
 Compiling
 ---------
