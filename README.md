@@ -94,7 +94,7 @@ Regarding inclusion of `fuse.h`, `fuse_common.h`, `fuse_opt.h` and `fuse_version
     You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>
 
-Regarding inclusion of `tinyxml2.cpp` and `tinyxml.h`:
+Regarding inclusion of `tinyxml2.cpp` and `tinyxml2.h`:
 
     Original code by Lee Thomason (www.grinninglizard.com)
     
