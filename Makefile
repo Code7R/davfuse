@@ -17,6 +17,12 @@
 # Platform dependent configuation
 include config.mk
 
+# default
+WEBDAV_SERVER_SOCKETS_FS_FS_IMPL ?= $(FS_IMPL)
+WEBDAV_SERVER_SOCKETS_FS_FS_IMPL_EXTRA_SOURCES ?= $(FS_IMPL_EXTRA_SOURCES)
+WEBDAV_SERVER_SOCKETS_FS_FS_IMPL_EXTRA_GEN_HEADERS ?= $(FS_IMPL_EXTRA_GEN_HEADERS)
+WEBDAV_SERVER_SOCKETS_FS_FS_IMPL_EXTRA_IFACE_DEFS ?= $(FS_IMPL_EXTRA_IFACE_DEFS)
+
 OUTROOT := $(if ${RELEASE}, out-release, out)
 TARGETROOT := ${OUTROOT}/targets
 SRCROOT := src
@@ -62,18 +68,21 @@ HTTP_SERVER_TEST_MAIN_OBJ := $(patsubst %,${OUTROOT}/http_server_test_main/obj/%
 
 HTTP_SERVER_TEST_MAIN_TARGET := ${TARGETROOT}/http_server_test_main
 
-# webdav_server_sockets_fs_main vars
+# libwebdav_server_sockets_fs.a vars
 
-WEBDAV_SERVER_SOCKETS_FS_MAIN_SRC = \
-    webdav_server_sockets_fs_main.c \
-    ${HTTP_SERVER_SRC} http_backend_sockets_fdevent.c \
-    fdevent_${FDEVENT_IMPL}.c sockets_${SOCKETS_IMPL}.c util_sockets.c \
+LIBWEBDAV_SERVER_SOCKETS_FS_SRC = \
+    ${HTTP_SERVER_SRC} \
     ${WEBDAV_SERVER_SRC} \
-    webdav_backend_fs.c fs_${FS_IMPL}.c util_fs.c dfs.c \
-    log_printer_${LOG_PRINTER_IMPL}.c \
-    ${FDEVENT_IMPL_EXTRA_SOURCES} \
-    ${FS_IMPL_EXTRA_SOURCES}
-GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN_ := \
+    http_backend_sockets_fdevent.c \
+    fdevent_${FDEVENT_IMPL}.c \
+    sockets_${SOCKETS_IMPL}.c \
+    util_sockets.c \
+    webdav_backend_fs.c \
+    util_fs.c \
+    dfs.c \
+    logging.c \
+    ${FDEVENT_IMPL_EXTRA_SOURCES}
+GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS_ := \
     http_backend_sockets_fdevent_fdevent.h \
     http_backend_sockets_fdevent_sockets.h \
     http_server_http_backend.h \
@@ -82,21 +91,37 @@ GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN_ := \
     webdav_backend_fs_fs.h \
     util_sockets_sockets.h \
     util_fs_fs.h \
-    ${FDEVENT_IMPL_EXTRA_GEN_HEADERS} \
-    ${FS_IMPL_EXTRA_GEN_HEADERS}
-WEBDAV_SERVER_SOCKETS_FS_MAIN_IFACE_DEFS := \
+    ${FDEVENT_IMPL_EXTRA_GEN_HEADERS}
+LIBWEBDAV_SERVER_SOCKETS_FS_IFACE_DEFS := \
     HTTP_BACKEND_SOCKETS_FDEVENT_FDEVENT_DEF=http_backend_sockets_fdevent/fdevent/${FDEVENT_IMPL} \
     HTTP_BACKEND_SOCKETS_FDEVENT_SOCKETS_DEF=http_backend_sockets_fdevent/sockets/${SOCKETS_IMPL} \
     HTTP_SERVER_HTTP_BACKEND_DEF=http_server/http_backend/sockets_fdevent \
     LOGGING_LOG_PRINTER_DEF=logging/log_printer/${LOG_PRINTER_IMPL} \
     WEBDAV_SERVER_WEBDAV_BACKEND_DEF=webdav_server/webdav_backend/fs \
-    WEBDAV_BACKEND_FS_FS_DEF=webdav_backend_fs/fs/${FS_IMPL} \
-    UTIL_FS_FS_DEF=util_fs/fs/${FS_IMPL} \
+    WEBDAV_BACKEND_FS_FS_DEF=webdav_backend_fs/fs/${WEBDAV_SERVER_SOCKETS_FS_FS_IMPL} \
+    UTIL_FS_FS_DEF=util_fs/fs/${WEBDAV_SERVER_SOCKETS_FS_FS_IMPL} \
     UTIL_SOCKETS_SOCKETS_DEF=util_sockets/sockets/${SOCKETS_IMPL} \
-    ${FDEVENT_IMPL_EXTRA_IFACE_DEFS} \
-    ${FS_IMPL_EXTRA_IFACE_DEFS}
+    ${FDEVENT_IMPL_EXTRA_IFACE_DEFS}
 
-GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN = $(patsubst %,${OUTROOT}/webdav_server_sockets_fs_main/headers/%,${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN_})
+GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS = $(patsubst %,${OUTROOT}/libwebdav_server_sockets_fs/headers/%,${GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS_})
+LIBWEBDAV_SERVER_SOCKETS_FS_OBJ := $(patsubst %,${OUTROOT}/libwebdav_server_sockets_fs/obj/%.o,${LIBWEBDAV_SERVER_SOCKETS_FS_SRC})
+
+LIBWEBDAV_SERVER_SOCKETS_FS_TARGET := ${TARGETROOT}/libwebdav_server_sockets_fs.a
+
+# webdav_server_sockets_fs_main vars
+
+WEBDAV_SERVER_SOCKETS_FS_MAIN_SRC := \
+    webdav_server_sockets_fs_main.c \
+    log_printer_${LOG_PRINTER_IMPL}.c \
+    ${WEBDAV_SERVER_SOCKETS_FS_FS_IMPL_EXTRA_SOURCES}
+GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN_ := \
+    logging_log_printer.h \
+    ${WEBDAV_SERVER_SOCKETS_FS_FS_IMPL_EXTRA_GEN_HEADERS}
+WEBDAV_SERVER_SOCKETS_FS_MAIN_IFACE_DEFS := \
+    LOGGING_LOG_PRINTER_DEF=logging/log_printer/${LOG_PRINTER_IMPL} \
+    ${WEBDAV_SERVER_SOCKETS_FS_FS_IMPL_EXTRA_IFACE_DEFS}
+
+GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN = $(patsubst %,${OUTROOT}/libwebdav_server_sockets_fs/headers/%,${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN_})
 WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ := $(patsubst %,${OUTROOT}/webdav_server_sockets_fs_main/obj/%.o,${WEBDAV_SERVER_SOCKETS_FS_MAIN_SRC})
 
 WEBDAV_SERVER_SOCKETS_FS_MAIN_TARGET := ${TARGETROOT}/webdav_server_sockets_fs_main
@@ -139,11 +164,14 @@ LIBDAVFUSE_TARGET := ${TARGETROOT}/${LIBDAVFUSE_FILE_NAME}
 
 DAVFUSE_TARGET := ${TARGETROOT}/davfuse
 
-STATIC_OBJS = ${WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ} ${HTTP_SERVER_TEST_MAIN_OBJ}
+STATIC_OBJS = \
+	${LIBWEBDAV_SERVER_SOCKETS_FS_OBJ} \
+	${HTTP_SERVER_TEST_MAIN_OBJ}
 DYNAMIC_OBJS = ${LIBDAVFUSE_OBJ}
 
 all: options \
     ${HTTP_SERVER_TEST_MAIN_TARGET} \
+    ${LIBWEBDAV_SERVER_SOCKETS_FS_TARGET} \
     ${WEBDAV_SERVER_SOCKETS_FS_MAIN_TARGET} \
     ${LIBDAVFUSE_TARGET} ${DAVFUSE_TARGET}
 
@@ -178,30 +206,43 @@ ${OUTROOT}/*/headers/*_sockets.h: ${SRCROOT}/sockets.idef
 ${OUTROOT}/*/headers/*_webdav_backend.h: ${SRCROOT}/webdav_backend.idef
 
 ${GEN_HEADERS_HTTP_SERVER_TEST_MAIN} \
- ${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN} \
- ${GEN_HEADERS_LIBDAVFUSE}: generate-interface-implementation.sh ${MAKEFILES}
+    ${GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS} \
+    ${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN} \
+    ${GEN_HEADERS_LIBDAVFUSE}: generate-interface-implementation.sh ${MAKEFILES}
+
 ${HTTP_SERVER_TEST_MAIN_OBJ}: \
     ${OUTROOT}/http_server_test_main/obj/%.c.o: ${SRCROOT}/%.c
 ${HTTP_SERVER_TEST_MAIN_OBJ}: \
- ${GEN_HEADERS_HTTP_SERVER_TEST_MAIN} \
- ${MAKEFILES}
+    ${GEN_HEADERS_HTTP_SERVER_TEST_MAIN} \
+    ${MAKEFILES}
+${HTTP_SERVER_TEST_MAIN_TARGET}: ${HTTP_SERVER_TEST_MAIN_OBJ} ${MAKEFILES}
+
+$(filter %.c.o,${LIBWEBDAV_SERVER_SOCKETS_FS_OBJ}): \
+    ${OUTROOT}/libwebdav_server_sockets_fs/obj/%.c.o: ${SRCROOT}/%.c
+$(filter %.cpp.o,${LIBWEBDAV_SERVER_SOCKETS_FS_OBJ}): \
+    ${OUTROOT}/libwebdav_server_sockets_fs/obj/%.cpp.o: ${SRCROOT}/%.cpp
+${LIBWEBDAV_SERVER_SOCKETS_FS_OBJ}: \
+    ${GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS} \
+    ${MAKEFILES}
+${LIBWEBDAV_SERVER_SOCKETS_FS_TARGET}: ${LIBWEBDAV_SERVER_SOCKETS_FS_OBJ} ${MAKEFILES}
 
 $(filter %.c.o,${WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ}): \
     ${OUTROOT}/webdav_server_sockets_fs_main/obj/%.c.o: ${SRCROOT}/%.c
 $(filter %.cpp.o,${WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ}): \
     ${OUTROOT}/webdav_server_sockets_fs_main/obj/%.cpp.o: ${SRCROOT}/%.cpp
 ${WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ}: \
- ${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN} \
- ${MAKEFILES}
+    ${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN} \
+    ${MAKEFILES}
+${WEBDAV_SERVER_SOCKETS_FS_MAIN_TARGET}: \
+	${LIBWEBDAV_SERVER_SOCKETS_FS_TARGET} \
+	${WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ} \
+	${MAKEFILES}
 
 $(filter %.c.o,${LIBDAVFUSE_OBJ}): \
     ${OUTROOT}/libdavfuse/obj/%.c.o: ${SRCROOT}/%.c
 $(filter %.cpp.o,${LIBDAVFUSE_OBJ}): \
     ${OUTROOT}/libdavfuse/obj/%.cpp.o: ${SRCROOT}/%.cpp
 ${LIBDAVFUSE_OBJ}: ${GEN_HEADERS_LIBDAVFUSE} ${MAKEFILES}
-
-${HTTP_SERVER_TEST_MAIN_TARGET}: ${HTTP_SERVER_TEST_MAIN_OBJ} ${MAKEFILES}
-${WEBDAV_SERVER_SOCKETS_FS_MAIN_TARGET}: ${WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ} ${MAKEFILES}
 ${LIBDAVFUSE_TARGET}: ${LIBDAVFUSE_OBJ} ${MAKEFILES}
 
 # basic compilation rules
@@ -215,8 +256,14 @@ $(filter %.c.o,${STATIC_OBJS}):
 $(filter %.cpp.o,${STATIC_OBJS}):
 	@mkdir -p $(dir $@)
 	@${MAKEDEPEND_CXX}
-	@echo CC $(patsubst %.o,%,$(notdir $@))
+	@echo CXX $(patsubst %.o,%,$(notdir $@))
 	@${CXX} -I$(dir $@)../headers ${CPPFLAGS} ${CXXFLAGS} -c -o $@ ${SRCROOT}/$(patsubst %.o,%,$(notdir $@))
+
+$(filter %.c.o,${WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ}):
+	@mkdir -p $(dir $@)
+	@${MAKEDEPEND_CC_WDM}
+	@echo CC $(patsubst %.o,%,$(notdir $@))
+	@${CC} -I$(OUTROOT)/libwebdav_server_sockets_fs/headers -I$(dir $@)../headers ${CPPFLAGS} ${CFLAGS} -c -o $@ ${SRCROOT}/$(patsubst %.o,%,$(notdir $@))
 
 $(filter %.c.o,${DYNAMIC_OBJS}):
 	@mkdir -p $(dir $@)
@@ -227,7 +274,7 @@ $(filter %.c.o,${DYNAMIC_OBJS}):
 $(filter %.cpp.o,${DYNAMIC_OBJS}):
 	@mkdir -p $(dir $@)
 	@${MAKEDEPEND_CXX}
-	@echo CC $(patsubst %.o,%,$(notdir $@))
+	@echo CXX $(patsubst %.o,%,$(notdir $@))
 	@${CXX} -I$(dir $@)../headers ${CPPFLAGS} ${CXXFLAGS} ${CFLAGS_DYN} -c -o $@ ${SRCROOT}/$(patsubst %.o,%,$(notdir $@))
 
 # http_server_test_main rules
@@ -242,6 +289,18 @@ ${HTTP_SERVER_TEST_MAIN_TARGET}:
 	@echo Linking $(notdir $@)
 	@${CC} -o $@ ${HTTP_SERVER_TEST_MAIN_OBJ} ${LDFLAGS} ${SOCKETS_LIBS}
 
+# libwedav_server_sockets_fs.a rules
+
+${GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS}:
+	@mkdir -p $(dir $@)
+	@echo Generating $(notdir $@)
+	@${LIBWEBDAV_SERVER_SOCKETS_FS_IFACE_DEFS} sh generate-interface-implementation.sh $(patsubst %.h,%,$(notdir $@)) > $@
+
+${LIBWEBDAV_SERVER_SOCKETS_FS_TARGET}:
+	@mkdir -p $(dir $@)
+	@echo Linking $(notdir $@)
+	@${AR} rcs $@ ${LIBWEBDAV_SERVER_SOCKETS_FS_OBJ}
+
 # webdav_server_sockets_fs_main rules
 
 ${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN}:
@@ -252,7 +311,7 @@ ${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN}:
 ${WEBDAV_SERVER_SOCKETS_FS_MAIN_TARGET}:
 	@mkdir -p $(dir $@)
 	@echo Linking $(notdir $@)
-	@${CC} ${WEBDAV_SERVER_CLINKFLAGS} ${CFLAGS} -o $@ ${WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ} ${WEBDAV_LIBS} ${SOCKETS_LIBS}
+	@${CC} ${WEBDAV_SERVER_CLINKFLAGS} -L$(dir ${LIBWEBDAV_SERVER_SOCKETS_FS_TARGET}) ${CFLAGS} -o $@ ${WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ} -lwebdav_server_sockets_fs ${WEBDAV_LIBS} ${SOCKETS_LIBS}
 
 # libdavfuse rules
 
@@ -280,6 +339,13 @@ df = ${DEPDIR}/${*F}
 MAKEDEPEND_CC = \
     mkdir -p ${DEPDIR}; \
     ${CC} -M -MT $@ -I$(dir $@)../headers ${CPPFLAGS} ${CFLAGS} -o ${df}.d $<; \
+    CMD=`printf ':a\n s;/\./;/; \n s;//;/; \n s;/[^/][^/]*/\.\./;/; \n s;/[^/][^/]*/\.\.$$;/; \n ta'`; \
+    sed -e "$$CMD" < ${df}.d > ${df}.c.P; \
+    rm -f ${df}.d
+
+MAKEDEPEND_CC_WDM = \
+    mkdir -p ${DEPDIR}; \
+    ${CC} -M -MT $@ -I$(OUTROOT)/libwebdav_server_sockets_fs/headers -I$(dir $@)../headers ${CPPFLAGS} ${CFLAGS} -o ${df}.d $<; \
     CMD=`printf ':a\n s;/\./;/; \n s;//;/; \n s;/[^/][^/]*/\.\./;/; \n s;/[^/][^/]*/\.\.$$;/; \n ta'`; \
     sed -e "$$CMD" < ${df}.d > ${df}.c.P; \
     rm -f ${df}.d

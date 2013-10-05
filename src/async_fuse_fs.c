@@ -890,8 +890,8 @@ async_fuse_worker_main_loop(async_fuse_fs_t fs,
       ret = op->mkdir(msg.mkdir.path, msg.mkdir.mode);
       break;
     case MESSAGE_TYPE_MKNOD:
-      log_debug("Peforming fuse mknod(path=\"%s\", mode=0%o, dev=%d)",
-                msg.mknod.path, msg.mknod.mode, msg.mknod.dev);
+      log_debug("Peforming fuse mknod(path=\"%s\", mode=0%o, dev=%lld)",
+                msg.mknod.path, msg.mknod.mode, (long long) msg.mknod.dev);
       ret = op->mknod(msg.mknod.path, msg.mknod.mode, msg.mknod.dev);
       break;
     case MESSAGE_TYPE_GETDIR:

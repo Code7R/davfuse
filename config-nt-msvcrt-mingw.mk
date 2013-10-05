@@ -18,7 +18,9 @@
 # This example is made for nt/msvcrt/mingw
 SOCKETS_IMPL = winsock
 LOG_PRINTER_IMPL = outputdebugstring
+
 FS_IMPL = win32
+FS_IMPL_EXTRA_SOURCES = fs_win32.c
 
 FDEVENT_IMPL = select
 FDEVENT_IMPL_EXTRA_SOURCES =
