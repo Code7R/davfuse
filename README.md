@@ -64,7 +64,7 @@ All files except those excluded below are copyrighted under the following notice
     Copyright (C) 2012, 2013 Rian Hunter <rian@alum.mit.edu>
     
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU Lessage General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 2 of the License, or
     (at your option) any later version.
     
@@ -82,7 +82,7 @@ Regarding inclusion of `fuse.h`, `fuse_common.h`, `fuse_opt.h` and `fuse_version
     Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
     
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU Lessage General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 2 of the License, or
     (at your option) any later version.
     
