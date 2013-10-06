@@ -27,6 +27,7 @@
 #include <stdint.h>
 
 #include "c_util.h"
+#include "iface_util.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -15,8 +15,6 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>
 
-IDEF_SRC_DIR=src
-
 LOOKUP=$(echo "$1" | tr '[a-z]' '[A-Z]')
 eval "TRIPLE=\${${LOOKUP}_DEF}"
 
@@ -29,8 +27,15 @@ USER=$(echo "$TRIPLE" | sed 's|\([^/]*\)/\([^/]*\)/\([^/]*\)|\1|')
 IFACE=$(echo "$TRIPLE" | sed 's|\([^/]*\)/\([^/]*\)/\([^/]*\)|\2|')
 IMPL=$(echo "$TRIPLE" | sed 's|\([^/]*\)/\([^/]*\)/\([^/]*\)|\3|')
 
+if [ -z "$2" ]; then
+    IDEF_PATH="src/${IFACE}.idef"
+else
+    IDEF_PATH="$2"
+fi
+
+
 if ! (echo "$USER" | grep "^[a-z]\([a-z_0-9]*[a-z0-9]\)\{0,1\}$" > /dev/null); then
-    echo "Bad interface name: $USER" > /dev/stderr
+    echo "Bad user name: $USER" > /dev/stderr
     exit 255
 fi
 
@@ -53,7 +58,6 @@ IFACE_TITLE=$(echo "$IFACE" | perl -pe 's/^([a-z])/\U$1/' | perl -pe 's/_([a-z])
 IMPL_TITLE=$(echo "$IMPL" | perl -pe 's/^([a-z])/\U$1/' | perl -pe 's/_([a-z])/\U$1/g')
 
 HEADER_FILE="${USER}_${IFACE}"
-IDEF_PATH="${IDEF_SRC_DIR}/${IFACE}.idef"
 
 if which md5sum > /dev/null; then
     IMPL_HASH=0x$(echo "$IMPL" | md5sum | cut -b 1-8)
