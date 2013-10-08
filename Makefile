@@ -192,7 +192,7 @@ options:
 	@echo "WEBDAV_SERVER_CLINKFLAGS = ${WEBDAV_SERVER_CLINKFLAGS}"
 
 http_server_test_main: options ${HTTP_SERVER_TEST_MAIN_TARGET}
-libwebdav_server_sockets_fs: options ${LIBWEBDAV_SERVER_SOCKETS_FS_TARGET}
+libwebdav_server_sockets_fs.a: options ${LIBWEBDAV_SERVER_SOCKETS_FS_TARGET}
 webdav_server_sockets_fs_main: options ${WEBDAV_SERVER_SOCKETS_FS_MAIN_TARGET}
 libdavfuse: options ${LIBDAVFUSE_TARGET}
 davfuse: options ${DAVFUSE_TARGET}

@@ -72,8 +72,14 @@ extern "C" {
 #define HEADER_FUNCTION static UNUSED_FUNCTION_ATTR
 #define HEADER_CONST static UNUSED_CONST_ATTR
 
+/* use gcc style single-eval macros if possible */
+#ifndef MAX
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
+
+#ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
 
 /* just used for readability */
 #define OUT_VAR

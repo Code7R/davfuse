@@ -19,6 +19,7 @@
 #ifndef _FS_POSIX_H
 #define _FS_POSIX_H
 
+#include <sys/types.h>
 #include <dirent.h>
 
 #include <limits.h>
@@ -47,11 +48,13 @@ typedef enum {
   FS_POSIX_ERROR_NO_SPACE,
   FS_POSIX_ERROR_PERM,
   FS_POSIX_ERROR_EXISTS,
+  FS_POSIX_ERROR_ACCESS,
   FS_POSIX_ERROR_CROSS_DEVICE,
 } fs_posix_error_t;
 
-typedef long long fs_posix_time_t;
-typedef long long fs_posix_off_t;
+typedef time_t fs_posix_time_t;
+typedef off_t fs_posix_off_t;
+typedef ino_t fs_posix_file_id_t;
 
 /* NB: not totally sure about defining constants like this,
    a #define might be better */
@@ -63,6 +66,7 @@ typedef struct {
   fs_posix_time_t created_time;
   bool is_directory;
   fs_posix_off_t size;
+  fs_posix_file_id_t file_id;
 } FsPosixAttrs;
 
 fs_posix_t

@@ -103,6 +103,7 @@ fill_attrs(FsPosixAttrs *attrs, struct stat *st) {
     .created_time = FS_POSIX_INVALID_TIME,
     .is_directory = S_ISDIR(st->st_mode),
     .size = st->st_size,
+    .file_id = st->st_ino,
   };
 }
 
