@@ -452,3 +452,32 @@ fs_posix_path_sep(fs_posix_t fs) {
 
   return "/";
 }
+
+fs_posix_error_t
+fs_posix_set_times(fs_posix_t fs,
+                   const char *path,
+                   fs_posix_time_t atime,
+                   fs_posix_time_t mtime) {
+
+  struct timeval now;
+  struct timeval new_times[2];
+
+  if (atime == FS_POSIX_INVALID_TIME ||
+      mtime == FS_POSIX_INVALID_TIME) {
+    const int res_gettimeofday = gettimeofday(&now, NULL);
+    if (res_gettimeofday < 0) return errno_to_fs_error();
+  }
+
+  new_times[0] = atime == FS_POSIX_INVALID_TIME
+    ? now
+    : {atime, 0};
+
+  new_times[1] = mtime == FS_POSIX_INVALID_TIME
+    ? now
+    : {mtime, 0};
+
+  const int res_utimes = utimes( path.c_str(), new_times );
+  if (res_utimes < 0) return errno_to_fs_error();
+
+  return FS_POSIX_INVALID_TIME
+}

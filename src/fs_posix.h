@@ -50,6 +50,7 @@ typedef enum {
   FS_POSIX_ERROR_EXISTS,
   FS_POSIX_ERROR_ACCESS,
   FS_POSIX_ERROR_CROSS_DEVICE,
+  FS_POSIX_ERROR_INVALID_ARG,
 } fs_posix_error_t;
 
 typedef time_t fs_posix_time_t;
@@ -132,6 +133,12 @@ fs_posix_rename(fs_posix_t fs,
 
 fs_posix_error_t
 fs_posix_close(fs_posix_t fs, fs_posix_file_handle_t handle);
+
+fs_posix_error_t
+fs_posix_set_times(fs_posix_t fs,
+                   const char *path,
+                   fs_posix_time_t atime,
+                   fs_posix_time_t mtime);
 
 bool
 fs_posix_destroy(fs_posix_t fs);

@@ -36,6 +36,7 @@ ERROR_PERM
 ERROR_EXISTS
 ERROR_CROSS_DEVICE
 ERROR_NO_MEM
+ERROR_INVALID_ARG
 
 # type constants
 INVALID_TIME
@@ -56,6 +57,7 @@ mkdir
 getattr
 rename
 close
+set_times
 blank_new
 destroy
 path_is_root
