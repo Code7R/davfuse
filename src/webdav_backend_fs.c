@@ -22,16 +22,13 @@
 #include <string.h>
 
 #include "iface_util.h"
+#include "fs.h"
 #include "uthread.h"
 #include "util.h"
 #include "util_fs.h"
-#include "util_fs_fs.h"
-#include "webdav_backend_fs_fs.h"
 #include "webdav_server.h"
 
 #include "webdav_backend_fs.h"
-
-ASSERT_SAME_IMPL(UTIL_FS_FS_IMPL, WEBDAV_BACKEND_FS_FS_IMPL);
 
 enum {
   //  TRANSFER_BUF_SIZE=4096,
@@ -39,7 +36,7 @@ enum {
 };
 
 typedef struct _webdav_backend_fs {
-  fs_t fs;
+  fs_handle_t fs;
   char *base_path;
   size_t base_path_len;
 } WebdavBackendFs;
@@ -98,7 +95,7 @@ path_from_uri(WebdavBackendFs *pbctx, const char *real_uri) {
 }
 
 webdav_backend_fs_t
-webdav_backend_fs_new(fs_t fs, const char *root) {
+webdav_backend_fs_new(fs_handle_t fs, const char *root) {
   char *base_path = NULL;
 
   if (!fs_path_is_root(fs, root) &&

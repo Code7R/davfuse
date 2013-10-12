@@ -20,7 +20,7 @@
 #define _WEBDAV_BACKEND_FS_H
 
 #include "iface_util.h"
-#include "webdav_backend_fs_fs.h"
+#include "fs.h"
 #include "_webdav_server_types.h"
 
 #ifdef __cplusplus
@@ -32,7 +32,7 @@ struct _webdav_backend_fs;
 typedef struct _webdav_backend_fs *webdav_backend_fs_t;
 
 webdav_backend_fs_t
-webdav_backend_fs_new(fs_t fs, const char *root);
+webdav_backend_fs_new(fs_handle_t fs, const char *root);
 
 void
 webdav_backend_fs_destroy(webdav_backend_fs_t backend);

@@ -17,11 +17,13 @@
 # Platform dependent configuation
 include config.mk
 
-# default
-WEBDAV_SERVER_SOCKETS_FS_FS_IMPL ?= $(FS_IMPL)
-WEBDAV_SERVER_SOCKETS_FS_FS_IMPL_EXTRA_SOURCES ?= $(FS_IMPL_EXTRA_SOURCES)
-WEBDAV_SERVER_SOCKETS_FS_FS_IMPL_EXTRA_GEN_HEADERS ?= $(FS_IMPL_EXTRA_GEN_HEADERS)
-WEBDAV_SERVER_SOCKETS_FS_FS_IMPL_EXTRA_IFACE_DEFS ?= $(FS_IMPL_EXTRA_IFACE_DEFS)
+unique_fn = $(shell echo $(1) | tr ' ' '\n' | sort | uniq | tr '\n' ' ')
+
+ifdef USE_DYNAMIC_FS
+MAIN_FS_IMPL := dynamic
+else
+MAIN_FS_IMPL := $(FS_IMPL)
+endif
 
 OUTROOT := $(if ${RELEASE}, out-release, out)
 TARGETROOT := ${OUTROOT}/targets
@@ -49,60 +51,63 @@ HTTP_SERVER_TEST_MAIN_SRC := http_server_test_main.c \
     fdevent_${FDEVENT_IMPL}.c sockets_${SOCKETS_IMPL}.c util_sockets.c \
     log_printer_${LOG_PRINTER_IMPL}.c
 GEN_HEADERS_HTTP_SERVER_TEST_MAIN_ := \
-    http_backend_sockets_fdevent_fdevent.h \
-    http_backend_sockets_fdevent_sockets.h \
-    http_server_http_backend.h \
-    logging_log_printer.h \
-    util_sockets_sockets.h \
+    fdevent.h \
+    sockets.h \
+    http_backend.h \
+    log_printer.h \
     ${FDEVENT_IMPL_EXTRA_GEN_HEADERS}
 HTTP_SERVER_TEST_MAIN_IFACE_DEFS := \
-    HTTP_BACKEND_SOCKETS_FDEVENT_FDEVENT_DEF=http_backend_sockets_fdevent/fdevent/${FDEVENT_IMPL} \
-    HTTP_BACKEND_SOCKETS_FDEVENT_SOCKETS_DEF=http_backend_sockets_fdevent/sockets/${SOCKETS_IMPL} \
-    HTTP_SERVER_HTTP_BACKEND_DEF=http_server/http_backend/sockets_fdevent \
-    LOGGING_LOG_PRINTER_DEF=logging/log_printer/${LOG_PRINTER_IMPL} \
-    UTIL_SOCKETS_SOCKETS_DEF=util_sockets/sockets/${SOCKETS_IMPL} \
+    FDEVENT_DEF=${FDEVENT_IMPL} \
+    SOCKETS_DEF=${SOCKETS_IMPL} \
+    HTTP_BACKEND_DEF=sockets_fdevent \
+    LOG_PRINTER_DEF=${LOG_PRINTER_IMPL} \
     ${FDEVENT_IMPL_EXTRA_IFACE_DEFS}
 
-GEN_HEADERS_HTTP_SERVER_TEST_MAIN := $(patsubst %,${OUTROOT}/http_server_test_main/headers/%,${GEN_HEADERS_HTTP_SERVER_TEST_MAIN_})
+GEN_HEADERS_HTTP_SERVER_TEST_MAIN := $(call unique_fn,$(patsubst %,${OUTROOT}/http_server_test_main/headers/%,${GEN_HEADERS_HTTP_SERVER_TEST_MAIN_}))
 HTTP_SERVER_TEST_MAIN_OBJ := $(patsubst %,${OUTROOT}/http_server_test_main/obj/%.o,${HTTP_SERVER_TEST_MAIN_SRC})
 
 HTTP_SERVER_TEST_MAIN_TARGET := ${TARGETROOT}/http_server_test_main
 
 # libwebdav_server_sockets_fs.a vars
 
-LIBWEBDAV_SERVER_SOCKETS_FS_SRC = \
+LIBWEBDAV_SERVER_SOCKETS_FS_SRC_ = \
     ${HTTP_SERVER_SRC} \
     ${WEBDAV_SERVER_SRC} \
     http_backend_sockets_fdevent.c \
-    fdevent_${FDEVENT_IMPL}.c \
-    sockets_${SOCKETS_IMPL}.c \
     util_sockets.c \
     webdav_backend_fs.c \
     util_fs.c \
     dfs.c \
-    ${FDEVENT_IMPL_EXTRA_SOURCES}
+    log_printer_${LOG_PRINTER_IMPL}.c \
+    sockets_${SOCKETS_IMPL}.c \
+    fdevent_${FDEVENT_IMPL}.c \
+    fs_${FS_IMPL}.c \
+    fs_${MAIN_FS_IMPL}.c \
+    ${FDEVENT_IMPL_EXTRA_SOURCES} \
+    ${FS_IMPL_EXTRA_SOURCES}
 GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS_ := \
-    http_backend_sockets_fdevent_fdevent.h \
-    http_backend_sockets_fdevent_sockets.h \
-    http_server_http_backend.h \
-    logging_log_printer.h \
-    webdav_server_webdav_backend.h \
-    webdav_backend_fs_fs.h \
-    util_sockets_sockets.h \
-    util_fs_fs.h \
-    ${FDEVENT_IMPL_EXTRA_GEN_HEADERS}
+    fdevent.h \
+    sockets.h \
+    http_backend.h \
+    log_printer.h \
+    webdav_backend.h \
+    fs.h \
+    fs_native.h \
+    ${FDEVENT_IMPL_EXTRA_GEN_HEADERS} \
+    ${FS_IMPL_EXTRA_GEN_HEADERS}
 LIBWEBDAV_SERVER_SOCKETS_FS_IFACE_DEFS := \
-    HTTP_BACKEND_SOCKETS_FDEVENT_FDEVENT_DEF=http_backend_sockets_fdevent/fdevent/${FDEVENT_IMPL} \
-    HTTP_BACKEND_SOCKETS_FDEVENT_SOCKETS_DEF=http_backend_sockets_fdevent/sockets/${SOCKETS_IMPL} \
-    HTTP_SERVER_HTTP_BACKEND_DEF=http_server/http_backend/sockets_fdevent \
-    LOGGING_LOG_PRINTER_DEF=logging/log_printer/${LOG_PRINTER_IMPL} \
-    WEBDAV_SERVER_WEBDAV_BACKEND_DEF=webdav_server/webdav_backend/fs \
-    WEBDAV_BACKEND_FS_FS_DEF=webdav_backend_fs/fs/${WEBDAV_SERVER_SOCKETS_FS_FS_IMPL} \
-    UTIL_FS_FS_DEF=util_fs/fs/${WEBDAV_SERVER_SOCKETS_FS_FS_IMPL} \
-    UTIL_SOCKETS_SOCKETS_DEF=util_sockets/sockets/${SOCKETS_IMPL} \
-    ${FDEVENT_IMPL_EXTRA_IFACE_DEFS}
+    FDEVENT_DEF=${FDEVENT_IMPL} \
+    SOCKETS_DEF=${SOCKETS_IMPL} \
+    HTTP_BACKEND_DEF=sockets_fdevent \
+    LOG_PRINTER_DEF=${LOG_PRINTER_IMPL} \
+    WEBDAV_BACKEND_DEF=fs \
+    FS_DEF=${MAIN_FS_IMPL} \
+    FS_NATIVE_DEF=${FS_IMPL}/fs \
+    ${FDEVENT_IMPL_EXTRA_IFACE_DEFS} \
+    ${FS_IMPL_EXTRA_IFACE_DEFS}
 
-GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS = $(patsubst %,${OUTROOT}/libwebdav_server_sockets_fs/headers/%,${GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS_})
+LIBWEBDAV_SERVER_SOCKETS_FS_SRC = $(call unique_fn,$(LIBWEBDAV_SERVER_SOCKETS_FS_SRC_))
+GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS = $(call unique_fn,$(patsubst %,${OUTROOT}/libwebdav_server_sockets_fs/headers/%,${GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS_}))
 LIBWEBDAV_SERVER_SOCKETS_FS_OBJ := $(patsubst %,${OUTROOT}/libwebdav_server_sockets_fs/obj/%.o,${LIBWEBDAV_SERVER_SOCKETS_FS_SRC})
 
 LIBWEBDAV_SERVER_SOCKETS_FS_TARGET := ${TARGETROOT}/libwebdav_server_sockets_fs.a
@@ -111,17 +116,13 @@ LIBWEBDAV_SERVER_SOCKETS_FS_TARGET := ${TARGETROOT}/libwebdav_server_sockets_fs.
 
 WEBDAV_SERVER_SOCKETS_FS_MAIN_SRC := \
     ${LIBWEBDAV_SERVER_SOCKETS_FS_SRC} \
-    webdav_server_sockets_fs_main.c \
-    log_printer_${LOG_PRINTER_IMPL}.c \
-    ${WEBDAV_SERVER_SOCKETS_FS_FS_IMPL_EXTRA_SOURCES}
+    webdav_server_sockets_fs_main.c
 GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN_ := \
-    ${GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS_} \
-    ${WEBDAV_SERVER_SOCKETS_FS_FS_IMPL_EXTRA_GEN_HEADERS}
+    ${GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS_}
 WEBDAV_SERVER_SOCKETS_FS_MAIN_IFACE_DEFS := \
-    ${LIBWEBDAV_SERVER_SOCKETS_FS_IFACE_DEFS} \
-    ${WEBDAV_SERVER_SOCKETS_FS_FS_IMPL_EXTRA_IFACE_DEFS}
+    ${LIBWEBDAV_SERVER_SOCKETS_FS_IFACE_DEFS}
 
-GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN = $(patsubst %,${OUTROOT}/webdav_server_sockets_fs_main/headers/%,${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN_})
+GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN = $(call unique_fn,$(patsubst %,${OUTROOT}/webdav_server_sockets_fs_main/headers/%,${GEN_HEADERS_WEBDAV_SERVER_SOCKETS_FS_MAIN_}))
 WEBDAV_SERVER_SOCKETS_FS_MAIN_OBJ := $(patsubst %,${OUTROOT}/webdav_server_sockets_fs_main/obj/%.o,${WEBDAV_SERVER_SOCKETS_FS_MAIN_SRC})
 
 WEBDAV_SERVER_SOCKETS_FS_MAIN_TARGET := ${TARGETROOT}/webdav_server_sockets_fs_main
@@ -137,25 +138,21 @@ LIBDAVFUSE_SRC := \
     log_printer_${LOG_PRINTER_IMPL}.c \
     ${WEBDAV_SERVER_SRC} webdav_backend_async_fuse.c
 GEN_HEADERS_LIBDAVFUSE_ := \
-    async_fuse_fs_fdevent.h \
-    http_backend_sockets_fdevent_fdevent.h \
-    http_backend_sockets_fdevent_sockets.h \
-    http_server_http_backend.h \
-    logging_log_printer.h \
-    webdav_server_webdav_backend.h \
-    util_sockets_sockets.h \
+    fdevent.h \
+    sockets.h \
+    http_backend.h \
+    log_printer.h \
+    webdav_backend.h \
     ${FDEVENT_IMPL_EXTRA_GEN_HEADERS}
 LIBDAVFUSE_IFACE_DEFS := \
-    ASYNC_FUSE_FS_FDEVENT_DEF=async_fuse_fs/fdevent/${FDEVENT_IMPL} \
-    HTTP_BACKEND_SOCKETS_FDEVENT_FDEVENT_DEF=http_backend_sockets_fdevent/fdevent/${FDEVENT_IMPL} \
-    HTTP_BACKEND_SOCKETS_FDEVENT_SOCKETS_DEF=http_backend_sockets_fdevent/sockets/${SOCKETS_IMPL} \
-    HTTP_SERVER_HTTP_BACKEND_DEF=http_server/http_backend/sockets_fdevent \
-    LOGGING_LOG_PRINTER_DEF=logging/log_printer/${LOG_PRINTER_IMPL} \
-    WEBDAV_SERVER_WEBDAV_BACKEND_DEF=webdav_server/webdav_backend/async_fuse \
-    UTIL_SOCKETS_SOCKETS_DEF=util_sockets/sockets/${SOCKETS_IMPL} \
+    FDEVENT_DEF=${FDEVENT_IMPL} \
+    SOCKETS_DEF=${SOCKETS_IMPL} \
+    HTTP_BACKEND_DEF=sockets_fdevent \
+    LOG_PRINTER_DEF=${LOG_PRINTER_IMPL} \
+    WEBDAV_BACKEND_DEF=async_fuse \
     ${FDEVENT_IMPL_EXTRA_IFACE_DEFS}
 
-GEN_HEADERS_LIBDAVFUSE = $(patsubst %,${OUTROOT}/libdavfuse/headers/%,${GEN_HEADERS_LIBDAVFUSE_})
+GEN_HEADERS_LIBDAVFUSE = $(call unique_fn,$(patsubst %,${OUTROOT}/libdavfuse/headers/%,${GEN_HEADERS_LIBDAVFUSE_}))
 LIBDAVFUSE_OBJ := $(patsubst %,${OUTROOT}/libdavfuse/obj/%.o,${LIBDAVFUSE_SRC})
 
 LIBDAVFUSE_TARGET := ${TARGETROOT}/${LIBDAVFUSE_FILE_NAME}
@@ -199,13 +196,15 @@ davfuse: options ${DAVFUSE_TARGET}
 
 # dependencies
 
-${OUTROOT}/*/headers/*_fdevent.h: ${SRCROOT}/fdevent.idef
-${OUTROOT}/*/headers/*_fs.h: ${SRCROOT}/fs.idef
-${OUTROOT}/*/headers/*_fstatat.h: ${SRCROOT}/fstatat.idef
-${OUTROOT}/*/headers/*_http_backend.h: ${SRCROOT}/http_backend.idef
-${OUTROOT}/*/headers/*_log_printer.h: ${SRCROOT}/log_printer.idef
-${OUTROOT}/*/headers/*_sockets.h: ${SRCROOT}/sockets.idef
-${OUTROOT}/*/headers/*_webdav_backend.h: ${SRCROOT}/webdav_backend.idef
+${OUTROOT}/*/headers/fdevent.h: ${SRCROOT}/fdevent.idef
+${OUTROOT}/*/headers/fs.h: ${SRCROOT}/fs.idef
+${OUTROOT}/*/headers/fstatat.h: ${SRCROOT}/fstatat.idef
+${OUTROOT}/*/headers/http_backend.h: ${SRCROOT}/http_backend.idef
+${OUTROOT}/*/headers/log_printer.h: ${SRCROOT}/log_printer.idef
+${OUTROOT}/*/headers/sockets.h: ${SRCROOT}/sockets.idef
+${OUTROOT}/*/headers/webdav_backend.h: ${SRCROOT}/webdav_backend.idef
+
+${OUTROOT}/libwebdav_server_sockets_fs/headers/fs_native.h: ${SRCROOT}/fs.idef
 
 ${GEN_HEADERS_HTTP_SERVER_TEST_MAIN} \
     ${GEN_HEADERS_LIBWEBDAV_SERVER_SOCKETS_FS} \

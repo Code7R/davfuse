@@ -17,7 +17,7 @@
  */
 
 #include "util.h"
-#include "util_sockets_sockets.h"
+#include "sockets.h"
 
 #include "util_sockets.h"
 

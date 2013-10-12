@@ -14,34 +14,6 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>
 
-# integral types
-t
-file_handle_t
-directory_handle_t
-error_t
-time_t
-off_t
-
-# transparent structural types
-Attrs
-
-# error constants
-ERROR_SUCCESS
-ERROR_DOES_NOT_EXIST
-ERROR_NOT_DIR
-ERROR_IS_DIR
-ERROR_IO
-ERROR_NO_SPACE
-ERROR_PERM
-ERROR_EXISTS
-ERROR_CROSS_DEVICE
-ERROR_NO_MEM
-ERROR_INVALID_ARG
-
-# type constants
-INVALID_TIME
-INVALID_OFF
-
 # functions
 default_new
 open
@@ -58,7 +30,6 @@ getattr
 rename
 close
 set_times
-blank_new
 destroy
 path_is_root
 path_equals

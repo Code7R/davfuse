@@ -31,13 +31,15 @@
 #include <signal.h>
 
 #include "c_util.h"
+#include "fdevent.h"
+#include "fs.h"
+#include "http_backend.h"
 #include "http_backend_sockets_fdevent.h"
-#include "http_backend_sockets_fdevent_fdevent.h"
 #include "iface_util.h"
 #include "logging.h"
-#include "logging_log_printer.h"
+#include "log_printer.h"
+#include "webdav_backend.h"
 #include "webdav_backend_fs.h"
-#include "webdav_backend_fs_fs.h"
 #include "webdav_server.h"
 #include "webdav_server_xml.h"
 #include "uthread.h"
@@ -46,11 +48,11 @@
 
 #ifndef _WIN32
 #include "log_printer_stdio.h"
-ASSERT_SAME_IMPL(LOGGING_LOG_PRINTER_IMPL, LOG_PRINTER_STDIO_IMPL);
+ASSERT_SAME_IMPL(LOG_PRINTER_IMPL, LOG_PRINTER_STDIO_IMPL);
 #endif
 
-ASSERT_SAME_IMPL(HTTP_SERVER_HTTP_BACKEND_IMPL, HTTP_BACKEND_SOCKETS_FDEVENT_IMPL);
-ASSERT_SAME_IMPL(WEBDAV_SERVER_WEBDAV_BACKEND_IMPL, WEBDAV_BACKEND_FS_IMPL);
+ASSERT_SAME_IMPL(HTTP_BACKEND_IMPL, HTTP_BACKEND_SOCKETS_FDEVENT_IMPL);
+ASSERT_SAME_IMPL(WEBDAV_BACKEND_IMPL, WEBDAV_BACKEND_FS_IMPL);
 
 int
 main(int argc, char *argv[]) {
@@ -117,7 +119,7 @@ main(int argc, char *argv[]) {
   ASSERT_TRUE(http_backend);
 
   /* create fs (implementation is compile-time configurable) */
-  fs_t fs = fs_default_new();
+  fs_handle_t fs = fs_default_new();
   ASSERT_TRUE(fs);
 
   /* create storage backend (implemented by the file system) */

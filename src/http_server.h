@@ -24,7 +24,7 @@
 
 #include "c_util.h"
 #include "events.h"
-#include "http_server_http_backend.h"
+#include "http_backend.h"
 #include "uthread.h"
 
 #ifdef __cplusplus

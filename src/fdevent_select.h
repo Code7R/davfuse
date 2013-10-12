@@ -23,8 +23,8 @@
 
 #include "c_util.h"
 #include "events.h"
-#include "fdevent_select_sockets.h"
 #include "iface_util.h"
+#include "sockets.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,7 +49,7 @@ typedef struct {
   StreamEvents events;
 } FdeventSelectEvent;
 
-#define FDEVENT_SELECT_INVALID_WATCH_KEY NULL
+#define FDEVENT_SELECT_INVALID_WATCH_KEY ((fdevent_select_watch_key_t) 0)
 
 fdevent_select_loop_t
 fdevent_select_default_new();

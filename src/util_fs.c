@@ -27,7 +27,7 @@
 #include "dfs.h"
 #include "logging.h"
 #include "util.h"
-#include "util_fs_fs.h"
+#include "fs.h"
 
 #include "util_fs.h"
 
@@ -50,19 +50,19 @@ util_fs_strerror(fs_error_t error) {
 }
 
 void
-util_fs_closedir_or_abort(fs_t fs, fs_directory_handle_t dir) {
+util_fs_closedir_or_abort(fs_handle_t fs, fs_directory_handle_t dir) {
   const fs_error_t close_ret = fs_closedir(fs, dir);
   ASSERT_TRUE(!close_ret);
 }
 
 void
-util_fs_close_or_abort(fs_t fs, fs_file_handle_t f) {
+util_fs_close_or_abort(fs_handle_t fs, fs_file_handle_t f) {
   const fs_error_t close_ret = fs_close(fs, f);
   ASSERT_TRUE(!close_ret);
 }
 
 fs_error_t
-util_fs_file_exists(fs_t fs, const char *file_path, bool *exists) {
+util_fs_file_exists(fs_handle_t fs, const char *file_path, bool *exists) {
   FsAttrs attrs;
   const fs_error_t ret = fs_getattr(fs, file_path, &attrs);
   if (ret) {
@@ -81,7 +81,7 @@ util_fs_file_exists(fs_t fs, const char *file_path, bool *exists) {
 }
 
 fs_error_t
-util_fs_file_is_dir(fs_t fs, const char *file_path, bool *is_dir) {
+util_fs_file_is_dir(fs_handle_t fs, const char *file_path, bool *is_dir) {
   FsAttrs attrs;
   const fs_error_t ret = fs_getattr(fs, file_path, &attrs);
   if (ret) {
@@ -100,7 +100,7 @@ util_fs_file_is_dir(fs_t fs, const char *file_path, bool *is_dir) {
 }
 
 fs_error_t
-util_fs_touch(fs_t fs, const char *file_path, bool *created) {
+util_fs_touch(fs_handle_t fs, const char *file_path, bool *created) {
   bool create = true;
   fs_file_handle_t h;
   const fs_error_t ret_open = fs_open(fs, file_path, create, &h, created);
@@ -120,7 +120,7 @@ util_fs_touch(fs_t fs, const char *file_path, bool *created) {
 
 static linked_list_t
 _rm_tree_expand(void *ud, void *node, linked_list_t ll) {
-  const fs_t fs = (fs_t) ud;
+  const fs_handle_t fs = (fs_handle_t) ud;
   char *const path = (char *) node;
 
   fs_directory_handle_t dir_handle;
@@ -164,7 +164,7 @@ _rm_tree_expand(void *ud, void *node, linked_list_t ll) {
 }
 
 linked_list_t
-util_fs_rmtree(fs_t fs, const char *fpath_) {
+util_fs_rmtree(fs_handle_t fs, const char *fpath_) {
   linked_list_t failed_to_delete = LINKED_LIST_INITIALIZER;
 
   char *fpath = strdup_x(fpath_);
@@ -199,7 +199,7 @@ util_fs_rmtree(fs_t fs, const char *fpath_) {
 }
 
 fs_error_t
-util_fs_copyfile(fs_t fs,
+util_fs_copyfile(fs_handle_t fs,
                  const char *from_path,
                  const char *to_path) {
   enum {
@@ -273,7 +273,7 @@ util_fs_copyfile(fs_t fs,
 }
 
 static char *
-reparent_path(fs_t fs,
+reparent_path(fs_handle_t fs,
               const char *from_path, const char *to_path,
               const char *to_transform) {
   if (fs_path_equals(fs, from_path, to_transform)) {
@@ -289,7 +289,7 @@ reparent_path(fs_t fs,
 }
 
 linked_list_t
-util_fs_copytree(fs_t fs,
+util_fs_copytree(fs_handle_t fs,
                  const char *from_path,
                  const char *to_path,
                  bool delete_original) {
@@ -389,7 +389,7 @@ util_fs_copytree(fs_t fs,
 }
 
 char *
-util_fs_path_dirname(fs_t fs, const char *path) {
+util_fs_path_dirname(fs_handle_t fs, const char *path) {
   if (fs_path_is_root(fs, path)) {
     return strdup_x(path);
   }
@@ -406,7 +406,7 @@ util_fs_path_dirname(fs_t fs, const char *path) {
 }
 
 char *
-util_fs_path_join(fs_t fs, const char *path, const char *name) {
+util_fs_path_join(fs_handle_t fs, const char *path, const char *name) {
   size_t len_of_basename = strlen(name);
 
   bool add_sep = true;

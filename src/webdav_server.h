@@ -20,11 +20,15 @@
 #define WEBDAV_SERVER_H
 
 #include "events.h"
-#include "http_server_http_backend.h"
+#include "http_backend.h"
 #include "util.h"
-#include "webdav_server_webdav_backend.h"
+#include "webdav_backend.h"
 
 #include "_webdav_server_types.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 enum {
   MAX_FILE_NAME_LENGTH=256,
@@ -104,5 +108,9 @@ void
 webdav_put_request_end(webdav_get_request_ctx_t put_ctx,
                        webdav_error_t error,
                        bool resource_existed);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

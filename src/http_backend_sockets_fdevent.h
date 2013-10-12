@@ -20,9 +20,9 @@
 #define _HTTP_BACKEND_FDEVENT_H
 
 #include "coroutine_io.h"
-#include "http_backend_sockets_fdevent_fdevent.h"
-#include "http_backend_sockets_fdevent_sockets.h"
+#include "fdevent.h"
 #include "iface_util.h"
+#include "sockets.h"
 
 #ifdef __cplusplus
 extern "C" {

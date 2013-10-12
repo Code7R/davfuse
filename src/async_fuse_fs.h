@@ -24,7 +24,7 @@
 #undef FUSE_USE_VERSION
 
 #include "events.h"
-#include "async_fuse_fs_fdevent.h"
+#include "fdevent.h"
 
 struct async_fuse_fs;
 

@@ -20,8 +20,8 @@
 #include <string.h>
 
 #include "events.h"
-#include "http_backend_sockets_fdevent_fdevent.h"
-#include "http_backend_sockets_fdevent_sockets.h"
+#include "fdevent.h"
+#include "sockets.h"
 #include "uthread.h"
 #include "util.h"
 #include "util_sockets.h"

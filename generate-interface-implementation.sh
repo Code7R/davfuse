@@ -15,17 +15,29 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>
 
-LOOKUP=$(echo "$1" | tr '[a-z]' '[A-Z]')
-eval "TRIPLE=\${${LOOKUP}_DEF}"
+IFACE_SYNONYM="$1"
+IFACE_SYNONYM_UPPER=$(echo "$IFACE_SYNONYM" | tr '[a-z]' '[A-Z]')
 
-if [ -z "$TRIPLE" ]; then
-    echo "Interface file \"${LOOKUP}_DEF\" was not defined"  > /dev/stderr
-    exit 255
+if [ -z "$IFACE_SYNONYM" ]; then
+    echo "Interface not found: $1"  > /dev/stderr
 fi
 
-USER=$(echo "$TRIPLE" | sed 's|\([^/]*\)/\([^/]*\)/\([^/]*\)|\1|')
-IFACE=$(echo "$TRIPLE" | sed 's|\([^/]*\)/\([^/]*\)/\([^/]*\)|\2|')
-IMPL=$(echo "$TRIPLE" | sed 's|\([^/]*\)/\([^/]*\)/\([^/]*\)|\3|')
+eval "IFACE_CFG=\${${IFACE_SYNONYM_UPPER}_DEF}"
+
+if echo "$IFACE_CFG" | grep '[a-z_]\{1,\}/[a-z_]\{1,\}' > /dev/null; then
+    IMPL=$(echo "$IFACE_CFG" | sed 's|\([a-z_]\{1,\}\)/\([a-z_]\{1,\}\)|\1|')
+    IFACE=$(echo "$IFACE_CFG" | sed 's|\([a-z_]\{1,\}\)/\([a-z_]\{1,\}\)|\2|')
+else
+    IMPL="$IFACE_CFG"
+    IFACE="$IFACE_SYNONYM"
+fi
+
+if [ -z "$IMPL" ]; then
+    echo "Implementation not found for interface: ${IFACE_CFG}" > /dev/stderr
+    echo > /dev/stderr
+    env | grep "_DEF=" > /dev/stderr
+    exit 255
+fi
 
 if [ -z "$2" ]; then
     IDEF_PATH="src/${IFACE}.idef"
@@ -33,31 +45,12 @@ else
     IDEF_PATH="$2"
 fi
 
-
-if ! (echo "$USER" | grep "^[a-z]\([a-z_0-9]*[a-z0-9]\)\{0,1\}$" > /dev/null); then
-    echo "Bad user name: $USER" > /dev/stderr
-    exit 255
-fi
-
-if ! (echo "$IFACE" | grep "^[a-z]\([a-z_0-9]*[a-z0-9]\)\{0,1\}$" > /dev/null); then
-    echo "Bad interface name: $IFACE" > /dev/stderr
-    exit 255
-fi
-
-if ! (echo "$IMPL" | grep "^[a-z]\([a-z_0-9]*[a-z0-9]\)\{0,1\}$" > /dev/null); then
-    echo "Bad implementation name: $IMPL" > /dev/stderr
-    exit 255
-fi
-
-USER_UPPER=$(echo "$USER" | tr '[a-z]' '[A-Z]')
 IFACE_UPPER=$(echo "$IFACE" | tr '[a-z]' '[A-Z]')
 IMPL_UPPER=$(echo "$IMPL" | tr '[a-z]' '[A-Z]')
 
-USER_TITLE=$(echo "$USER" | perl -pe 's/^([a-z])/\U$1/' | perl -pe 's/_([a-z])/\U$1/g')
+IFACE_SYNONYM_TITLE=$(echo "$IFACE_SYNONYM" | perl -pe 's/^([a-z])/\U$1/' | perl -pe 's/_([a-z])/\U$1/g')
 IFACE_TITLE=$(echo "$IFACE" | perl -pe 's/^([a-z])/\U$1/' | perl -pe 's/_([a-z])/\U$1/g')
 IMPL_TITLE=$(echo "$IMPL" | perl -pe 's/^([a-z])/\U$1/' | perl -pe 's/_([a-z])/\U$1/g')
-
-HEADER_FILE="${USER}_${IFACE}"
 
 if which md5sum > /dev/null; then
     IMPL_HASH=0x$(echo "$IMPL" | md5sum | cut -b 1-8)
@@ -71,23 +64,24 @@ fi
 cat <<EOF
 /* AUTOMATICALLY GENERATED from "$IDEF_PATH" on $(date),
    DO NOT EDIT MANUALLY */
-#ifndef __${USER}_${IFACE}_h
-#define __${USER}_${IFACE}_h
+#ifndef __${IFACE_SYNONYM}_h
+#define __${IFACE_SYNONYM}_h
 
 #include "${IFACE}_${IMPL}.h"
 
-#ifdef __${IFACE}_HEADER
+#ifdef __${IFACE_SYNONYM}_HEADER
 
-#if __${IFACE}_HEADER != ${IMPL_HASH}
-#error "Multiple implementations of the '${IFACE}' interface included. This one is '${IMPL}'."
+#if __${IFACE_SYNONYM}_HEADER != ${IMPL_HASH}
+#error "Multiple implementations of the '${IFACE_SYNONYM}' interface included. This one is '${IMPL}'."
 #endif
 
 #else
 
-#define __${IFACE}_HEADER ${IMPL_HASH}
+#define __${IFACE_SYNONYM}_HEADER ${IMPL_HASH}
 
 EOF
 
+# first do a C++ style header
 export PARENT_PID=$$
 cat "$IDEF_PATH" | (
     REGEX='^ *\([a-zA-Z]\([0-9a-zA-Z_]*[0-9a-zA-Z]\)\{0,1\}\)\{0,1\} *\(# *\(.*\) *\)\{0,1\}$'
@@ -111,12 +105,25 @@ cat "$IDEF_PATH" | (
         fi
 
         if echo "$SYMBOL" | grep "^[A-Z_]\{1,\}$" > /dev/null; then
-            # it's all uppercase, generate an uppercase SYMBOL
-            echo "#define ${IFACE_UPPER}_${SYMBOL} ${IFACE_UPPER}_${IMPL_UPPER}_${SYMBOL}"
+            # this is a constant
+            echo "#ifdef __cplusplus"
+            echo "const auto ${IFACE_SYNONYM_UPPER}_${SYMBOL} = ${IFACE_UPPER}_${IMPL_UPPER}_${SYMBOL};"
+            echo "#else"
+            echo "#define ${IFACE_SYNONYM_UPPER}_${SYMBOL} ${IFACE_UPPER}_${IMPL_UPPER}_${SYMBOL}"
+            echo "#endif"
         elif echo "$SYMBOL" | grep "^[A-Z][a-z]" > /dev/null; then
-            echo "#define ${IFACE_TITLE}${SYMBOL} ${IFACE_TITLE}${IMPL_TITLE}${SYMBOL}"
+            # this is a struct
+            echo "typedef ${IFACE_SYNONYM_TITLE}${IMPL_TITLE}${SYMBOL} ${IFACE_TITLE}${SYMBOL};"
+        elif echo "$SYMBOL" | grep "\\(^\\|_\\)t$" > /dev/null; then
+            # this is a integral type
+            echo "typedef ${IFACE}_${IMPL}_${SYMBOL} ${IFACE}_${SYMBOL};"
         else
-            echo "#define ${IFACE}_${SYMBOL} ${IFACE}_${IMPL}_${SYMBOL}"
+            # this is a function
+            echo "#ifdef __cplusplus"
+            echo "const auto ${IFACE_SYNONYM}_${SYMBOL} = ${IFACE}_${IMPL}_${SYMBOL};"
+            echo "#else"
+            echo "#define ${IFACE_SYNONYM}_${SYMBOL} ${IFACE}_${IMPL}_${SYMBOL}"
+            echo "#endif"
         fi
     done;
     )
@@ -125,7 +132,7 @@ cat <<EOF
 
 #endif
 
-#define ${USER_UPPER}_${IFACE_UPPER}_IMPL ${IFACE_UPPER}_${IMPL_UPPER}_IMPL
+#define ${IFACE_SYNONYM_UPPER}_IMPL ${IFACE_UPPER}_${IMPL_UPPER}_IMPL
 
 #endif
 EOF

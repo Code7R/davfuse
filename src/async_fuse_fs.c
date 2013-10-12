@@ -32,7 +32,7 @@
 #undef FUSE_USE_VERSION
 
 #include "async_rdwr_lock.h"
-#include "async_fuse_fs_fdevent.h"
+#include "fdevent.h"
 #include "fd_utils.h"
 #include "logging.h"
 #include "uthread.h"

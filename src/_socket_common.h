@@ -25,6 +25,10 @@
 
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 bool
 init_socket_subsystem(void);
 
@@ -36,5 +40,9 @@ set_socket_non_blocking(fd_t sock);
 
 bool
 ignore_sigpipe();
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

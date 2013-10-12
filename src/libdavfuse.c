@@ -42,22 +42,22 @@
 #include "fuse.h"
 #undef FUSE_USE_VERSION
 
-#include "async_fuse_fs_fdevent.h"
+#include "fdevent.h"
+#include "http_backend.h"
 #include "http_backend_sockets_fdevent.h"
-#include "http_backend_sockets_fdevent_fdevent.h"
 #include "iface_util.h"
 #include "logging.h"
-#include "logging_log_printer.h"
+#include "log_printer.h"
 #include "log_printer_stdio.h"
+#include "webdav_backend.h"
 #include "webdav_backend_async_fuse.h"
 #include "webdav_server.h"
-#include "webdav_server_webdav_backend.h"
 #include "util.h"
 #include "util_sockets.h"
 
-ASSERT_SAME_IMPL(ASYNC_FUSE_FS_FDEVENT_IMPL, HTTP_BACKEND_SOCKETS_FDEVENT_FDEVENT_IMPL);
-ASSERT_SAME_IMPL(LOGGING_LOG_PRINTER_IMPL, LOG_PRINTER_STDIO_IMPL);
-ASSERT_SAME_IMPL(WEBDAV_SERVER_WEBDAV_BACKEND_IMPL, WEBDAV_BACKEND_ASYNC_FUSE_IMPL);
+ASSERT_SAME_IMPL(HTTP_BACKEND_IMPL, HTTP_BACKEND_SOCKETS_FDEVENT_IMPL);
+ASSERT_SAME_IMPL(LOG_PRINTER_IMPL, LOG_PRINTER_STDIO_IMPL);
+ASSERT_SAME_IMPL(WEBDAV_BACKEND_IMPL, WEBDAV_BACKEND_ASYNC_FUSE_IMPL);
 
 typedef struct {
   bool singlethread : 1;

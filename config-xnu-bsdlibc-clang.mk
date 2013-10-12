@@ -20,9 +20,9 @@ SOCKETS_IMPL = posix
 LOG_PRINTER_IMPL = stdio
 
 FS_IMPL = posix
-FS_IMPL_EXTRA_SOURCES = fs_posix.c fstatat_emu.c fd_utils.c
+FS_IMPL_EXTRA_SOURCES = fstatat_emu.c fd_utils.c
 FS_IMPL_EXTRA_GEN_HEADERS = fs_posix_fstatat.h
-FS_IMPL_EXTRA_IFACE_DEFS = FS_POSIX_FSTATAT_DEF=fs_posix/fstatat/emu
+FS_IMPL_EXTRA_IFACE_DEFS = FS_POSIX_FSTATAT_DEF=emu
 
 FDEVENT_IMPL = select
 FDEVENT_IMPL_EXTRA_SOURCES =

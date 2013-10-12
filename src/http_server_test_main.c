@@ -32,21 +32,22 @@
 #include <stdlib.h>
 
 #include "events.h"
+#include "fdevent.h"
+#include "http_backend.h"
 #include "http_backend_sockets_fdevent.h"
-#include "http_backend_sockets_fdevent_fdevent.h"
 #include "http_server.h"
 #include "iface_util.h"
 #include "logging.h"
-#include "logging_log_printer.h"
+#include "log_printer.h"
 #include "util.h"
 #include "util_sockets.h"
 
 #ifndef _WIN32
 #include "log_printer_stdio.h"
-ASSERT_SAME_IMPL(LOGGING_LOG_PRINTER_IMPL, LOG_PRINTER_STDIO_IMPL);
+ASSERT_SAME_IMPL(LOG_PRINTER_IMPL, LOG_PRINTER_STDIO_IMPL);
 #endif
 
-ASSERT_SAME_IMPL(HTTP_SERVER_HTTP_BACKEND_IMPL, HTTP_BACKEND_SOCKETS_FDEVENT_IMPL);
+ASSERT_SAME_IMPL(HTTP_BACKEND_IMPL, HTTP_BACKEND_SOCKETS_FDEVENT_IMPL);
 
 enum {
   BUF_SIZE=4096,

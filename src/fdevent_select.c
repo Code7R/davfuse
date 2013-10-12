@@ -22,8 +22,8 @@
 
 #include "c_util.h"
 #include "events.h"
-#include "fdevent_select_sockets.h"
 #include "logging.h"
+#include "sockets.h"
 #include "util_sockets.h"
 
 #include "fdevent_select.h"

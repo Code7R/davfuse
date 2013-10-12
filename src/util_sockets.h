@@ -21,7 +21,7 @@
 
 #include <stdint.h>
 
-#include "util_sockets_sockets.h"
+#include "sockets.h"
 
 #ifdef __cplusplus
 extern "C" {
