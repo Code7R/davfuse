@@ -41,7 +41,7 @@ static char *
 path_from_uri(WebdavBackendAsyncFuse *ctx, const char *relative_uri) {
   UNUSED(ctx);
   /* TODO: no translation seems necessary yet */
-  return strdup_x(relative_uri);
+  return davfuse_util_strdup(relative_uri);
 }
 
 typedef struct {
@@ -76,7 +76,7 @@ UTHR_DEFINE(_fuse_copy_move_uthr) {
   ctx->file_path = path_from_uri(ctx->fbctx, ctx->src_relative_uri);
   ctx->destination_path = path_from_uri(ctx->fbctx, ctx->dst_relative_uri);
 
-  ctx->destination_path_copy = strdup_x(ctx->destination_path);
+  ctx->destination_path_copy = davfuse_util_strdup(ctx->destination_path);
   char *destination_path_dirname = dirname(ctx->destination_path_copy);
 
   /* check if destination directory exists */

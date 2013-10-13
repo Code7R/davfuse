@@ -105,8 +105,8 @@ parse_environment(DavOptions *options) {
   /* default for now */
   options->log_level = LOG_DEBUG;
   options->listen_str = NULL;
-  options->public_uri_root = strdup_x("http://localhost:8080/");
-  options->internal_root = strdup_x("/");
+  options->public_uri_root = davfuse_util_strdup("http://localhost:8080/");
+  options->internal_root = davfuse_util_strdup("/");
 
   return true;
 }

@@ -109,7 +109,7 @@ webdav_backend_fs_new(fs_handle_t fs, const char *root) {
     return NULL;
   }
 
-  base_path = strdup_x(root);
+  base_path = davfuse_util_strdup(root);
   if (!base_path) {
     goto error;
   }

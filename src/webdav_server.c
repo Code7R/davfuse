@@ -85,7 +85,7 @@ path_from_request_uri(struct handler_context *hc, const char *uri) {
 
   if (!str_equals(hc->serv->internal_root, "/")) {
     if (str_equals(abs_path_start, hc->serv->internal_root)) {
-      return strdup_x("/");
+      return davfuse_util_strdup("/");
     }
 
     /* now `abs_path_start` must start with the internal root,
@@ -409,7 +409,7 @@ webdav_get_if_lock_token(struct handler_context *hc, char **resource_tag, char *
                                    &rhs->uri[1], NULL);
     }
     else {
-      *resource_tag = strdup_x(rhs->uri);
+      *resource_tag = davfuse_util_strdup(rhs->uri);
     }
   }
 
@@ -497,7 +497,7 @@ perform_write_lock(struct webdav_server *ws,
       *is_locked = true;
       *status_path = parent_locks_us ? file_path : elt->path;
       *status_path_is_collection = parent_locks_us ? is_collection : elt->is_collection;
-      /* if the strdup_x failed then we return false */
+      /* if the davfuse_util_strdup failed then we return false */
       return *status_path;
     }
   }
@@ -521,11 +521,11 @@ perform_write_lock(struct webdav_server *ws,
   EASY_ALLOC(WebdavLockDescriptor, new_lock);
 
   *new_lock = (WebdavLockDescriptor) {
-    .path = strdup_x(file_path),
+    .path = davfuse_util_strdup(file_path),
     .depth = depth,
     .is_exclusive = is_exclusive,
     .owner_xml = owner_xml_copy(owner_xml),
-    .lock_token = strdup_x(s_lock_token),
+    .lock_token = davfuse_util_strdup(s_lock_token),
     .timeout_in_seconds = timeout_in_seconds,
     .is_collection = is_collection,
   };
@@ -1663,7 +1663,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
                                  "<%s>", ctx->lock_token);
       /* TODO: Lazy */
       ASSERT_TRUE(!(len_written < 0 || (size_t) len_written >= sizeof(lock_token_header_value)));
-      hp->value = strdup_x(lock_token_header_value);
+      hp->value = davfuse_util_strdup(lock_token_header_value);
       ctx->headers = linked_list_prepend(ctx->headers, hp);
     }
   }
@@ -2463,12 +2463,12 @@ webdav_server_start(http_backend_t http_backend,
     goto error;
   }
 
-  public_uri_root_copy = strdup_x(public_uri_root);
+  public_uri_root_copy = davfuse_util_strdup(public_uri_root);
   if (!public_uri_root_copy) {
     goto error;
   }
 
-  internal_root_copy = strdup_x(internal_root);
+  internal_root_copy = davfuse_util_strdup(internal_root);
   if (!internal_root_copy) {
     goto error;
   }
@@ -2550,7 +2550,7 @@ webdav_new_propfind_entry(const char *relative_uri,
     return NULL;
   }
 
-  char *relative_uri_copy = strdup_x(relative_uri);
+  char *relative_uri_copy = davfuse_util_strdup(relative_uri);
   if (!relative_uri_copy) {
     free(elt);
     return NULL;
@@ -2577,8 +2577,8 @@ WebdavProperty *
 create_webdav_property(const char *element_name, const char *ns_href) {
   EASY_ALLOC(WebdavProperty, elt);
 
-  elt->element_name = strdup_x(element_name);
-  elt->ns_href = strdup_x(ns_href);
+  elt->element_name = davfuse_util_strdup(element_name);
+  elt->ns_href = davfuse_util_strdup(ns_href);
 
   return elt;
 }
@@ -2603,18 +2603,18 @@ create_webdav_proppatch_directive(webdav_proppatch_directive_type_t type,
   /* assert valid values */
   assert(type == WEBDAV_PROPPATCH_DIRECTIVE_SET || !value);
 
-  name_dup = strdup_x(name);
+  name_dup = davfuse_util_strdup(name);
   if (!name_dup) {
     goto error;
   }
 
-  ns_href_dup = strdup_x(ns_href);
+  ns_href_dup = davfuse_util_strdup(ns_href);
   if (!ns_href_dup) {
     goto error;
   }
 
   if (value) {
-    value_dup = strdup_x(value);
+    value_dup = davfuse_util_strdup(value);
     if (!value_dup) {
       goto error;
     }

@@ -228,7 +228,7 @@ async_fuse_fs_rmtree(async_fuse_fs_t fs,
   };
 
   bool is_postorder = true;
-  char *init_path = strdup_x(path);
+  char *init_path = davfuse_util_strdup(path);
   ASSERT_NOT_NULL(init_path);
   return async_tree_apply(ctx,
                           _async_fuse_apply_rmtree,
@@ -426,7 +426,7 @@ reparent_path(const char *from_path, const char *to_path,
   assert(str_startswith(to_transform, "/"));
 
   if (str_equals(from_path, to_transform)) {
-    return strdup_x(to_path);
+    return davfuse_util_strdup(to_path);
   }
 
   assert(str_startswith(to_transform, from_path));
@@ -560,7 +560,7 @@ async_fuse_fs_copytree(async_fuse_fs_t fs,
   };
 
   bool is_postorder = false;
-  char *init_path = strdup_x(src);
+  char *init_path = davfuse_util_strdup(src);
   ASSERT_NOT_NULL(init_path);
   return async_tree_apply(ctx,
                           _async_fuse_apply_copytree,

@@ -25,8 +25,8 @@ fi
 eval "IFACE_CFG=\${${IFACE_SYNONYM_UPPER}_DEF}"
 
 if echo "$IFACE_CFG" | grep "/" > /dev/null; then
-    IMPL=$(echo "$IFACE_CFG" | sed -r 's|^([a-z_0-9]+)/([a-z_0-9]+)$|\1|')
-    IFACE=$(echo "$IFACE_CFG" | sed -r 's|^([a-z_0-9]+)/([a-z_0-9]+)$|\2|')
+    IMPL=$(echo "$IFACE_CFG" | sed 's|^\([a-z_0-9]\{1,\}\)/\([a-z_0-9]\{1,\}\)$|\1|')
+    IFACE=$(echo "$IFACE_CFG" | sed 's|^\([a-z_0-9]\{1,\}\)/\([a-z_0-9]\{1,\}\)$|\2|')
 else
     IMPL="$IFACE_CFG"
     IFACE="$IFACE_SYNONYM"

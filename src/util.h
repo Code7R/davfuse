@@ -95,7 +95,7 @@ PURE_FUNCTION bool
 str_endswith(const char *a, const char *b);
 
 PURE_FUNCTION char *
-strdup_x(const char *s);
+davfuse_util_strdup(const char *s);
 
 PURE_FUNCTION char *
 strndup_x(const char *s, size_t n);

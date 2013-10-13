@@ -323,7 +323,7 @@ fs_posix_readdir(fs_handle_t fs, fs_directory_handle_t dir_handle,
       continue;
     }
 
-    *name = strdup_x(ent_name);
+    *name = davfuse_util_strdup(ent_name);
     if (attrs_is_filled) {
       *attrs_is_filled = false;
     }

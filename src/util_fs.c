@@ -167,7 +167,7 @@ linked_list_t
 util_fs_rmtree(fs_handle_t fs, const char *fpath_) {
   linked_list_t failed_to_delete = LINKED_LIST_INITIALIZER;
 
-  char *fpath = strdup_x(fpath_);
+  char *fpath = davfuse_util_strdup(fpath_);
   if (!fpath) {
     abort();
   }
@@ -277,7 +277,7 @@ reparent_path(fs_handle_t fs,
               const char *from_path, const char *to_path,
               const char *to_transform) {
   if (fs_path_equals(fs, from_path, to_transform)) {
-    return strdup_x(to_path);
+    return davfuse_util_strdup(to_path);
   }
 
   assert(fs_path_is_parent(fs, from_path, to_transform));
@@ -293,7 +293,7 @@ util_fs_copytree(fs_handle_t fs,
                  const char *from_path,
                  const char *to_path,
                  bool delete_original) {
-  char *fpath = strdup_x(from_path);
+  char *fpath = davfuse_util_strdup(from_path);
   if (!fpath) {
     abort();
   }
@@ -391,7 +391,7 @@ util_fs_copytree(fs_handle_t fs,
 char *
 util_fs_path_dirname(fs_handle_t fs, const char *path) {
   if (fs_path_is_root(fs, path)) {
-    return strdup_x(path);
+    return davfuse_util_strdup(path);
   }
 
   const char *path_sep = fs_path_sep(fs);
