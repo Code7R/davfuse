@@ -333,7 +333,8 @@ EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
     assert(!(!chunk_size && errno == EINVAL));
 
     if (chunk_size < 0 || ((uintmax_t) chunk_size) > SIZE_MAX) {
-      log_info("Chunk size is too large: %jd", chunk_size);
+      log_info("Chunk size is too large: %lu",
+               (unsigned long) chunk_size);
       goto error;
     }
 

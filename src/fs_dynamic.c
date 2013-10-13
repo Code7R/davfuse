@@ -35,7 +35,9 @@ STATIC_ASSERT(sizeof(FsDynamic *) <= sizeof(fs_handle_t),
 
 static FsDynamic *
 fs_handle_to_pointer(fs_handle_t h) {
-  return (FsDynamic *) h;
+  char yo[sizeof(fs_handle_t) == sizeof(FsDynamic *) ? 1 : -1];
+  (void) yo;
+  return ((FsDynamic *) h);
 }
 
 static fs_handle_t

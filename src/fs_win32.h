@@ -27,7 +27,7 @@
 
 #include "c_util.h"
 #include "iface_util.h"
-#include "shared_fs_types.h"
+#include "shared_types_fs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,35 +36,35 @@ extern "C" {
 fs_handle_t
 fs_win32_default_new(void);
 
-fs_win32_error_t
+fs_error_t
 fs_win32_open(fs_handle_t fs,
               const char *path, bool create,
               OUT_VAR fs_file_handle_t *handle,
               OUT_VAR bool *created);
 
-fs_win32_error_t
+fs_error_t
 fs_win32_fgetattr(fs_handle_t fs, fs_file_handle_t file_handle,
                   OUT_VAR FsAttrs *attrs);
 
-fs_win32_error_t
+fs_error_t
 fs_win32_ftruncate(fs_handle_t fs, fs_file_handle_t file_handle,
-                   fs_win32_off_t offset);
+                   fs_off_t offset);
 
-fs_win32_error_t
+fs_error_t
 fs_win32_read(fs_handle_t fs, fs_file_handle_t file_handle,
               OUT_VAR char *buf, size_t size, fs_off_t off,
               OUT_VAR size_t *amt_read);
 
-fs_win32_error_t
+fs_error_t
 fs_win32_write(fs_handle_t fs, fs_file_handle_t file_handle,
                const char *buf, size_t size, fs_off_t offset,
                OUT_VAR size_t *amt_written);
 
-fs_win32_error_t
+fs_error_t
 fs_win32_opendir(fs_handle_t fs, const char *path,
                  OUT_VAR fs_directory_handle_t *dir_handle);
 
-fs_win32_error_t
+fs_error_t
 fs_win32_readdir(fs_handle_t fs, fs_directory_handle_t dir_handle,
                  /* name is required and malloc'd by the implementation,
                     the user must free the returned pointer
@@ -74,27 +74,33 @@ fs_win32_readdir(fs_handle_t fs, fs_directory_handle_t dir_handle,
                  OUT_VAR bool *attrs_is_filled,
                  OUT_VAR FsAttrs *attrs);
 
-fs_win32_error_t
+fs_error_t
 fs_win32_closedir(fs_handle_t fs, fs_directory_handle_t dir_handle);
 
 /* can remove either a file or a directory,
    removing a directory should fail if it's not empty
 */
-fs_win32_error_t
+fs_error_t
 fs_win32_remove(fs_handle_t fs, const char *path);
 
-fs_win32_error_t
+fs_error_t
 fs_win32_mkdir(fs_handle_t fs, const char *path);
 
-fs_win32_error_t
+fs_error_t
 fs_win32_getattr(fs_handle_t fs, const char *path,
                  OUT_VAR FsAttrs *attrs);
 
-fs_win32_error_t
+fs_error_t
 fs_win32_rename(fs_handle_t fs,
                 const char *src, const char *dst);
 
-fs_win32_error_t
+fs_error_t
+fs_win32_set_times(fs_handle_t fs,
+                   const char *path,
+                   fs_time_t atime,
+                   fs_time_t mtime);
+
+fs_error_t
 fs_win32_close(fs_handle_t fs, fs_file_handle_t handle);
 
 bool

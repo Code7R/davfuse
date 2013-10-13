@@ -1374,7 +1374,7 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   case WEBDAV_ERROR_NONE:
     assert(ctx->amt_sent <= ULONG_MAX);
     log_debug("Sent %lu bytes of \"%s\"",
-              ctx->amt_sent, ctx->resource_uri);
+              (long unsigned) ctx->amt_sent, ctx->resource_uri);
     code = HTTP_STATUS_CODE_OK;
     break;
   case WEBDAV_ERROR_IS_COL:

@@ -47,22 +47,22 @@ win32_handle_to_file_handle(HANDLE h) {
   /* either INVALID_HANDLE_VALUE is defined to be 0
      or h is never 0 */
   ASSERT_TRUE(!INVALID_HANDLE_VALUE || h);
-  return (h == INVALID_HANDLE_VALUE) ? 0 : h;
+  return (h == INVALID_HANDLE_VALUE) ? 0 : ((fs_file_handle_t) (uintptr_t) h);
 }
 
 static HANDLE
 file_handle_to_win32_handle(fs_file_handle_t handle) {
-  return handle ? handle : INVALID_HANDLE_VALUE;
+  return handle ? ((HANDLE) (uintptr_t) handle) : INVALID_HANDLE_VALUE;
 }
 
 static fs_directory_handle_t
 pointer_to_directory_handle(FsWin32DirectoryHandle *h) {
-  return (fs_directory_handle_t) h;
+  return (fs_directory_handle_t) (uintptr_t) h;
 }
 
 static FsWin32DirectoryHandle *
 directory_handle_to_pointer(fs_directory_handle_t handle) {
-  return (FsWin32DirectoryHandle *) handle;
+  return (FsWin32DirectoryHandle *) (uintptr_t) handle;
 }
 
 static void
@@ -116,7 +116,7 @@ windows_size_to_fs_size(DWORD low, DWORD high) {
 }
 
 #define FILL_ATTRS(file_info)                                           \
-  ((FsWin32Attrs) {                                                     \
+  ((FsAttrs) {                                                     \
     .modified_time = windows_time_to_fs_time(&(file_info).ftLastWriteTime), \
       .created_time = windows_time_to_fs_time(&(file_info).ftCreationTime), \
       .is_directory = windows_is_dir((file_info).dwFileAttributes),     \
@@ -135,8 +135,8 @@ utf8_to_mb(const char *s) {
     MultiByteToWideChar(CP_UTF8, flags,
                         s, len, NULL, 0);
   if (!required_characters_size) {
-    log_info("MultiByteToWideChar failed: %d",
-             GetLastError());
+    log_info("MultiByteToWideChar failed: %u",
+             (unsigned) GetLastError());
     return NULL;
   }
 
@@ -251,7 +251,7 @@ fs_win32_open(fs_handle_t fs,
 
 fs_error_t
 fs_win32_fgetattr(fs_handle_t fs, fs_file_handle_t file_handle,
-                  OUT_VAR FsWin32Attrs *attrs) {
+                  OUT_VAR FsAttrs *attrs) {
   ASSERT_VALID_FS(fs);
   HANDLE handle = file_handle_to_win32_handle(file_handle);
   BY_HANDLE_FILE_INFORMATION file_info;
@@ -397,7 +397,7 @@ fs_win32_opendir(fs_handle_t fs, const char *path_,
   LPWSTR wpath = NULL;
   char *path = NULL;
 
-  *dir_handle = NULL;
+  *dir_handle = 0;
 
   size_t path_len = strlen(path_);
   path = malloc(path_len + sizeof("\\*.*"));
@@ -422,7 +422,7 @@ fs_win32_opendir(fs_handle_t fs, const char *path_,
   }
 
   h->find_handle =
-    FindFirstFileExW(wpath, FindExInfoStandard, &(*dir_handle)->last_find_data,
+    FindFirstFileExW(wpath, FindExInfoStandard, &h->last_find_data,
                      FindExSearchNameMatch, NULL, 0);
   if (h->find_handle == INVALID_HANDLE_VALUE) {
     DWORD err = GetLastError();
@@ -437,7 +437,7 @@ fs_win32_opendir(fs_handle_t fs, const char *path_,
   }
   else {
     memset(h->last_find_data.cAlternateFileName, 0,
-           sizeof((*dir_handle)->last_find_data.cAlternateFileName));
+           sizeof(h->last_find_data.cAlternateFileName));
     toret = FS_ERROR_SUCCESS;
   }
 
@@ -465,7 +465,7 @@ fs_win32_readdir(fs_handle_t fs, fs_directory_handle_t dir_handle,
                  OUT_VAR char **name,
                  /* attrs is optionally filled by the implementation */
                  OUT_VAR bool *attrs_is_filled,
-                 OUT_VAR FsWin32Attrs *attrs) {
+                 OUT_VAR FsAttrs *attrs) {
   ASSERT_VALID_FS(fs);
 
   FsWin32DirectoryHandle *const h = directory_handle_to_pointer(dir_handle);
@@ -613,7 +613,7 @@ fs_win32_mkdir(fs_handle_t fs, const char *path) {
 
 fs_error_t
 fs_win32_getattr(fs_handle_t fs, const char *path,
-                 OUT_VAR FsWin32Attrs *attrs) {
+                 OUT_VAR FsAttrs *attrs) {
   ASSERT_VALID_FS(fs);
 
   LPWSTR wpath = utf8_to_mb(path);
@@ -681,6 +681,19 @@ fs_win32_rename(fs_handle_t fs,
   free(wdst);
 
   return toret;
+}
+
+fs_error_t
+fs_win32_set_times(fs_handle_t fs,
+                   const char *path,
+                   fs_time_t atime,
+                   fs_time_t mtime) {
+  /* not implemented right right now */
+  UNUSED(fs);
+  UNUSED(path);
+  UNUSED(atime);
+  UNUSED(mtime);
+  return FS_ERROR_IO;
 }
 
 bool
