@@ -39,7 +39,7 @@ struct _win32_file_handle;
 
 typedef struct _win32_fs_handle *fs_win32_handle_t;
 typedef struct _win32_directory_handle *fs_win32_directory_handle_t;
-typedef struct _win32_file_handle fs_win32_file_handle_t;
+typedef struct _win32_file_handle *fs_win32_file_handle_t;
 
 fs_win32_handle_t
 fs_win32_default_new(void);

@@ -24,9 +24,16 @@
 #include "fs_win32.h"
 #include "util.h"
 
+enum {
+  _FS_SINGLETON=1,
+};
+
+
 STATIC_ASSERT(sizeof(HANDLE) <= sizeof(fs_win32_file_handle_t),
               "fs_win32_file_handle_t is not large enough to hold a HANDLE");
 
+STATIC_ASSERT(sizeof(_FS_SINGLETON) <= sizeof(fs_win32_handle_t),
+              "fs_file_handle_t is not large enough to hold a _FS_SINGLETON");
 
 /* we follow this:
    http://utf8everywhere.org/#how */
@@ -35,10 +42,6 @@ typedef struct _win32_directory_handle {
   HANDLE find_handle;
   WIN32_FIND_DATA last_find_data;
 } FsWin32DirectoryHandle;
-
-enum {
-  _FS_SINGLETON=1,
-};
 
 static fs_win32_file_handle_t
 win32_handle_to_file_handle(HANDLE h) {
@@ -68,7 +71,7 @@ directory_handle_to_pointer(fs_win32_directory_handle_t handle) {
 static void
 ASSERT_VALID_FS(fs_win32_handle_t fs) {
   UNUSED(fs);
-  assert(fs == _FS_SINGLETON);
+  assert(fs == (fs_win32_handle_t) _FS_SINGLETON);
 }
 
 static fs_error_t
@@ -188,7 +191,7 @@ mb_to_utf8(LPWSTR s) {
 
 fs_win32_handle_t
 fs_win32_default_new(void) {
-  return _FS_SINGLETON;
+  return (fs_win32_handle_t) _FS_SINGLETON;
 }
 
 fs_error_t
@@ -740,6 +743,8 @@ fs_win32_path_sep(fs_win32_handle_t fs) {
 bool
 fs_win32_path_is_valid(fs_win32_handle_t fs,
                        const char *path) {
+  UNUSED(fs);
+  UNUSED(path);
   /* TODO: implement */
   return true;
 }
