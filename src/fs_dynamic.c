@@ -24,34 +24,31 @@
 
 #include <stdlib.h>
 
-typedef struct {
-  fs_handle_t fs;
+typedef struct _dynamic_handle {
+  void *fs;
   const FsOperations *ops;
   bool destroy;
 } FsDynamic;
 
-STATIC_ASSERT(sizeof(FsDynamic *) <= sizeof(fs_handle_t),
-              "fs_handle_t is not large enough to hold a pointer to FsDynamic");
-
 static FsDynamic *
-fs_handle_to_pointer(fs_handle_t h) {
-  char yo[sizeof(fs_handle_t) == sizeof(FsDynamic *) ? 1 : -1];
-  (void) yo;
-  return ((FsDynamic *) h);
+fs_handle_to_pointer(fs_dynamic_handle_t h) {
+  /* these should be type synonyms, so no cast is necessary */
+  return h;
 }
 
-static fs_handle_t
+static fs_dynamic_handle_t
 pointer_to_fs_handle(FsDynamic *h) {
-  return (fs_handle_t) h;
+  /* these should be type synonyms, so no cast is necessary */
+  return h;
 }
 
-fs_handle_t
+fs_dynamic_handle_t
 fs_dynamic_default_new(void) {
   return 0;
 }
 
-fs_handle_t
-fs_dynamic_new(fs_handle_t fs, const FsOperations *ops, bool destroy) {
+fs_dynamic_handle_t
+fs_dynamic_new(void *fs, const FsOperations *ops, bool destroy) {
   FsDynamic *toret = malloc(sizeof(*toret));
   if (!toret) return 0;
   toret->fs = fs;
@@ -61,17 +58,17 @@ fs_dynamic_new(fs_handle_t fs, const FsOperations *ops, bool destroy) {
 }
 
 fs_error_t
-fs_dynamic_open(fs_handle_t fs,
+fs_dynamic_open(fs_dynamic_handle_t fs,
                 const char *path, bool create,
-                OUT_VAR fs_file_handle_t *handle,
+                OUT_VAR fs_dynamic_file_handle_t *handle,
                 OUT_VAR bool *created) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->open(fs_dyn->fs,
-                           path, create, handle, created);
+                           path, create, (void **) handle, created);
 }
 
 fs_error_t
-fs_dynamic_fgetattr(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_dynamic_fgetattr(fs_dynamic_handle_t fs, fs_dynamic_file_handle_t file_handle,
                     OUT_VAR FsAttrs *attrs) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->fgetattr(fs_dyn->fs,
@@ -79,14 +76,14 @@ fs_dynamic_fgetattr(fs_handle_t fs, fs_file_handle_t file_handle,
 }
 
 fs_error_t
-fs_dynamic_ftruncate(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_dynamic_ftruncate(fs_dynamic_handle_t fs, fs_dynamic_file_handle_t file_handle,
                      fs_off_t offset) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->ftruncate(fs_dyn->fs, file_handle, offset);
 }
 
 fs_error_t
-fs_dynamic_read(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_dynamic_read(fs_dynamic_handle_t fs, fs_dynamic_file_handle_t file_handle,
                 OUT_VAR char *buf, size_t size, fs_off_t off,
                 OUT_VAR size_t *amt_read) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
@@ -94,7 +91,7 @@ fs_dynamic_read(fs_handle_t fs, fs_file_handle_t file_handle,
 }
 
 fs_error_t
-fs_dynamic_write(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_dynamic_write(fs_dynamic_handle_t fs, fs_dynamic_file_handle_t file_handle,
                  const char *buf, size_t size, fs_off_t offset,
                  OUT_VAR size_t *amt_written) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
@@ -102,14 +99,14 @@ fs_dynamic_write(fs_handle_t fs, fs_file_handle_t file_handle,
 }
 
 fs_error_t
-fs_dynamic_opendir(fs_handle_t fs, const char *path,
-                   OUT_VAR fs_directory_handle_t *dir_handle) {
+fs_dynamic_opendir(fs_dynamic_handle_t fs, const char *path,
+                   OUT_VAR fs_dynamic_directory_handle_t *dir_handle) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
-  return fs_dyn->ops->opendir(fs_dyn->fs, path, dir_handle);
+  return fs_dyn->ops->opendir(fs_dyn->fs, path, (void **) dir_handle);
 }
 
 fs_error_t
-fs_dynamic_readdir(fs_handle_t fs, fs_directory_handle_t dir_handle,
+fs_dynamic_readdir(fs_dynamic_handle_t fs, fs_dynamic_directory_handle_t dir_handle,
                    /* name is required and malloc'd by the implementation,
                       the user must free the returned pointer
                    */
@@ -122,7 +119,7 @@ fs_dynamic_readdir(fs_handle_t fs, fs_directory_handle_t dir_handle,
 }
 
 fs_error_t
-fs_dynamic_closedir(fs_handle_t fs, fs_directory_handle_t dir_handle) {
+fs_dynamic_closedir(fs_dynamic_handle_t fs, fs_dynamic_directory_handle_t dir_handle) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->closedir(fs_dyn->fs, dir_handle);
 }
@@ -131,39 +128,39 @@ fs_dynamic_closedir(fs_handle_t fs, fs_directory_handle_t dir_handle) {
    removing a directory should fail if it's not empty
 */
 fs_error_t
-fs_dynamic_remove(fs_handle_t fs, const char *path) {
+fs_dynamic_remove(fs_dynamic_handle_t fs, const char *path) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->remove(fs_dyn->fs, path);
 }
 
 fs_error_t
-fs_dynamic_mkdir(fs_handle_t fs, const char *path) {
+fs_dynamic_mkdir(fs_dynamic_handle_t fs, const char *path) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->mkdir(fs_dyn->fs, path);
 }
 
 fs_error_t
-fs_dynamic_getattr(fs_handle_t fs, const char *path,
+fs_dynamic_getattr(fs_dynamic_handle_t fs, const char *path,
                    OUT_VAR FsAttrs *attrs) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->getattr(fs_dyn->fs, path, attrs);
 }
 
 fs_error_t
-fs_dynamic_rename(fs_handle_t fs,
+fs_dynamic_rename(fs_dynamic_handle_t fs,
                   const char *src, const char *dst) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->rename(fs_dyn->fs, src, dst);
 }
 
 fs_error_t
-fs_dynamic_close(fs_handle_t fs, fs_file_handle_t handle) {
+fs_dynamic_close(fs_dynamic_handle_t fs, fs_dynamic_file_handle_t handle) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->close(fs_dyn->fs, handle);
 }
 
 fs_error_t
-fs_dynamic_set_times(fs_handle_t fs,
+fs_dynamic_set_times(fs_dynamic_handle_t fs,
                      const char *path,
                      fs_time_t atime,
                      fs_time_t mtime) {
@@ -172,7 +169,7 @@ fs_dynamic_set_times(fs_handle_t fs,
 }
 
 bool
-fs_dynamic_destroy(fs_handle_t fs) {
+fs_dynamic_destroy(fs_dynamic_handle_t fs) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
 
   if (fs_dyn->destroy) {
@@ -185,28 +182,35 @@ fs_dynamic_destroy(fs_handle_t fs) {
 }
 
 bool
-fs_dynamic_path_is_root(fs_handle_t fs, const char *a) {
+fs_dynamic_path_is_root(fs_dynamic_handle_t fs, const char *a) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->path_is_root(fs_dyn->fs, a);
 }
 
 const char *
-fs_dynamic_path_sep(fs_handle_t fs) {
+fs_dynamic_path_sep(fs_dynamic_handle_t fs) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->path_sep(fs_dyn->fs);
 }
 
 bool
-fs_dynamic_path_equals(fs_handle_t fs, const char *a, const char *b) {
+fs_dynamic_path_equals(fs_dynamic_handle_t fs, const char *a, const char *b) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->path_equals(fs_dyn->fs, a, b);
 }
 
 bool
-fs_dynamic_path_is_parent(fs_handle_t fs,
+fs_dynamic_path_is_parent(fs_dynamic_handle_t fs,
                           const char *potential_parent,
                           const char *potential_child) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->path_is_parent(fs_dyn->fs, potential_parent,
                                      potential_child);
+}
+
+bool
+fs_dynamic_path_is_valid(fs_dynamic_handle_t fs,
+                         const char *path) {
+  FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
+  return fs_dyn->ops->path_is_valid(fs_dyn->fs, path);
 }

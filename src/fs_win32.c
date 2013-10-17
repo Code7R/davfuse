@@ -24,49 +24,49 @@
 #include "fs_win32.h"
 #include "util.h"
 
+STATIC_ASSERT(sizeof(HANDLE) <= sizeof(fs_win32_file_handle_t),
+              "fs_win32_file_handle_t is not large enough to hold a HANDLE");
+
+
 /* we follow this:
    http://utf8everywhere.org/#how */
 
-typedef struct _fs_win32_directory_handle {
+typedef struct _win32_directory_handle {
   HANDLE find_handle;
   WIN32_FIND_DATA last_find_data;
 } FsWin32DirectoryHandle;
-
-STATIC_ASSERT(sizeof(FsWin32DirectoryHandle *) <= sizeof(fs_directory_handle_t),
-              "fs_directory_handle_t is not large enough to hold a pointer to FsWin32DirectoryHandle");
-
-STATIC_ASSERT(sizeof(HANDLE) <= sizeof(fs_file_handle_t),
-              "fs_file_handle_t is not large enough to hold an int");
 
 enum {
   _FS_SINGLETON=1,
 };
 
-static fs_file_handle_t
+static fs_win32_file_handle_t
 win32_handle_to_file_handle(HANDLE h) {
   /* either INVALID_HANDLE_VALUE is defined to be 0
      or h is never 0 */
   ASSERT_TRUE(!INVALID_HANDLE_VALUE || h);
-  return (h == INVALID_HANDLE_VALUE) ? 0 : ((fs_file_handle_t) (uintptr_t) h);
+  return (h == INVALID_HANDLE_VALUE) ? 0 : ((fs_win32_file_handle_t) (uintptr_t) h);
 }
 
 static HANDLE
-file_handle_to_win32_handle(fs_file_handle_t handle) {
+file_handle_to_win32_handle(fs_win32_file_handle_t handle) {
   return handle ? ((HANDLE) (uintptr_t) handle) : INVALID_HANDLE_VALUE;
 }
 
-static fs_directory_handle_t
+static fs_win32_directory_handle_t
 pointer_to_directory_handle(FsWin32DirectoryHandle *h) {
-  return (fs_directory_handle_t) (uintptr_t) h;
+  /* these are type synonyms so no cast should be necessary */
+  return h;
 }
 
 static FsWin32DirectoryHandle *
-directory_handle_to_pointer(fs_directory_handle_t handle) {
-  return (FsWin32DirectoryHandle *) (uintptr_t) handle;
+directory_handle_to_pointer(fs_win32_directory_handle_t handle) {
+  /* these are type synonyms so no cast should be necessary */
+  return handle;
 }
 
 static void
-ASSERT_VALID_FS(fs_handle_t fs) {
+ASSERT_VALID_FS(fs_win32_handle_t fs) {
   UNUSED(fs);
   assert(fs == _FS_SINGLETON);
 }
@@ -186,15 +186,15 @@ mb_to_utf8(LPWSTR s) {
   return out;
 }
 
-fs_handle_t
+fs_win32_handle_t
 fs_win32_default_new(void) {
   return _FS_SINGLETON;
 }
 
 fs_error_t
-fs_win32_open(fs_handle_t fs,
+fs_win32_open(fs_win32_handle_t fs,
               const char *path, bool create,
-              OUT_VAR fs_file_handle_t *handle,
+              OUT_VAR fs_win32_file_handle_t *handle,
               OUT_VAR bool *created) {
   ASSERT_VALID_FS(fs);
   const LPWSTR wpath = utf8_to_mb(path);
@@ -250,7 +250,7 @@ fs_win32_open(fs_handle_t fs,
 }
 
 fs_error_t
-fs_win32_fgetattr(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_win32_fgetattr(fs_win32_handle_t fs, fs_win32_file_handle_t file_handle,
                   OUT_VAR FsAttrs *attrs) {
   ASSERT_VALID_FS(fs);
   HANDLE handle = file_handle_to_win32_handle(file_handle);
@@ -266,7 +266,7 @@ fs_win32_fgetattr(fs_handle_t fs, fs_file_handle_t file_handle,
 }
 
 static fs_error_t
-_set_file_pointer(fs_file_handle_t file_handle,
+_set_file_pointer(fs_win32_file_handle_t file_handle,
                   fs_off_t offset) {
   if (offset >> (sizeof(LONG) * 2 * 8 - 1)) {
     /* if the highest byte (and higher) of the second long is set
@@ -289,7 +289,7 @@ _set_file_pointer(fs_file_handle_t file_handle,
 }
 
 fs_error_t
-fs_win32_ftruncate(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_win32_ftruncate(fs_win32_handle_t fs, fs_win32_file_handle_t file_handle,
                    fs_off_t offset) {
   ASSERT_VALID_FS(fs);
 
@@ -309,7 +309,7 @@ fs_win32_ftruncate(fs_handle_t fs, fs_file_handle_t file_handle,
 }
 
 fs_error_t
-fs_win32_read(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_win32_read(fs_win32_handle_t fs, fs_win32_file_handle_t file_handle,
               OUT_VAR char *buf, size_t size, fs_off_t offset,
               OUT_VAR size_t *amt_read) {
   ASSERT_VALID_FS(fs);
@@ -343,7 +343,7 @@ fs_win32_read(fs_handle_t fs, fs_file_handle_t file_handle,
 }
 
 fs_error_t
-fs_win32_write(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_win32_write(fs_win32_handle_t fs, fs_win32_file_handle_t file_handle,
                const char *buf, size_t size, fs_off_t offset,
                OUT_VAR size_t *amt_written) {
   ASSERT_VALID_FS(fs);
@@ -376,7 +376,7 @@ fs_win32_write(fs_handle_t fs, fs_file_handle_t file_handle,
 }
 
 fs_error_t
-fs_win32_close(fs_handle_t fs, fs_file_handle_t file_handle) {
+fs_win32_close(fs_win32_handle_t fs, fs_win32_file_handle_t file_handle) {
   ASSERT_VALID_FS(fs);
 
   HANDLE handle = file_handle_to_win32_handle(file_handle);
@@ -389,8 +389,8 @@ fs_win32_close(fs_handle_t fs, fs_file_handle_t file_handle) {
 }
 
 fs_error_t
-fs_win32_opendir(fs_handle_t fs, const char *path_,
-                 OUT_VAR fs_directory_handle_t *dir_handle) {
+fs_win32_opendir(fs_win32_handle_t fs, const char *path_,
+                 OUT_VAR fs_win32_directory_handle_t *dir_handle) {
   ASSERT_VALID_FS(fs);
 
   fs_error_t toret;
@@ -458,7 +458,7 @@ fs_win32_opendir(fs_handle_t fs, const char *path_,
 }
 
 fs_error_t
-fs_win32_readdir(fs_handle_t fs, fs_directory_handle_t dir_handle,
+fs_win32_readdir(fs_win32_handle_t fs, fs_win32_directory_handle_t dir_handle,
                  /* name is required and malloc'd by the implementation,
                     the user must free the returned pointer
                  */
@@ -524,7 +524,7 @@ fs_win32_readdir(fs_handle_t fs, fs_directory_handle_t dir_handle,
 }
 
 fs_error_t
-fs_win32_closedir(fs_handle_t fs, fs_directory_handle_t dir_handle) {
+fs_win32_closedir(fs_win32_handle_t fs, fs_win32_directory_handle_t dir_handle) {
   ASSERT_VALID_FS(fs);
 
   FsWin32DirectoryHandle *const h = directory_handle_to_pointer(dir_handle);
@@ -553,7 +553,7 @@ fs_win32_closedir(fs_handle_t fs, fs_directory_handle_t dir_handle) {
    removing a directory should fail if it's not empty
 */
 fs_error_t
-fs_win32_remove(fs_handle_t fs, const char *path) {
+fs_win32_remove(fs_win32_handle_t fs, const char *path) {
   ASSERT_VALID_FS(fs);
 
   LPWSTR wpath = utf8_to_mb(path);
@@ -591,7 +591,7 @@ fs_win32_remove(fs_handle_t fs, const char *path) {
 }
 
 fs_error_t
-fs_win32_mkdir(fs_handle_t fs, const char *path) {
+fs_win32_mkdir(fs_win32_handle_t fs, const char *path) {
   ASSERT_VALID_FS(fs);
 
   LPWSTR wpath = utf8_to_mb(path);
@@ -612,7 +612,7 @@ fs_win32_mkdir(fs_handle_t fs, const char *path) {
 }
 
 fs_error_t
-fs_win32_getattr(fs_handle_t fs, const char *path,
+fs_win32_getattr(fs_win32_handle_t fs, const char *path,
                  OUT_VAR FsAttrs *attrs) {
   ASSERT_VALID_FS(fs);
 
@@ -645,7 +645,7 @@ fs_win32_getattr(fs_handle_t fs, const char *path,
 }
 
 fs_error_t
-fs_win32_rename(fs_handle_t fs,
+fs_win32_rename(fs_win32_handle_t fs,
                 const char *src, const char *dst) {
   ASSERT_VALID_FS(fs);
 
@@ -684,7 +684,7 @@ fs_win32_rename(fs_handle_t fs,
 }
 
 fs_error_t
-fs_win32_set_times(fs_handle_t fs,
+fs_win32_set_times(fs_win32_handle_t fs,
                    const char *path,
                    fs_time_t atime,
                    fs_time_t mtime) {
@@ -697,26 +697,26 @@ fs_win32_set_times(fs_handle_t fs,
 }
 
 bool
-fs_win32_destroy(fs_handle_t fs) {
+fs_win32_destroy(fs_win32_handle_t fs) {
   UNUSED(fs);
   return false;
 }
 
 bool
-fs_win32_path_is_root(fs_handle_t fs, const char *path) {
+fs_win32_path_is_root(fs_win32_handle_t fs, const char *path) {
   ASSERT_VALID_FS(fs);
   UNUSED(path);
   return false;
 }
 
 bool
-fs_win32_path_equals(fs_handle_t fs, const char *a, const char *b) {
+fs_win32_path_equals(fs_win32_handle_t fs, const char *a, const char *b) {
   ASSERT_VALID_FS(fs);
   return str_case_equals(a, b);
 }
 
 bool
-fs_win32_path_is_parent(fs_handle_t fs,
+fs_win32_path_is_parent(fs_win32_handle_t fs,
                         const char *potential_parent,
                         const char *potential_child) {
   ASSERT_VALID_FS(fs);
@@ -732,7 +732,14 @@ fs_win32_path_is_parent(fs_handle_t fs,
 }
 
 const char *
-fs_win32_path_sep(fs_handle_t fs) {
+fs_win32_path_sep(fs_win32_handle_t fs) {
   ASSERT_VALID_FS(fs);
   return "\\";
+}
+
+bool
+fs_win32_path_is_valid(fs_win32_handle_t fs,
+                       const char *path) {
+  /* TODO: implement */
+  return true;
 }

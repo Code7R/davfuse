@@ -30,12 +30,6 @@
 extern "C" {
 #endif
 
-/* these handles should be no larger than a pointer
-   so that you can pass them over APIs that accept void * */
-typedef uintptr_t fs_handle_t;
-typedef uintptr_t fs_file_handle_t;
-typedef uintptr_t fs_directory_handle_t;
-
 /* non-opaque structures */
 typedef enum {
   FS_ERROR_SUCCESS,

@@ -32,79 +32,95 @@
 extern "C" {
 #endif
 
+/* create new types for the dynamic handle */
+struct _dynamic_handle;
+struct _dynamic_directory_handle;
+struct _dynamic_file_handle;
+
+typedef struct _dynamic_handle *fs_dynamic_handle_t;
+typedef struct _dynamic_directory_handle *fs_dynamic_directory_handle_t;
+typedef struct _dynamic_file_handle *fs_dynamic_file_handle_t;
+
+typedef fs_error_t (*fs_dynamic_open_fn)(void *, const char *, bool, OUT_VAR void **, OUT_VAR bool *);
+typedef fs_error_t (*fs_dynamic_fgetattr_fn)(void *, void *, OUT_VAR FsAttrs *);
+typedef fs_error_t (*fs_dynamic_ftruncate_fn)(void *, void *, fs_off_t);
+typedef fs_error_t (*fs_dynamic_read_fn)(void *, void *, OUT_VAR char *, size_t, fs_off_t, OUT_VAR size_t *);
+typedef fs_error_t (*fs_dynamic_write_fn)(void *, void *, const char *, size_t, fs_off_t, OUT_VAR size_t *);
+typedef fs_error_t (*fs_dynamic_close_fn)(void *, void *);
+typedef fs_error_t (*fs_dynamic_opendir_fn)(void *, const char *, OUT_VAR void **);
+typedef fs_error_t (*fs_dynamic_readdir_fn)(void *, void *, OUT_VAR char **, OUT_VAR bool *, OUT_VAR FsAttrs *);
+typedef fs_error_t (*fs_dynamic_closedir_fn)(void *, void *);
+typedef fs_error_t (*fs_dynamic_remove_fn)(void *, const char *);
+typedef fs_error_t (*fs_dynamic_mkdir_fn)(void *, const char *);
+typedef fs_error_t (*fs_dynamic_getattr_fn)(void *, const char *, OUT_VAR FsAttrs *);
+typedef fs_error_t (*fs_dynamic_rename_fn)(void *, const char *, const char *);
+typedef fs_error_t (*fs_dynamic_set_times_fn)(void *fs, const char *path, fs_time_t atime, fs_time_t mtime);
+typedef bool (*fs_dynamic_path_is_root_fn)(void *fs, const char *a);
+typedef const char *(*fs_dynamic_path_sep_fn)(void *fss);
+typedef bool (*fs_dynamic_path_equals_fn)(void *fs, const char *a, const char *b);
+typedef bool (*fs_dynamic_path_is_parent_fn)(void *fs, const char *p, const char *c);
+typedef bool (*fs_dynamic_path_is_valid_fn)(void *fs, const char *path);
+typedef bool (*fs_dynamic_destroy_fn)(void *fs);
+
 typedef struct {
-  fs_error_t (*open)(fs_handle_t, const char *, bool,
-                     OUT_VAR fs_file_handle_t *, OUT_VAR bool *);
-  fs_error_t (*fgetattr)(fs_handle_t, fs_file_handle_t,
-                         OUT_VAR FsAttrs *);
-  fs_error_t (*ftruncate)(fs_handle_t, fs_file_handle_t,
-                          fs_off_t);
-  fs_error_t (*read)(fs_handle_t, fs_file_handle_t,
-                     OUT_VAR char *, size_t, fs_off_t,
-                     OUT_VAR size_t *);
-  fs_error_t (*write)(fs_handle_t, fs_file_handle_t,
-                      const char *, size_t, fs_off_t,
-                      OUT_VAR size_t *);
-  fs_error_t (*close)(fs_handle_t, fs_file_handle_t);
-  fs_error_t (*opendir)(fs_handle_t, const char *,
-                        OUT_VAR fs_directory_handle_t *);
-  fs_error_t (*readdir)(fs_handle_t, fs_directory_handle_t,
-                        OUT_VAR char **, OUT_VAR bool *, OUT_VAR FsAttrs *);
-  fs_error_t (*closedir)(fs_handle_t, fs_directory_handle_t);
-  fs_error_t (*remove)(fs_handle_t, const char *);
-  fs_error_t (*mkdir)(fs_handle_t, const char *);
-  fs_error_t (*getattr)(fs_handle_t, const char *,
-                        OUT_VAR FsAttrs *);
-  fs_error_t (*rename)(fs_handle_t, const char *, const char *);
-  fs_error_t (*set_times)(fs_handle_t fs,
-                          const char *path,
-                          fs_time_t atime,
-                          fs_time_t mtime);
-  bool (*path_is_root)(fs_handle_t fs, const char *a);
-  const char *(*path_sep)(fs_handle_t fs);
-  bool (*path_equals)(fs_handle_t fs, const char *a, const char *b);
-  bool (*path_is_parent)(fs_handle_t fs,
-                         const char *potential_parent,
-                         const char *potential_child);
-  bool (*destroy)(fs_handle_t fs);
+  fs_dynamic_open_fn open;
+  fs_dynamic_fgetattr_fn fgetattr;
+  fs_dynamic_ftruncate_fn ftruncate;
+  fs_dynamic_read_fn read;
+  fs_dynamic_write_fn write;
+  fs_dynamic_close_fn close;
+  fs_dynamic_opendir_fn opendir;
+  fs_dynamic_readdir_fn readdir;
+  fs_dynamic_closedir_fn closedir;
+  fs_dynamic_remove_fn remove;
+  fs_dynamic_mkdir_fn mkdir;
+  fs_dynamic_getattr_fn getattr;
+  fs_dynamic_rename_fn rename;
+  fs_dynamic_set_times_fn set_times;
+  fs_dynamic_path_is_root_fn path_is_root;
+  fs_dynamic_path_sep_fn path_sep;
+  fs_dynamic_path_equals_fn path_equals;
+  fs_dynamic_path_is_parent_fn path_is_parent;
+  fs_dynamic_path_is_valid_fn path_is_valid;
+  fs_dynamic_destroy_fn destroy;
 } FsOperations;
 
-fs_handle_t
+fs_dynamic_handle_t
 fs_dynamic_default_new(void);
 
-fs_handle_t
-fs_dynamic_new(fs_handle_t fs, const FsOperations *ops, bool destroy);
+fs_dynamic_handle_t
+fs_dynamic_new(void *fs, const FsOperations *ops, bool destroy);
 
 fs_error_t
-fs_dynamic_open(fs_handle_t fs,
+fs_dynamic_open(fs_dynamic_handle_t fs,
                 const char *path, bool create,
-                OUT_VAR fs_file_handle_t *handle,
+                OUT_VAR fs_dynamic_file_handle_t *handle,
                 OUT_VAR bool *created);
 
 fs_error_t
-fs_dynamic_fgetattr(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_dynamic_fgetattr(fs_dynamic_handle_t fs, fs_dynamic_file_handle_t file_handle,
                     OUT_VAR FsAttrs *attrs);
 
 fs_error_t
-fs_dynamic_ftruncate(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_dynamic_ftruncate(fs_dynamic_handle_t fs, fs_dynamic_file_handle_t file_handle,
                      fs_off_t offset);
 
 fs_error_t
-fs_dynamic_read(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_dynamic_read(fs_dynamic_handle_t fs, fs_dynamic_file_handle_t file_handle,
                 OUT_VAR char *buf, size_t size, fs_off_t off,
                 OUT_VAR size_t *amt_read);
 
 fs_error_t
-fs_dynamic_write(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_dynamic_write(fs_dynamic_handle_t fs, fs_dynamic_file_handle_t file_handle,
                  const char *buf, size_t size, fs_off_t offset,
                  OUT_VAR size_t *amt_written);
 
 fs_error_t
-fs_dynamic_opendir(fs_handle_t fs, const char *path,
-                   OUT_VAR fs_directory_handle_t *dir_handle);
+fs_dynamic_opendir(fs_dynamic_handle_t fs, const char *path,
+                   OUT_VAR fs_dynamic_directory_handle_t *dir_handle);
 
 fs_error_t
-fs_dynamic_readdir(fs_handle_t fs, fs_directory_handle_t dir_handle,
+fs_dynamic_readdir(fs_dynamic_handle_t fs, fs_dynamic_directory_handle_t dir_handle,
                    /* name is required and malloc'd by the implementation,
                       the user must free the returned pointer
                    */
@@ -114,50 +130,54 @@ fs_dynamic_readdir(fs_handle_t fs, fs_directory_handle_t dir_handle,
                    OUT_VAR FsAttrs *attrs);
 
 fs_error_t
-fs_dynamic_closedir(fs_handle_t fs, fs_directory_handle_t dir_handle);
+fs_dynamic_closedir(fs_dynamic_handle_t fs, fs_dynamic_directory_handle_t dir_handle);
 
 /* can remove either a file or a directory,
    removing a directory should fail if it's not empty
 */
 fs_error_t
-fs_dynamic_remove(fs_handle_t fs, const char *path);
+fs_dynamic_remove(fs_dynamic_handle_t fs, const char *path);
 
 fs_error_t
-fs_dynamic_mkdir(fs_handle_t fs, const char *path);
+fs_dynamic_mkdir(fs_dynamic_handle_t fs, const char *path);
 
 fs_error_t
-fs_dynamic_getattr(fs_handle_t fs, const char *path,
+fs_dynamic_getattr(fs_dynamic_handle_t fs, const char *path,
                    OUT_VAR FsAttrs *attrs);
 
 fs_error_t
-fs_dynamic_rename(fs_handle_t fs,
+fs_dynamic_rename(fs_dynamic_handle_t fs,
                   const char *src, const char *dst);
 
 fs_error_t
-fs_dynamic_close(fs_handle_t fs, fs_file_handle_t handle);
+fs_dynamic_close(fs_dynamic_handle_t fs, fs_dynamic_file_handle_t handle);
 
 fs_error_t
-fs_dynamic_set_times(fs_handle_t fs,
+fs_dynamic_set_times(fs_dynamic_handle_t fs,
                      const char *path,
                      fs_time_t atime,
                      fs_time_t mtime);
 
 bool
-fs_dynamic_destroy(fs_handle_t fs);
+fs_dynamic_destroy(fs_dynamic_handle_t fs);
 
 bool
-fs_dynamic_path_is_root(fs_handle_t fs, const char *a);
+fs_dynamic_path_is_root(fs_dynamic_handle_t fs, const char *a);
 
 const char *
-fs_dynamic_path_sep(fs_handle_t fs);
+fs_dynamic_path_sep(fs_dynamic_handle_t fs);
 
 bool
-fs_dynamic_path_equals(fs_handle_t fs, const char *a, const char *b);
+fs_dynamic_path_equals(fs_dynamic_handle_t fs, const char *a, const char *b);
 
 bool
-fs_dynamic_path_is_parent(fs_handle_t fs,
+fs_dynamic_path_is_parent(fs_dynamic_handle_t fs,
                           const char *potential_parent,
                           const char *potential_child);
+
+bool
+fs_dynamic_path_is_valid(fs_dynamic_handle_t fs,
+                         const char *path);
 
 CREATE_IMPL_TAG(FS_DYNAMIC_IMPL);
 

@@ -27,6 +27,7 @@
 #include "util.h"
 
 #include <assert.h>
+#include <limits.h>
 #include <errno.h>
 
 #include <fcntl.h>
@@ -38,23 +39,39 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 
-STATIC_ASSERT(sizeof(DIR *) <= sizeof(fs_directory_handle_t),
-              "fs_directory_handle_t is not large enough to hold a pointer to a posix DIR");
-
-STATIC_ASSERT(sizeof(int) <= sizeof(fs_file_handle_t),
-              "fs_file_handle_t is not large enough to hold an int");
-
-enum {
+typedef enum {
   _FS_POSIX_SINGLETON=1,
-};
+} posix_singleton_t;
 
-static void
-ASSERT_VALID_FS(fs_handle_t fs) {
-  UNUSED(fs);
-  assert(fs == _FS_POSIX_SINGLETON);
+#define POSIX_SINGLETON_MAX INT_MAX
+#define POSIX_SINGLETON_MIN INT_MIN
+
+STATIC_ASSERT(sizeof(int) <= sizeof(fs_posix_file_handle_t),
+              "fs_posix_file_handle_t is not large enough to hold an int");
+
+STATIC_ASSERT(sizeof(_FS_POSIX_SINGLETON) <= sizeof(fs_posix_handle_t),
+              "fs_posix_handle_t is not large enough to hold the singletone");
+
+static fs_posix_handle_t
+singleton_to_handle(posix_singleton_t single) {
+  return (fs_posix_handle_t) (uintptr_t) single;
 }
 
-static fs_file_handle_t
+static posix_singleton_t
+handle_to_singleton(fs_posix_handle_t single) {
+  intptr_t a = (intptr_t) single;
+  if (a < POSIX_SINGLETON_MIN) abort();
+  if (a > POSIX_SINGLETON_MAX) abort();
+  return (posix_singleton_t) a;
+}
+
+static void
+ASSERT_VALID_FS(fs_posix_handle_t fs) {
+  UNUSED(fs);
+  assert(handle_to_singleton(fs) == _FS_POSIX_SINGLETON);
+}
+
+static fs_posix_file_handle_t
 fd_to_file_handle(int fd) {
   /* an invalid file handle has the value 0
      to shift valid file handles up by 1 */
@@ -64,26 +81,26 @@ fd_to_file_handle(int fd) {
   else {
     fd = 0;
   }
-  return fd;
+  return (fs_posix_file_handle_t) (uintptr_t) fd;
 }
 
 static int
-file_handle_to_fd(fs_file_handle_t handle) {
+file_handle_to_fd(fs_posix_file_handle_t handle) {
   if (!handle) {
     return -1;
   }
   else {
-    return handle - 1;
+    return ((uintptr_t) handle) - 1;
   }
 }
 
-static fs_directory_handle_t
+static fs_posix_directory_handle_t
 dirp_to_directory_handle(DIR *dirp) {
-  return (fs_directory_handle_t) dirp;
+  return (fs_posix_directory_handle_t) dirp;
 }
 
 static DIR *
-directory_handle_to_dirp(fs_directory_handle_t handle) {
+directory_handle_to_dirp(fs_posix_directory_handle_t handle) {
   return (DIR *) handle;
 }
 
@@ -123,10 +140,10 @@ fill_attrs(FsAttrs *attrs, struct stat *st) {
   };
 }
 
-fs_handle_t
+fs_posix_handle_t
 fs_posix_default_new(void) {
   /* don't need context */
-  return _FS_POSIX_SINGLETON;
+  return singleton_to_handle(_FS_POSIX_SINGLETON);
 }
 
 static bool
@@ -167,9 +184,9 @@ open_or_create(const char *file_path, int flags, mode_t mode,
 }
 
 fs_error_t
-fs_posix_open(fs_handle_t fs,
+fs_posix_open(fs_posix_handle_t fs,
               const char *path, bool create,
-              OUT_VAR fs_file_handle_t *handle,
+              OUT_VAR fs_posix_file_handle_t *handle,
               OUT_VAR bool *created) {
   ASSERT_VALID_FS(fs);
 
@@ -206,7 +223,7 @@ fs_posix_open(fs_handle_t fs,
 }
 
 fs_error_t
-fs_posix_fgetattr(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_posix_fgetattr(fs_posix_handle_t fs, fs_posix_file_handle_t file_handle,
                   OUT_VAR FsAttrs *attrs) {
   ASSERT_VALID_FS(fs);
   int fd = file_handle_to_fd(file_handle);
@@ -222,7 +239,7 @@ fs_posix_fgetattr(fs_handle_t fs, fs_file_handle_t file_handle,
 }
 
 fs_error_t
-fs_posix_ftruncate(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_posix_ftruncate(fs_posix_handle_t fs, fs_posix_file_handle_t file_handle,
                    fs_off_t offset) {
   ASSERT_VALID_FS(fs);
   int fd = file_handle_to_fd(file_handle);
@@ -235,7 +252,7 @@ fs_posix_ftruncate(fs_handle_t fs, fs_file_handle_t file_handle,
 }
 
 fs_error_t
-fs_posix_read(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_posix_read(fs_posix_handle_t fs, fs_posix_file_handle_t file_handle,
               OUT_VAR char *buf, size_t size, fs_off_t off,
               OUT_VAR size_t *amt_read) {
   ASSERT_VALID_FS(fs);
@@ -251,7 +268,7 @@ fs_posix_read(fs_handle_t fs, fs_file_handle_t file_handle,
 }
 
 fs_error_t
-fs_posix_write(fs_handle_t fs, fs_file_handle_t file_handle,
+fs_posix_write(fs_posix_handle_t fs, fs_posix_file_handle_t file_handle,
                const char *buf, size_t size, fs_off_t offset,
                OUT_VAR size_t *amt_written) {
   ASSERT_VALID_FS(fs);
@@ -267,7 +284,7 @@ fs_posix_write(fs_handle_t fs, fs_file_handle_t file_handle,
 }
 
 fs_error_t
-fs_posix_close(fs_handle_t fs, fs_file_handle_t file_handle) {
+fs_posix_close(fs_posix_handle_t fs, fs_posix_file_handle_t file_handle) {
   ASSERT_VALID_FS(fs);
   int fd = file_handle_to_fd(file_handle);
   int ret_close = close(fd);
@@ -279,8 +296,8 @@ fs_posix_close(fs_handle_t fs, fs_file_handle_t file_handle) {
 }
 
 fs_error_t
-fs_posix_opendir(fs_handle_t fs, const char *path,
-                 OUT_VAR fs_directory_handle_t *dir_handle) {
+fs_posix_opendir(fs_posix_handle_t fs, const char *path,
+                 OUT_VAR fs_posix_directory_handle_t *dir_handle) {
   ASSERT_VALID_FS(fs);
   *dir_handle = dirp_to_directory_handle(opendir(path));
   if (!*dir_handle) {
@@ -291,7 +308,7 @@ fs_posix_opendir(fs_handle_t fs, const char *path,
 }
 
 fs_error_t
-fs_posix_readdir(fs_handle_t fs, fs_directory_handle_t dir_handle,
+fs_posix_readdir(fs_posix_handle_t fs, fs_posix_directory_handle_t dir_handle,
                  /* name is required and malloc'd by the implementation,
                     the user must free the returned pointer
                  */
@@ -353,7 +370,7 @@ fs_posix_readdir(fs_handle_t fs, fs_directory_handle_t dir_handle,
 }
 
 fs_error_t
-fs_posix_closedir(fs_handle_t fs, fs_directory_handle_t dir_handle) {
+fs_posix_closedir(fs_posix_handle_t fs, fs_posix_directory_handle_t dir_handle) {
   ASSERT_VALID_FS(fs);
 
   DIR *const dirp = directory_handle_to_dirp(dir_handle);
@@ -370,7 +387,7 @@ fs_posix_closedir(fs_handle_t fs, fs_directory_handle_t dir_handle) {
    removing a directory should fail if it's not empty
 */
 fs_error_t
-fs_posix_remove(fs_handle_t fs, const char *path) {
+fs_posix_remove(fs_posix_handle_t fs, const char *path) {
   ASSERT_VALID_FS(fs);
   int ret = unlink(path);
   if (ret < 0 &&
@@ -396,7 +413,7 @@ fs_posix_remove(fs_handle_t fs, const char *path) {
 }
 
 fs_error_t
-fs_posix_mkdir(fs_handle_t fs, const char *path) {
+fs_posix_mkdir(fs_posix_handle_t fs, const char *path) {
   ASSERT_VALID_FS(fs);
   int ret_mkdir = mkdir(path, 0777);
   if (ret_mkdir < 0) {
@@ -407,7 +424,7 @@ fs_posix_mkdir(fs_handle_t fs, const char *path) {
 }
 
 fs_error_t
-fs_posix_getattr(fs_handle_t fs, const char *path,
+fs_posix_getattr(fs_posix_handle_t fs, const char *path,
                  OUT_VAR FsAttrs *attrs) {
   ASSERT_VALID_FS(fs);
   struct stat st;
@@ -422,7 +439,7 @@ fs_posix_getattr(fs_handle_t fs, const char *path,
 }
 
 fs_error_t
-fs_posix_rename(fs_handle_t fs,
+fs_posix_rename(fs_posix_handle_t fs,
                 const char *src, const char *dst) {
   ASSERT_VALID_FS(fs);
   int ret_rename = rename(src, dst);
@@ -434,27 +451,27 @@ fs_posix_rename(fs_handle_t fs,
 }
 
 bool
-fs_posix_destroy(fs_handle_t fs) {
+fs_posix_destroy(fs_posix_handle_t fs) {
   ASSERT_VALID_FS(fs);
   return true;
 }
 
 bool
-fs_posix_path_is_root(fs_handle_t fs, const char *a) {
+fs_posix_path_is_root(fs_posix_handle_t fs, const char *a) {
   ASSERT_VALID_FS(fs);
 
   return str_equals(a, "/");
 }
 
 bool
-fs_posix_path_equals(fs_handle_t fs, const char *a, const char *b) {
+fs_posix_path_equals(fs_posix_handle_t fs, const char *a, const char *b) {
   ASSERT_VALID_FS(fs);
 
   return str_equals(a, b);
 }
 
 bool
-fs_posix_path_is_parent(fs_handle_t fs,
+fs_posix_path_is_parent(fs_posix_handle_t fs,
                         const char *potential_parent,
                         const char *potential_child) {
   ASSERT_VALID_FS(fs);
@@ -468,14 +485,14 @@ fs_posix_path_is_parent(fs_handle_t fs,
 }
 
 const char *
-fs_posix_path_sep(fs_handle_t fs) {
+fs_posix_path_sep(fs_posix_handle_t fs) {
   ASSERT_VALID_FS(fs);
 
   return "/";
 }
 
 fs_error_t
-fs_posix_set_times(fs_handle_t fs,
+fs_posix_set_times(fs_posix_handle_t fs,
                    const char *path,
                    fs_time_t atime,
                    fs_time_t mtime) {
@@ -502,4 +519,12 @@ fs_posix_set_times(fs_handle_t fs,
   if (res_utimes < 0) return errno_to_fs_error();
 
   return FS_INVALID_TIME;
+}
+
+bool
+fs_posix_path_is_valid(fs_posix_handle_t fs,
+                       const char *path) {
+  UNUSED(fs);
+  /* TODO: check if path is valid UTF-8 */
+  return path && path[0] == '/';
 }

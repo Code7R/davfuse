@@ -113,10 +113,10 @@ cat "$IDEF_PATH" | (
             echo "#endif"
         elif echo "$SYMBOL" | grep "^[A-Z][a-z]" > /dev/null; then
             # this is a struct
-            echo "typedef ${IFACE_SYNONYM_TITLE}${IMPL_TITLE}${SYMBOL} ${IFACE_TITLE}${SYMBOL};"
+            echo "typedef ${IFACE_TITLE}${IMPL_TITLE}${SYMBOL} ${IFACE_SYNONYM_TITLE}${SYMBOL};"
         elif echo "$SYMBOL" | grep "\\(^\\|_\\)t$" > /dev/null; then
             # this is a integral type
-            echo "typedef ${IFACE}_${IMPL}_${SYMBOL} ${IFACE}_${SYMBOL};"
+            echo "typedef ${IFACE}_${IMPL}_${SYMBOL} ${IFACE_SYNONYM}_${SYMBOL};"
         else
             # this is a function
             echo "#ifdef __cplusplus"
