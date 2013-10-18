@@ -708,8 +708,12 @@ fs_win32_destroy(fs_win32_handle_t fs) {
 bool
 fs_win32_path_is_root(fs_win32_handle_t fs, const char *path) {
   ASSERT_VALID_FS(fs);
-  UNUSED(path);
-  return false;
+  if (!path) return false;
+  /* TODO: add support for UNC paths and multi-letter prefixes */
+  return (strlen(path) == 3 &&
+          (('a' <= path[0] && path[0] <= 'z') ||
+           ('A' <= path[0] && path[0] <= 'Z')) &&
+          path[1] == ':' && path[2] == '\\');
 }
 
 bool
@@ -743,8 +747,17 @@ fs_win32_path_sep(fs_win32_handle_t fs) {
 bool
 fs_win32_path_is_valid(fs_win32_handle_t fs,
                        const char *path) {
-  UNUSED(fs);
-  UNUSED(path);
-  /* TODO: implement */
-  return true;
+  ASSERT_VALID_FS(fs);
+  if (!path) return false;
+
+  if (strlen(path) >= 3 &&
+      (('a' <= path[0] && path[0] <= 'z') ||
+       ('A' <= path[0] && path[0] <= 'Z')) &&
+      path[1] == ':' && path[2] == '\\') {
+    return true;
+  }
+
+  /* TODO: add support for UNC paths */
+
+  return false;
 }
