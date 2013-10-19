@@ -46,12 +46,8 @@ last_socket_error(void) {
   return (socket_error_t) WSAGetLastError();
 }
 
-HEADER_FUNCTION const char *
-socket_error_message(socket_error_t a) {
-  UNUSED(a);
-  /* TODO: write this */
-  return "";
-}
+const char *
+socket_error_message(socket_error_t);
 
 #ifdef __cplusplus
 }

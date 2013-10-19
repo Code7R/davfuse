@@ -65,3 +65,27 @@ set_socket_non_blocking(fd_t sock) {
 bool ignore_sigpipe() {
   return true;
 }
+
+const char *
+socket_error_message(socket_error_t err_code) {
+  static wchar_t error_buf_wide[1024];
+  static char error_buf[1024];
+
+  const DWORD num_chars =
+    FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM |
+                   FORMAT_MESSAGE_IGNORE_INSERTS, 0, err_code, 0,
+                   error_buf_wide,
+                   sizeof(error_buf_wide) / sizeof(error_buf_wide[0]),
+                   NULL);
+  if (!num_chars) return "Couldn't get error message, FormatMessageW() failed";
+
+  const DWORD flags = 0;
+  const int required_buffer_size =
+    WideCharToMultiByte(CP_UTF8, flags,
+                        error_buf_wide, num_chars + 1,
+                        error_buf, sizeof(error_buf),
+                        NULL, NULL);
+  if (!required_buffer_size) return "Couldn't get error_message, WideCharToMultibyte() failed";
+
+  return error_buf;
+}
