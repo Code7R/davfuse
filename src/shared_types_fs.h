@@ -19,6 +19,7 @@
 #ifndef __SHARED_TYPES_FS_H
 #define __SHARED_TYPES_FS_H
 
+#include <assert.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>

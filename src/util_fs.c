@@ -43,6 +43,10 @@ util_fs_strerror(fs_error_t error) {
     M(FS_ERROR_EXISTS, "File exists");
     M(FS_ERROR_CROSS_DEVICE, "Different devices");
     M(FS_ERROR_IO, "IO Error");
+    M(FS_ERROR_SUCCESS, "Success");
+    M(FS_ERROR_ACCESS, "Access Denied");
+    M(FS_ERROR_INVALID_ARG, "Invalid Argument");
+    M(FS_ERROR_NO_MEM, "No memory");
   default:
     return "Unknown error";
   }

@@ -440,6 +440,9 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
   fs_directory_handle_t dirp = (fs_directory_handle_t) 0;
   bool is_dir = false;
   char *file_path = NULL;
+  char *entry_name = NULL;
+  char *new_uri = NULL;
+  char *child_path = NULL;
 
   /* TODO: support this */
   if (depth == DEPTH_INF) {
@@ -495,12 +498,13 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
     }
 
     while (true) {
-      char *name;
       bool attrs_is_filled;
       FsAttrs dirent_attrs;
+      free(entry_name);
+      entry_name = NULL;
       const fs_error_t ret_readdir =
         fs_readdir(pbctx->fs, dirp,
-                   &name, &attrs_is_filled, &dirent_attrs);
+                   &entry_name, &attrs_is_filled, &dirent_attrs);
       if (ret_readdir) {
         log_info("Couldn't readdir \"%s\": %s",
                  file_path, util_fs_strerror(ret_readdir));
@@ -508,32 +512,50 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
         goto done;
       }
 
-      if (!name) {
+      if (!entry_name) {
         /* EOF */
         break;
       }
 
       /* must stat the file */
       if (!attrs_is_filled) {
-        /* TODO: implement */
-        abort();
+        /* NB: slight race condition here,
+           file that we did readdir() on may not be
+           the one we're statting here */
+        free(child_path);
+        child_path =
+          util_fs_path_join(pbctx->fs, file_path, entry_name);
+        if (!child_path) {
+          log_info("Couldn't path join \"%s\" and \"%s\"",
+                   file_path, entry_name);
+          ev.error = WEBDAV_ERROR_GENERAL;
+          goto done;
+        }
+
+        const fs_error_t ret_fgetattr =
+          fs_getattr(pbctx->fs, child_path, &dirent_attrs);
+        if (ret_fgetattr) {
+          log_info("Couldn't fgetattr(\"%s\"): %s",
+                   child_path, util_fs_strerror(ret_fgetattr));
+          ev.error = WEBDAV_ERROR_GENERAL;
+          goto done;
+        }
       }
 
-      const size_t name_len = strlen(name);
+      const size_t name_len = strlen(entry_name);
       ASSERT_TRUE(name_len);
 
-      char *const new_uri = str_equals(relative_uri, "/")
-        ? super_strcat("/", name, NULL)
-        : super_strcat(relative_uri, "/", name, NULL);
+      new_uri = str_equals(relative_uri, "/")
+        ? super_strcat("/", entry_name, NULL)
+        : super_strcat(relative_uri, "/", entry_name, NULL);
       ASSERT_NOT_NULL(new_uri);
 
       const webdav_propfind_entry_t pfe =
         create_propfind_entry_from_stat(new_uri, &dirent_attrs);
       ASSERT_TRUE(pfe);
-      free(new_uri);
+
       ev.entries = linked_list_prepend(ev.entries, pfe);
 
-      free(name);
     }
   }
 
@@ -551,6 +573,9 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
   }
 
   free(file_path);
+  free(new_uri);
+  free(child_path);
+  free(entry_name);
 
   return cb(WEBDAV_PROPFIND_DONE_EVENT, &ev, cb_ud);
 }
