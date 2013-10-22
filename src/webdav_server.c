@@ -2459,7 +2459,7 @@ webdav_server_start(http_backend_t http_backend,
   struct webdav_server *serv = NULL;
 
   if (!str_endswith(public_uri_root, "/")) {
-    log_info("public_uri_root must end in '/'");
+    log_info("public_uri_root must end in '/': %s", public_uri_root);
     goto error;
   }
 

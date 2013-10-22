@@ -27,13 +27,14 @@ last_socket_error_message(void) {
 }
 
 void
-init_sockaddr_in(struct sockaddr_in *addr, port_t port) {
+init_sockaddr_in(struct sockaddr_in *addr, ipv4_t ip, port_t port) {
   memset(addr, 0, sizeof(*addr));
 
   addr->sin_family = AF_INET;
   addr->sin_port = htons(port);
-  addr->sin_addr.s_addr = htonl(INADDR_ANY);
+  addr->sin_addr.s_addr = htonl(ip);
 }
+
 
 fd_t
 create_bound_socket(const struct sockaddr *addr, socklen_t addr_len) {
@@ -78,10 +79,10 @@ create_bound_socket(const struct sockaddr *addr, socklen_t addr_len) {
 }
 
 fd_t
-create_ipv4_bound_socket(port_t port) {
+create_ipv4_bound_socket(ipv4_t ip, port_t port) {
   struct sockaddr_in listen_addr;
 
-  init_sockaddr_in(&listen_addr, port);
+  init_sockaddr_in(&listen_addr, ip, port);
 
   return create_bound_socket((struct sockaddr *) &listen_addr,
 			     sizeof(listen_addr));

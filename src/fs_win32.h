@@ -19,8 +19,6 @@
 #ifndef _FS_WIN32_H
 #define _FS_WIN32_H
 
-#include <windows.h>
-
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>

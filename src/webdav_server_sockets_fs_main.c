@@ -85,7 +85,7 @@ main(int argc, char *argv[]) {
     return -1;
   }
   struct sockaddr_in listen_addr;
-  init_sockaddr_in(&listen_addr, to_port);
+  init_sockaddr_in(&listen_addr, INADDR_ANY, to_port);
 
   /* get public uri root */
   /* TODO: handle bad input paths, or sanitize them, you know DWIM... */

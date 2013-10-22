@@ -28,6 +28,7 @@ extern "C" {
 #endif
 
 typedef uint16_t port_t;
+typedef uint32_t ipv4_t;
 
 enum {
   MAX_PORT=UINT16_MAX,
@@ -37,13 +38,13 @@ const char *
 last_socket_error_message(void);
 
 void
-init_sockaddr_in(struct sockaddr_in *addr, port_t port);
+init_sockaddr_in(struct sockaddr_in *addr, ipv4_t ip, port_t port);
 
 fd_t
 create_bound_socket(const struct sockaddr *addr, socklen_t address_len);
 
 fd_t
-create_ipv4_bound_socket(port_t port);
+create_ipv4_bound_socket(ipv4_t ip, port_t port);
 
 #ifdef __cplusplus
 }

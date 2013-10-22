@@ -692,7 +692,7 @@ fs_win32_set_times(fs_win32_handle_t fs,
                    fs_time_t atime,
                    fs_time_t mtime) {
   /* not implemented right right now */
-  UNUSED(fs);
+  ASSERT_VALID_FS(fs);
   UNUSED(path);
   UNUSED(atime);
   UNUSED(mtime);
@@ -701,8 +701,8 @@ fs_win32_set_times(fs_win32_handle_t fs,
 
 bool
 fs_win32_destroy(fs_win32_handle_t fs) {
-  UNUSED(fs);
-  return false;
+  ASSERT_VALID_FS(fs);
+  return true;
 }
 
 bool

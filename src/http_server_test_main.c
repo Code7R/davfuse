@@ -210,7 +210,7 @@ int main() {
 
   /* create backend */
   struct sockaddr_in listen_addr;
-  init_sockaddr_in(&listen_addr, 8080);
+  init_sockaddr_in(&listen_addr, INADDR_ANY, 8080);
 
   http_backend_sockets_fdevent_t http_backend =
     http_backend_sockets_fdevent_new(loop,

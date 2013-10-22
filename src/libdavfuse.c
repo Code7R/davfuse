@@ -132,7 +132,7 @@ http_thread(void *ud) {
   port_t port = 8080;
 
   struct sockaddr_in listen_addr;
-  init_sockaddr_in(&listen_addr, port);
+  init_sockaddr_in(&listen_addr, 0x7f000001, port);
 
   /* create server network IO backend */
   log_info("Create network IO backend for HTTP server");

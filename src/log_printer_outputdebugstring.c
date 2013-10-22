@@ -16,7 +16,9 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>
  */
 
+#define _WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#undef _WIN32_LEAN_AND_MEAN
 
 #include <assert.h>
 #include <stdarg.h>
@@ -79,4 +81,3 @@ log_printer_outputdebugstring_print(const char *filename, int lineno,
 
   free(buf);
 }
-
