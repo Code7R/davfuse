@@ -1178,7 +1178,7 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
   }
   else {
-    status_code = HTTP_STATUS_CODE_OK;
+    status_code = HTTP_STATUS_CODE_NO_CONTENT;
   }
 
   linked_list_free(delete_done_ev->failed_to_delete, free);

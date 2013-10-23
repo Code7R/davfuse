@@ -45,21 +45,12 @@
 #undef _IS_HTTP_SERVER_C
 
 /* define opaque structures */
-typedef struct _http_server {
-  http_backend_t backend;
-  event_handler_t handler;
-  void *ud;
-  bool shutting_down;
-  size_t num_connections;
-  event_handler_t stop_cb;
-  void *stop_ud;
-} HTTPServer;
-
 typedef struct _http_request_context {
   struct _http_connection *conn;
   http_request_write_state_t write_state;
   http_request_read_state_t read_state;
   bool is_connection_close;
+  bool is_no_content;
   size_t out_content_length;
   size_t bytes_written;
   bool is_chunked_request;
@@ -110,6 +101,16 @@ typedef struct _http_connection {
   } spare;
   struct _http_request_context rctx;
 } HTTPConnection;
+
+typedef struct _http_server {
+  http_backend_t backend;
+  event_handler_t handler;
+  void *ud;
+  bool shutting_down;
+  size_t num_connections;
+  event_handler_t stop_cb;
+  void *stop_ud;
+} HTTPServer;
 
 const char *const HTTP_HEADER_ALLOW = "Allow";
 const char *const HTTP_HEADER_CONNECTION = "Connection";
@@ -631,14 +632,17 @@ http_request_write_headers(http_request_handle_t rh,
     goto error;
   }
 
+  rctx->is_no_content = response_headers->code == HTTP_STATUS_CODE_NO_CONTENT;
+
   /* check if the response has a "Content-Length" header
      this is used as a hint by the handlers to tell the server
      how much it's going to write, right now it's strictly necessary
      but we may relax this in the future (esp if we negotiate chunked encoding) */
   {
-    const char *content_length_str = _get_header_value(response_headers->headers,
-                                                       response_headers->num_headers,
-                                                       HTTP_HEADER_CONTENT_LENGTH);
+    const char *const content_length_str =
+      _get_header_value(response_headers->headers,
+                        response_headers->num_headers,
+                        HTTP_HEADER_CONTENT_LENGTH);
     if (!content_length_str) {
       log_error("Handler did not use a valid content length string!");
       goto error;
@@ -651,7 +655,14 @@ http_request_write_headers(http_request_handle_t rh,
       goto error;
     }
 
+    if (rctx->is_no_content && content_length) {
+      log_error("Handler had a non-zero content-length "
+                "when the code was no-content");
+      goto error;
+    }
+
     rctx->out_content_length = content_length;
+    rctx->is_no_content = false;
   }
 
   if (response_headers->code == HTTP_STATUS_CODE_METHOD_NOT_ALLOWED &&
@@ -728,6 +739,13 @@ http_request_write(http_request_handle_t rh,
   HTTPRequestContext *rctx = rh;
 
   if (rctx->write_state != HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS) {
+    goto error;
+  }
+
+  if (rctx->is_no_content) {
+    /* this response was no content */
+    log_warning("conn %p, http_request_write called on a no content response",
+                rctx->conn);
     goto error;
   }
 

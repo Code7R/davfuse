@@ -481,10 +481,6 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
 
   is_dir = attrs.is_directory;
 
-  webdav_propfind_entry_t pfe = create_propfind_entry_from_stat(relative_uri, &attrs);
-  ASSERT_NOT_NULL(pfe);
-  ev.entries = linked_list_prepend(ev.entries, pfe);
-
   if (depth == DEPTH_1 && is_dir) {
     /* open the resource */
     fs_error_t ret_open = fs_opendir(pbctx->fs, file_path, &dirp);
@@ -558,6 +554,16 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
 
     }
   }
+
+  /* add the root directory last, so it is first */
+  /* XXX: this actually matters for win32 clients...
+     put this logic in webdav_server.c since it's protocol level
+     *or* we can make this part of the server<->backend interface
+   */
+  webdav_propfind_entry_t pfe =
+    create_propfind_entry_from_stat(relative_uri, &attrs);
+  ASSERT_NOT_NULL(pfe);
+  ev.entries = linked_list_prepend(ev.entries, pfe);
 
   ev.error = WEBDAV_ERROR_NONE;
 
