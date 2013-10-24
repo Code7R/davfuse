@@ -44,7 +44,11 @@
 #include "_webdav_server_types.h"
 #include "_webdav_server_private_types.h"
 
+#define _IS_WEBDAV_SERVER_C
 #include "webdav_server.h"
+#undef _IS_WEBDAV_SERVER_C
+
+const char *const WEBDAV_SERVER_QUIT_URL = "/____quit_handler____";
 
 static const char *const WEBDAV_HEADER_DEPTH = "Depth";
 static const char *const WEBDAV_HEADER_DESTINATION = "Destination";
@@ -868,6 +872,11 @@ UTHR_DEFINE(request_proc) {
                                             request_proc, hc));
       goto done;
     }
+  }
+
+  /* handle quit message */
+  if (str_equals(hc->rhs.uri, WEBDAV_SERVER_QUIT_URL)) {
+    webdav_server_stop(hc->serv, NULL, NULL);
   }
 
   /* check if path isn't in our namespace so we can return 404 */
@@ -1919,12 +1928,8 @@ EVENT_HANDLER_DEFINE(handle_post_request, ev_type, ev, ud) {
 
   struct handler_context *hc = ud;
 
-  if (str_equals(hc->rhs.uri, "/quit")) {
-    webdav_server_stop(hc->serv, NULL, NULL);
-  }
-
   http_request_string_response(hc->rh,
-                               HTTP_STATUS_CODE_METHOD_NOT_ALLOWED,
+                               HTTP_STATUS_CODE_NOT_IMPLEMENTED,
                                "",
                                request_proc, ud);
 }
