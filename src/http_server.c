@@ -864,9 +864,10 @@ EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
     return;
   }
 
+  /* accept again before running client
+     (which could stop the server) */
   assert(!http->shutting_down);
-
-  http->num_connections += 1;
+  http_backend_accept(http->backend, accept_handler, http);
 
   /* run client */
   HTTPConnection *ctx = malloc_or_abort(sizeof(*ctx));
@@ -880,8 +881,6 @@ EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
     .server = http,
   };
   UTHR_RUN(client_coroutine, ctx);
-
-  return http_backend_accept(http->backend, accept_handler, http);
 }
 
 static void
@@ -898,6 +897,8 @@ _write_out_internal_server_error(http_request_handle_t rh,
 static
 UTHR_DEFINE(client_coroutine) {
   UTHR_HEADER(HTTPConnection, cc);
+
+  cc->server->num_connections += 1;
 
   log_debug("conn %p new connection!", cc);
   cc->conn_end = time(NULL) + MAXIMUM_CONN_TIME;
