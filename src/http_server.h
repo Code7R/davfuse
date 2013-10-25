@@ -108,46 +108,6 @@ typedef struct {
   struct _header_pair headers[MAX_NUM_HEADERS];
 } HTTPResponseHeaders;
 
-typedef struct {
-  UTHR_CTX_BASE;
-  /* args */
-  http_request_handle_t rh;
-  HTTPRequestHeaders *request_headers;
-  event_handler_t cb;
-  void *ud;
-  /* state */
-  int i;
-  int c;
-  time_t header_read_start;
-  size_t ei;
-  size_t parsed;
-  char tmpbuf[1024];
-  /* this is used for early exit on bad input headers,
-     e.g. expect headers we don't understand */
-  HTTPResponseHeaders *response_headers;
-} GetRequestState;
-
-typedef struct {
-  UTHR_CTX_BASE;
-  /* args */
-  const HTTPResponseHeaders *response_headers;
-  struct _http_request_context *request_context;
-  event_handler_t cb;
-  void *cb_ud;
-  /* state */
-  size_t header_idx;
-  char response_line[MAX_RESPONSE_LINE_SIZE];
-} WriteHeadersState;
-
-typedef struct {
-  http_request_handle_t request_context;
-  event_handler_t cb;
-  void *cb_ud;
-} WriteResponseState;
-
-typedef struct {
-} ReadRequestState;
-
 typedef enum {
   HTTP_REQUEST_READ_STATE_NONE,
   HTTP_REQUEST_READ_STATE_READING_HEADERS,

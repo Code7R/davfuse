@@ -44,7 +44,14 @@
 #include "http_server.h"
 #undef _IS_HTTP_SERVER_C
 
-/* define opaque structures */
+/* private structures */
+typedef struct {
+  http_request_handle_t request_context;
+  event_handler_t cb;
+  void *cb_ud;
+} WriteResponseState;
+
+/* public opaque structures */
 typedef struct _http_request_context {
   struct _http_connection *conn;
   http_request_write_state_t write_state;
@@ -182,9 +189,16 @@ _http_connection_time_left(HTTPConnection *conn) {
 }
 
 static bool
-_http_connection_close_condition(HTTPConnection *conn) {
-  return (conn->last_error_number ||
-          _http_connection_time_left(conn) < 0);
+_http_connection_has_error(HTTPConnection *conn) {
+  return conn->last_error_number;
+}
+
+static bool
+_http_connection_do_another_request(HTTPConnection *conn) {
+  return (!_http_connection_has_error(conn) &&
+          _http_connection_time_left(conn) > 0 &&
+          !_http_connection_is_close(conn) &&
+          !conn->server->shutting_down);
 }
 
 http_server_t
@@ -222,6 +236,25 @@ http_server_stop(http_server_t http,
     cb(HTTP_SERVER_STOP_DONE_EVENT, NULL, user_data);
   }
 }
+
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  http_request_handle_t rh;
+  HTTPRequestHeaders *request_headers;
+  event_handler_t cb;
+  void *ud;
+  /* state */
+  int i;
+  int c;
+  time_t header_read_start;
+  size_t ei;
+  size_t parsed;
+  char tmpbuf[1024];
+  /* this is used for early exit on bad input headers,
+     e.g. expect headers we don't understand */
+  HTTPResponseHeaders *response_headers;
+} GetRequestState;
 
 void
 http_request_read_headers(http_request_handle_t rh,
@@ -485,6 +518,18 @@ http_request_read(http_request_handle_t rh,
   }
 }
 
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  const HTTPResponseHeaders *response_headers;
+  struct _http_request_context *request_context;
+  event_handler_t cb;
+  void *cb_ud;
+  /* state */
+  size_t header_idx;
+  char response_line[MAX_RESPONSE_LINE_SIZE];
+} WriteHeadersState;
+
 static
 UTHR_DEFINE(_http_request_write_headers_coroutine) {
   UTHR_HEADER(WriteHeadersState, whs);
@@ -550,14 +595,14 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
     EMITS("Server: Rian's HTTP Server\r\n");
   }
 
-  time_t time_left;
-  if (_http_connection_is_close(whs->request_context->conn) ||
-      (time_left = _http_connection_time_left(whs->request_context->conn)) < 0) {
+
+  if (!_http_connection_do_another_request(whs->request_context->conn)) {
     log_debug("conn %p Writing response header: Connection: close",
               whs->request_context->conn);
     EMITS("Connection: close\r\n");
   }
   else {
+    time_t time_left = _http_connection_time_left(whs->request_context->conn);
     const time_t timeout = min_time_t(time_left, MINIMUM_CONN_TIME);
     const time_t max_timeout = time_left;
     assert(timeout >= 0 && timeout <= INT_MAX);
@@ -857,8 +902,7 @@ UTHR_DEFINE(client_coroutine) {
   log_debug("conn %p new connection!", cc);
   cc->conn_end = time(NULL) + MAXIMUM_CONN_TIME;
 
-  while (!_http_connection_close_condition(cc) &&
-         !_http_connection_is_close(cc)) {
+  while (_http_connection_do_another_request(cc)) {
     /* initialize the request context */
     cc->rctx = (HTTPRequestContext) {
       .conn = cc,
@@ -885,7 +929,7 @@ UTHR_DEFINE(client_coroutine) {
     log_debug("conn %p request is over!", cc);
 
     /* read headers if they were ignored */
-    if (!_http_connection_close_condition(cc) &&
+    if (!_http_connection_has_error(cc) &&
         cc->rctx.read_state == HTTP_REQUEST_READ_STATE_NONE) {
       log_debug("conn %p handler didn't read headers...", cc);
       UTHR_YIELD(cc,
@@ -895,7 +939,7 @@ UTHR_DEFINE(client_coroutine) {
     }
 
     /* read out all data if it was ignored */
-    if (!_http_connection_close_condition(cc) &&
+    if (!_http_connection_has_error(cc) &&
         cc->rctx.read_state == HTTP_REQUEST_READ_STATE_READ_HEADERS) {
       if (cc->rctx.is_chunked_request
           ? !cc->rctx.persist_ctx.chunked_coro_ctx.is_over
@@ -903,7 +947,7 @@ UTHR_DEFINE(client_coroutine) {
              cc->rctx.persist_ctx.content_length_read.content_length)) {
         log_debug("conn %p handler didn't read entire body...", cc);
       }
-      while (!_http_connection_close_condition(cc)) {
+      while (!_http_connection_has_error(cc)) {
         UTHR_YIELD(cc,
                    http_request_read(&cc->rctx, cc->spare.buffer,
                                      sizeof(cc->spare.buffer),
@@ -917,7 +961,7 @@ UTHR_DEFINE(client_coroutine) {
     }
 
     /* clean up write side of request */
-    if (!_http_connection_close_condition(cc) &&
+    if (!_http_connection_has_error(cc) &&
         cc->rctx.write_state == HTTP_REQUEST_WRITE_STATE_NONE) {
       log_debug("conn %p handler didn't send a response...", cc);
       UTHR_YIELD(cc,
@@ -927,12 +971,12 @@ UTHR_DEFINE(client_coroutine) {
     }
 
     /* write out rest of garbage if request ended prematurely */
-    if (!_http_connection_close_condition(cc) &&
+    if (!_http_connection_has_error(cc) &&
         cc->rctx.write_state == HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS) {
       if (cc->rctx.bytes_written < cc->rctx.out_content_length) {
         log_debug("conn %p handler didn't finish response", cc);
       }
-      while (!_http_connection_close_condition(cc) &&
+      while (!_http_connection_has_error(cc) &&
              cc->rctx.bytes_written < cc->rctx.out_content_length) {
         /* initted to zero because static */
         static char bytes[4096];
@@ -1053,15 +1097,12 @@ UTHR_DEFINE(c_get_request) {
   }                                                             \
   while (false)
 
-  state->header_read_start = time(NULL);
-
   PARSEVAR(state->request_headers->method, match_token);
 
   /* TODO: we need better connection termination in general
      but put it here since this is the most common place,
      in theory all network IO should have a timeout */
-  if (time(NULL) - state->header_read_start >= MINIMUM_CONN_TIME ||
-      _http_connection_close_condition(state->rh->conn)) {
+  if (_http_connection_time_left(state->rh->conn) <= 0) {
     log_error("Connection! Timeout!");
     goto error;
   }
