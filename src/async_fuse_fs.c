@@ -32,7 +32,7 @@
 #undef FUSE_USE_VERSION
 
 #include "async_rdwr_lock.h"
-#include "fdevent.h"
+#include "event_loop.h"
 #include "fd_utils.h"
 #include "logging.h"
 #include "uthread.h"
@@ -77,7 +77,7 @@ channel_deinit(Channel *chan) {
 struct async_fuse_fs {
   Channel to_worker;
   Channel to_server;
-  fdevent_loop_t loop;
+  event_loop_handle_t loop;
   /* TODO: get rid of this */
   async_rdwr_lock_t to_server_lock;
 };
@@ -280,7 +280,7 @@ send_quit_message_blocking(Channel *chan) {
 typedef struct {
   UTHR_CTX_BASE;
   /* args */
-  fdevent_loop_t loop;
+  event_loop_handle_t loop;
   Channel *to_chan;
   Message *msg;
   event_handler_t cb;
@@ -302,11 +302,11 @@ UTHR_DEFINE(_send_message) {
     }
 
     if (errno == EAGAIN) {
-      bool ret = fdevent_add_watch(ctx->loop, ctx->to_chan->named.in,
-                                                 create_stream_events(false, true),
-                                                 _send_message,
-                                                 ctx,
-                                                 NULL);
+      bool ret = event_loop_fd_watch_add(ctx->loop, ctx->to_chan->named.in,
+                                         create_stream_events(false, true),
+                                         _send_message,
+                                         ctx,
+                                         NULL);
       ASSERT_TRUE(ret);
       UTHR_YIELD(ctx, 0);
     }
@@ -326,7 +326,7 @@ UTHR_DEFINE(_send_message) {
 }
 
 static void
-send_message(fdevent_loop_t loop,
+send_message(event_loop_handle_t loop,
              Channel *to_chan,
              Message *msg,
              event_handler_t cb, void *ud) {
@@ -341,7 +341,7 @@ send_message(fdevent_loop_t loop,
 typedef struct {
   UTHR_CTX_BASE;
   /* args */
-  fdevent_loop_t loop;
+  event_loop_handle_t loop;
   Channel *from_chan;
   event_handler_t cb;
   void *ud;
@@ -364,11 +364,11 @@ UTHR_DEFINE(_receive_reply_message) {
     }
 
     if (errno == EAGAIN) {
-      bool ret = fdevent_add_watch(ctx->loop, ctx->from_chan->named.out,
-                                                 create_stream_events(true, false),
-                                                 _receive_reply_message,
-                                                 ctx,
-                                                 NULL);
+      bool ret = event_loop_fd_watch_add(ctx->loop, ctx->from_chan->named.out,
+                                         create_stream_events(true, false),
+                                         _receive_reply_message,
+                                         ctx,
+                                         NULL);
       ASSERT_TRUE(ret);
       UTHR_YIELD(ctx, 0);
     }
@@ -389,7 +389,7 @@ UTHR_DEFINE(_receive_reply_message) {
 }
 
 static void
-receive_reply_message(fdevent_loop_t loop,
+receive_reply_message(event_loop_handle_t loop,
                       Channel *from_chan,
                       event_handler_t cb, void *ud) {
   UTHR_CALL4(_receive_reply_message, ReceiveReplyMessageCtx,
@@ -430,7 +430,7 @@ _async_fuse_fs_destroy(async_fuse_fs_t fs) {
 }
 
 async_fuse_fs_t
-async_fuse_fs_new(fdevent_loop_t loop) {
+async_fuse_fs_new(event_loop_handle_t loop) {
   struct async_fuse_fs *toret = malloc(sizeof(*toret));
   if (!toret) {
     log_error("Couldn't allocate async_fuse_fs_t");

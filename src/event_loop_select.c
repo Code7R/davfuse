@@ -26,7 +26,7 @@
 #include "sockets.h"
 #include "util_sockets.h"
 
-#include "fdevent_select.h"
+#include "event_loop_select.h"
 
 enum {
   /* set to false to cause program to spin
@@ -36,26 +36,26 @@ enum {
 
 /* opaque structures */
 typedef struct {
-  fd_t fd;
+  socket_t fd;
   void *ud;
   StreamEvents events;
   event_handler_t handler;
-} FDEventWatcher;
+} EventLoopSelectWatcher;
 
-typedef struct _fdevent_link {
-  FDEventWatcher ew;
-  struct _fdevent_link *prev;
-  struct _fdevent_link *next;
+typedef struct _event_loop_select_link {
+  EventLoopSelectWatcher ew;
+  struct _event_loop_select_link *prev;
+  struct _event_loop_select_link *next;
   bool active;
-} FDEventLink;
+} EventLoopSelectLink;
 
-typedef struct _fd_event_loop {
-  FDEventLink *ll;
-} FDEventLoop;
+typedef struct _event_loop_select_handle {
+  EventLoopSelectLink *ll;
+} EventLoopSelectLoop;
 
-NON_NULL_ARGS0() fdevent_select_loop_t
-fdevent_select_default_new(void) {
-  FDEventLoop *loop = malloc(sizeof(*loop));
+NON_NULL_ARGS0() event_loop_select_handle_t
+event_loop_select_default_new(void) {
+  EventLoopSelectLoop *loop = malloc(sizeof(*loop));
   if (!loop) {
     return NULL;
   }
@@ -65,31 +65,31 @@ fdevent_select_default_new(void) {
 }
 
 bool
-fdevent_select_destroy(fdevent_select_loop_t a) {
+event_loop_select_destroy(event_loop_select_handle_t a) {
   assert(!a->ll);
   free(a);
   return true;
 }
 
 NON_NULL_ARGS2(1, 4) bool
-fdevent_select_add_watch(fdevent_select_loop_t loop,
-                         fd_t fd,
-                         StreamEvents events,
-                         event_handler_t handler,
-                         void *ud,
-                         fdevent_select_watch_key_t *key) {
-  FDEventLink *ew;
+event_loop_select_socket_watch_add(event_loop_select_handle_t loop,
+                                   socket_t fd,
+                                   StreamEvents events,
+                                   event_handler_t handler,
+                                   void *ud,
+                                   event_loop_select_watch_key_t *key) {
+  EventLoopSelectLink *ew;
 
   assert(loop);
   assert(handler);
 
   ew = malloc(sizeof(*ew));
   if (!ew) {
-    *key = FDEVENT_SELECT_INVALID_WATCH_KEY;
+    *key = 0;
     return false;
   }
 
-  *ew = (FDEventLink) {
+  *ew = (EventLoopSelectLink) {
     .ew = {fd, ud, events, handler},
     .prev = NULL,
     .next = NULL,
@@ -112,13 +112,26 @@ fdevent_select_add_watch(fdevent_select_loop_t loop,
   return true;
 }
 
+bool
+event_loop_select_fd_watch_add(event_loop_select_handle_t loop,
+                               int fd,
+                               StreamEvents events,
+                               event_handler_t handler,
+                               void *ud,
+                               event_loop_select_watch_key_t *key) {
+  socket_t socket = socket_from_fd(fd);
+  if (socket == INVALID_SOCKET) return false;
+  return event_loop_select_socket_watch_add(loop, socket, events, handler,
+                                            ud, key);
+}
+
 NON_NULL_ARGS0() bool
-fdevent_select_remove_watch(fdevent_select_loop_t loop,
-                            fdevent_select_watch_key_t key) {
+event_loop_select_watch_remove(event_loop_select_handle_t loop,
+                               event_loop_select_watch_key_t key) {
   UNUSED(loop);
 
-  /* fdevent_select_watch_key_t types are actually pointers to FDEventLink types */
-  FDEventLink *ll = key;
+  /* event_loop_select_watch_key_t types are actually pointers to EventLoopSelectLink types */
+  EventLoopSelectLink *ll = key;
 
   assert(loop);
   assert(loop->ll);
@@ -130,7 +143,7 @@ fdevent_select_remove_watch(fdevent_select_loop_t loop,
 }
 
 static void
-_actually_free_link(FDEventLoop *loop, FDEventLink *ll) {
+_actually_free_link(EventLoopSelectLoop *loop, EventLoopSelectLink *ll) {
   if (ll->prev) {
     ll->prev->next = ll->next;
   }
@@ -148,7 +161,7 @@ _actually_free_link(FDEventLoop *loop, FDEventLink *ll) {
 }
 
 bool
-fdevent_select_main_loop(fdevent_select_loop_t loop) {
+event_loop_select_main_loop(event_loop_select_handle_t loop) {
   log_info("fdevent select main loop started");
 
   while (true) {
@@ -156,7 +169,7 @@ fdevent_select_main_loop(fdevent_select_loop_t loop) {
     int nfds = -1;
     unsigned readfds_watched = 0;
     unsigned writefds_watched = 0;
-    FDEventLink *ll = loop->ll;
+    EventLoopSelectLink *ll = loop->ll;
 
     log_debug("Looping...");
 
@@ -165,7 +178,7 @@ fdevent_select_main_loop(fdevent_select_loop_t loop) {
 
     while (ll) {
       if (!ll->active) {
-        FDEventLink *tmpll = ll->next;
+        EventLoopSelectLink *tmpll = ll->next;
         _actually_free_link(loop, ll);
         ll = tmpll;
         continue;
@@ -244,15 +257,15 @@ fdevent_select_main_loop(fdevent_select_loop_t loop) {
         if ((events.read && ll->ew.events.read) ||
             (events.write && ll->ew.events.write)) {
           event_handler_t h = ll->ew.handler;
-          fd_t fd = ll->ew.fd;
+          socket_t fd = ll->ew.fd;
           void *ud = ll->ew.ud;
-          FdeventSelectEvent e = (FdeventSelectEvent) {
+          EventLoopSelectSocketEvent e = {
             .loop = loop,
-            .fd = fd,
+            .socket = fd,
             .events = events,
           };
-          fdevent_select_remove_watch(loop, ll);
-          h(FD_EVENT, &e, ud);
+          event_loop_select_watch_remove(loop, ll);
+          h(EVENT_LOOP_SOCKET_EVENT, &e, ud);
         }
       }
 

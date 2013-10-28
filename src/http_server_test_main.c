@@ -31,14 +31,13 @@
 #include <signal.h>
 #include <stdlib.h>
 
+#include "event_loop.h"
 #include "events.h"
-#include "fdevent.h"
-#include "http_backend.h"
-#include "http_backend_sockets_fdevent.h"
 #include "http_server.h"
 #include "iface_util.h"
 #include "logging.h"
 #include "log_printer.h"
+#include "sockets.h"
 #include "util.h"
 #include "util_sockets.h"
 
@@ -46,8 +45,6 @@
 #include "log_printer_stdio.h"
 ASSERT_SAME_IMPL(LOG_PRINTER_IMPL, LOG_PRINTER_STDIO_IMPL);
 #endif
-
-ASSERT_SAME_IMPL(HTTP_BACKEND_IMPL, HTTP_BACKEND_SOCKETS_FDEVENT_IMPL);
 
 enum {
   BUF_SIZE=4096,
@@ -205,25 +202,22 @@ int main() {
   ASSERT_TRUE(success_ignore);
 
   /* create event loop */
-  fdevent_loop_t loop = fdevent_default_new();
+  event_loop_handle_t loop = event_loop_default_new();
   ASSERT_TRUE(loop);
 
-  /* create backend */
+  /* create listen socket */
   struct sockaddr_in listen_addr;
   init_sockaddr_in(&listen_addr, INADDR_ANY, 8080);
-
-  http_backend_sockets_fdevent_t http_backend =
-    http_backend_sockets_fdevent_new(loop,
-                                     (struct sockaddr *) &listen_addr,
-                                     sizeof(listen_addr));
-  ASSERT_TRUE(http_backend);
+  socket_t sock = create_bound_socket((struct sockaddr *) &listen_addr,
+                                      sizeof(listen_addr));
+  ASSERT_TRUE(sock != INVALID_SOCKET);
 
   /* start http server */
-  http_server_t server = http_server_start(http_backend, handle_request, NULL);
+  http_server_t server = http_server_start(loop, sock, handle_request, NULL);
   ASSERT_TRUE(server);
 
   log_info("Starting main loop");
-  fdevent_main_loop(loop);
+  event_loop_main_loop(loop);
 
   return 0;
 }

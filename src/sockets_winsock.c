@@ -56,7 +56,7 @@ shutdown_socket_subsystem(void) {
 }
 
 bool
-set_socket_non_blocking(fd_t sock) {
+set_socket_non_blocking(socket_t sock) {
   u_long argp = 1;
   int ret_ioctl = ioctlsocket(sock, FIONBIO, &argp);
   return !ret_ioctl;

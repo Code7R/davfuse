@@ -23,8 +23,9 @@
 #include <time.h>
 
 #include "c_util.h"
+#include "event_loop.h"
 #include "events.h"
-#include "http_backend.h"
+#include "sockets.h"
 #include "uthread.h"
 
 #ifdef __cplusplus
@@ -141,8 +142,9 @@ typedef struct {
   size_t nbyte;
 } HTTPRequestReadDoneEvent;
 
-NON_NULL_ARGS2(1, 2) http_server_t
-http_server_start(http_backend_t backend,
+NON_NULL_ARGS2(1, 3) http_server_t
+http_server_start(event_loop_handle_t loop,
+                  socket_t sock,
                   event_handler_t handler,
 		  void *ud);
 

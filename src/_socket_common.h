@@ -36,7 +36,7 @@ bool
 shutdown_socket_subsystem(void);
 
 bool
-set_socket_non_blocking(fd_t sock);
+set_socket_non_blocking(socket_t sock);
 
 bool
 ignore_sigpipe();

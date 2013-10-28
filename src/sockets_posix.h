@@ -37,7 +37,7 @@
 extern "C" {
 #endif
 
-typedef int fd_t;
+typedef int socket_t;
 typedef ssize_t socket_ssize_t;
 
 enum {
@@ -68,8 +68,13 @@ socket_error_message(socket_error_t a) {
 }
 
 HEADER_FUNCTION int
-closesocket(fd_t sock) {
+closesocket(socket_t sock) {
   return close(sock);
+}
+
+HEADER_FUNCTION socket_t
+socket_from_fd(int fd) {
+  return fd;
 }
 
 #ifdef __cplusplus

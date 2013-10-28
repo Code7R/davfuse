@@ -16,7 +16,7 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>
  */
 
-#ifndef _INCLUDE_FDEVENT_COMMON_H
+#ifndef _INCLUDE_EVENT_LOOP_COMMON_H
 #error "DON'T INCLUDE THIS UNLESS YOU KNOW WHAT YOU'RE DOING"
 #endif
 

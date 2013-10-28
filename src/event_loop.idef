@@ -14,20 +14,18 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>
 
-# constants
-INVALID_WATCH_KEY
-
 # integral types
-loop_t
+handle_t
 watch_key_t
 
 # transparent struct types
-Event
+SocketEvent
 
 # functions
 default_new
-add_watch
-remove_watch
+socket_watch_add
+fd_watch_add
+watch_remove
 main_loop
 destroy
 

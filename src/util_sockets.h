@@ -32,6 +32,12 @@ typedef uint32_t ipv4_t;
 
 enum {
   MAX_PORT=UINT16_MAX,
+  PRIVATE_PORT_START=49152,
+  PRIVATE_PORT_END=MAX_PORT,
+};
+
+enum {
+  LOCALHOST_IP = 0x7f000001,
 };
 
 const char *
@@ -40,11 +46,20 @@ last_socket_error_message(void);
 void
 init_sockaddr_in(struct sockaddr_in *addr, ipv4_t ip, port_t port);
 
-fd_t
+socket_t
 create_bound_socket(const struct sockaddr *addr, socklen_t address_len);
 
-fd_t
+socket_t
 create_ipv4_bound_socket(ipv4_t ip, port_t port);
+
+port_t
+bind_random_free_listen_port(socket_t socket_fd, ipv4_t ip, port_t low, port_t high);
+
+port_t
+find_random_free_listen_port(ipv4_t ip, port_t low, port_t high);
+
+int
+localhost_socketpair(socket_t sv[2]);
 
 #ifdef __cplusplus
 }

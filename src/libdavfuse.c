@@ -42,9 +42,7 @@
 #include "fuse.h"
 #undef FUSE_USE_VERSION
 
-#include "fdevent.h"
-#include "http_backend.h"
-#include "http_backend_sockets_fdevent.h"
+#include "event_loop.h"
 #include "iface_util.h"
 #include "logging.h"
 #include "log_printer.h"
@@ -55,7 +53,6 @@
 #include "util.h"
 #include "util_sockets.h"
 
-ASSERT_SAME_IMPL(HTTP_BACKEND_IMPL, HTTP_BACKEND_SOCKETS_FDEVENT_IMPL);
 ASSERT_SAME_IMPL(LOG_PRINTER_IMPL, LOG_PRINTER_STDIO_IMPL);
 ASSERT_SAME_IMPL(WEBDAV_BACKEND_IMPL, WEBDAV_BACKEND_ASYNC_FUSE_IMPL);
 
@@ -75,7 +72,7 @@ typedef struct {
   char *listen_str;
   char *public_uri_root;
   char *internal_root;
-  fdevent_loop_t loop;
+  event_loop_handle_t loop;
 } HTTPThreadArguments;
 
 static bool
@@ -122,26 +119,22 @@ static void *
 http_thread(void *ud) {
   HTTPThreadArguments *args = (HTTPThreadArguments *) ud;
   webdav_backend_async_fuse_t webdav_backend = 0;
-  http_backend_sockets_fdevent_t http_backend = 0;
+  socket_t listen_sock = INVALID_SOCKET;
 
   if (args->listen_str) {
     log_critical("Specified listen host/port is not yet supported");
     abort();
   }
 
+  /* create listen socket */
   port_t port = 8080;
-
+  log_info("Create listen socket");
   struct sockaddr_in listen_addr;
-  init_sockaddr_in(&listen_addr, 0x7f000001, port);
-
-  /* create server network IO backend */
-  log_info("Create network IO backend for HTTP server");
-  http_backend =
-    http_backend_sockets_fdevent_new(args->loop,
-                                     (struct sockaddr *) &listen_addr,
-                                     sizeof(listen_addr));
-  if (!http_backend) {
-    log_critical("Couldn't create http backend");
+  init_sockaddr_in(&listen_addr, LOCALHOST_IP, port);
+  listen_sock = create_bound_socket((struct sockaddr *) &listen_addr,
+                                    sizeof(listen_addr));
+  if (listen_sock == INVALID_SOCKET) {
+    log_critical("Couldn't listen on socket");
     goto done;
   }
 
@@ -155,7 +148,8 @@ http_thread(void *ud) {
 
   /* start webdav server */
   log_info("Create webdav server");
-  webdav_server_t wd_serv = webdav_server_start(http_backend,
+  webdav_server_t wd_serv = webdav_server_start(args->loop,
+                                                listen_sock,
                                                 args->public_uri_root,
                                                 args->internal_root,
                                                 webdav_backend);
@@ -167,7 +161,7 @@ http_thread(void *ud) {
 
   log_info("Starting WebDAV server loop");
 
-  fdevent_main_loop(args->loop);
+  event_loop_main_loop(args->loop);
 
   /* this will end if a handler stops the server */
   log_info("Ending WebDAV server loop");
@@ -178,9 +172,9 @@ http_thread(void *ud) {
     webdav_backend_async_fuse_destroy(webdav_backend);
   }
 
-  if (http_backend) {
-    log_info("Destroying network IO backend for HTTP server");
-    http_backend_sockets_fdevent_destroy(http_backend);
+  if (listen_sock != INVALID_SOCKET) {
+    log_info("Closing listen socket");
+    closesocket(listen_sock);
   }
 
   /* okay tell the main thread we're done here */
@@ -261,7 +255,7 @@ fuse_main_real(int argc,
   DavOptions dav_options = { .log_level = 0, };
   FuseOptions fuse_options = { .singlethread = 0 };
   async_fuse_fs_t async_fuse_fs = 0;
-  fdevent_loop_t loop = 0;
+  event_loop_handle_t loop = 0;
   bool initted_logging = false;
   int ret_create_context = -1;
   bool success_init_sockets = false;
@@ -323,9 +317,9 @@ fuse_main_real(int argc,
 
   /* create event loop */
   log_info("Creating event loop");
-  loop = fdevent_default_new();
+  loop = event_loop_default_new();
   if (!loop) {
-    log_critical_errno("Couldn't initialize fdevent loop");
+    log_critical_errno("Couldn't initialize event loop");
     goto error;
   }
 
@@ -380,7 +374,7 @@ fuse_main_real(int argc,
 
   if (loop) {
     log_info("Destroying event loop");
-    fdevent_destroy(loop);
+    event_loop_destroy(loop);
   }
 
   if (success_init_sockets) {

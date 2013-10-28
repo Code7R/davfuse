@@ -19,6 +19,7 @@
 #ifndef __WEBDAV_SERVER_TYPES_H
 #define __WEBDAV_SERVER_TYPES_H
 
+#include <limits.h>
 #include <stdint.h>
 
 #include "c_util.h"

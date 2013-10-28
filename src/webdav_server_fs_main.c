@@ -31,13 +31,12 @@
 #include <signal.h>
 
 #include "c_util.h"
-#include "fdevent.h"
+#include "event_loop.h"
 #include "fs.h"
-#include "http_backend.h"
-#include "http_backend_sockets_fdevent.h"
 #include "iface_util.h"
 #include "logging.h"
 #include "log_printer.h"
+#include "sockets.h"
 #include "webdav_backend.h"
 #include "webdav_backend_fs.h"
 #include "webdav_server.h"
@@ -51,7 +50,6 @@
 ASSERT_SAME_IMPL(LOG_PRINTER_IMPL, LOG_PRINTER_STDIO_IMPL);
 #endif
 
-ASSERT_SAME_IMPL(HTTP_BACKEND_IMPL, HTTP_BACKEND_SOCKETS_FDEVENT_IMPL);
 ASSERT_SAME_IMPL(WEBDAV_BACKEND_IMPL, WEBDAV_BACKEND_FS_IMPL);
 
 int
@@ -84,8 +82,6 @@ main(int argc, char *argv[]) {
     log_critical("Bad port: %s", argv[1]);
     return -1;
   }
-  struct sockaddr_in listen_addr;
-  init_sockaddr_in(&listen_addr, INADDR_ANY, to_port);
 
   /* get public uri root */
   /* TODO: handle bad input paths, or sanitize them, you know DWIM... */
@@ -107,16 +103,16 @@ main(int argc, char *argv[]) {
   bool success_ignore = ignore_sigpipe();
   ASSERT_TRUE(success_ignore);
 
-  /* create event loop (implemented by file descriptors) */
-  fdevent_loop_t loop = fdevent_default_new();
+  /* create event loop */
+  event_loop_handle_t loop = event_loop_default_new();
   ASSERT_TRUE(loop);
 
-  /* create network IO backend (implemented by the Socket API) */
-  http_backend_sockets_fdevent_t http_backend =
-    http_backend_sockets_fdevent_new(loop,
-                                     (struct sockaddr *) &listen_addr,
-                                     sizeof(listen_addr));
-  ASSERT_TRUE(http_backend);
+  /* create listen socket */
+  struct sockaddr_in listen_addr;
+  init_sockaddr_in(&listen_addr, INADDR_ANY, to_port);
+  socket_t sock = create_bound_socket((struct sockaddr *) &listen_addr,
+                                      sizeof(listen_addr));
+  ASSERT_TRUE(sock != INVALID_SOCKET);
 
   /* create fs (implementation is compile-time configurable) */
   fs_handle_t fs = fs_default_new();
@@ -130,14 +126,14 @@ main(int argc, char *argv[]) {
   init_xml_parser();
 
   /* start webdav server */
-  webdav_server_t ws = webdav_server_start(http_backend,
+  webdav_server_t ws = webdav_server_start(loop, sock,
                                            public_uri_root,
                                            internal_root,
                                            wd_backend);
   ASSERT_TRUE(ws);
 
   log_info("Starting main loop");
-  fdevent_main_loop(loop);
+  event_loop_main_loop(loop);
   log_info("Server stopped");
 
   log_info("Shutting down xml parser");
@@ -149,11 +145,11 @@ main(int argc, char *argv[]) {
   log_info("Destroying file system");
   fs_destroy(fs);
 
-  log_info("Destroying http network IO backend");
-  http_backend_sockets_fdevent_destroy(http_backend);
+  log_info("Destroying listen socket");
+  closesocket(sock);
 
   log_info("Destroying event loop");
-  fdevent_destroy(loop);
+  event_loop_destroy(loop);
 
   log_info("Shutting down socket subsystem");
   shutdown_socket_subsystem();

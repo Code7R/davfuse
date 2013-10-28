@@ -34,10 +34,12 @@
 #include "c_util.h"
 #include "coroutine.h"
 #include "coroutine_io.h"
+#include "event_loop.h"
 #include "events.h"
-#include "http_backend.h"
 #include "logging.h"
 #include "util.h"
+#include "util_event_loop.h"
+#include "util_sockets.h"
 #include "uthread.h"
 
 #define _IS_HTTP_SERVER_C
@@ -94,7 +96,7 @@ typedef struct _http_request_context {
 typedef struct _http_connection {
   UTHR_CTX_BASE;
   struct _http_server *server;
-  http_backend_handle_t handle;
+  socket_t sock;
   time_t conn_end;
   int last_error_number;
   ReadBuffer f;
@@ -105,18 +107,25 @@ typedef struct _http_connection {
     char buffer[OUT_BUF_SIZE];
     HTTPResponseHeaders rsp;
     HTTPRequestHeaders req;
+    struct {
+      event_loop_watch_key_t read_key;
+      event_loop_watch_key_t stop_key;
+    } wait_until;
   } spare;
   struct _http_request_context rctx;
 } HTTPConnection;
 
 typedef struct _http_server {
-  http_backend_t backend;
+  event_loop_handle_t loop;
+  socket_t sock;
+  event_loop_watch_key_t accept_watch_key;
   event_handler_t handler;
   void *ud;
   bool shutting_down;
   size_t num_connections;
   event_handler_t stop_cb;
   void *stop_ud;
+  socket_t stop_sockets[2];
 } HTTPServer;
 
 const char *const HTTP_HEADER_ALLOW = "Allow";
@@ -144,6 +153,11 @@ enum {
   MAXIMUM_CONN_TIME=3600,
 };
 
+enum {
+  STOP_SOCKET_RECV,
+  STOP_SOCKET_SEND,
+};
+
 static DEFINE_MIN(time_t);
 
 static PURE_FUNCTION const char *
@@ -159,20 +173,26 @@ _get_header_value(const struct _header_pair *headers, size_t num_headers, const 
 }
 
 /* small layer of indirection */
-typedef HttpBackendWriteDoneEvent HTTPConnectionWriteDoneEvent;
+typedef UtilEventLoopSocketWriteDoneEvent HTTPConnectionWriteDoneEvent;
 
 static void
 _http_connection_read(HTTPConnection *conn, void *buf, size_t nbyte,
                       event_handler_t cb, void *ud) {
-  return http_backend_read(conn->server->backend, conn->handle,
-                           buf, nbyte, cb, ud);
+  return util_event_loop_socket_read(conn->server->loop, conn->sock,
+                                     buf, nbyte, cb, ud);
 }
 
 static void
 _http_connection_write(HTTPConnection *conn, const void *buf, size_t nbyte,
                        event_handler_t cb, void *ud){
-  return http_backend_write(conn->server->backend, conn->handle,
-                            buf, nbyte, cb, ud);
+  return util_event_loop_socket_write(conn->server->loop,
+                                      conn->sock,
+                                      buf, nbyte, cb, ud);
+}
+
+static bool
+_http_connection_close(HTTPConnection *conn) {
+  return !closesocket(conn->sock);
 }
 
 static bool
@@ -201,8 +221,147 @@ _http_connection_do_another_request(HTTPConnection *conn) {
           !conn->server->shutting_down);
 }
 
+static
+EVENT_HANDLER_DEFINE(wait_until_ready_handler, ev_type, ev_, ud) {
+  assert(ev_type == EVENT_LOOP_SOCKET_EVENT);
+  EventLoopSocketEvent *const ev = ev_;
+  HTTPConnection *const conn = ud;
+
+  assert(conn->spare.wait_until.stop_key &&
+         conn->spare.wait_until.read_key);
+
+  event_loop_watch_key_t to_remove = 0;
+  if (ev->socket == conn->sock) {
+    /* the socket has data */
+    log_debug("Client request socket has ready data!");
+    to_remove = conn->spare.wait_until.stop_key;
+  }
+  else {
+    log_debug("received server stop signal!!");
+    assert(ev->socket == conn->server->stop_sockets[STOP_SOCKET_RECV]);
+    to_remove = conn->spare.wait_until.read_key;
+  }
+
+  event_loop_watch_remove(conn->server->loop, to_remove);
+
+  conn->spare.wait_until.stop_key = 0;
+  conn->spare.wait_until.read_key = 0;
+
+  return client_coroutine(GENERIC_EVENT, NULL, conn);
+}
+
+static
+void
+_http_connection_wait_until_ready(HTTPConnection *conn) {
+  HTTPServer *const http = conn->server;
+
+  conn->spare.wait_until.read_key = 0;
+  conn->spare.wait_until.stop_key = 0;
+
+  const bool success_add_watch_1 =
+    event_loop_socket_watch_add(http->loop,
+                                conn->sock,
+                                create_stream_events(true, false),
+                                wait_until_ready_handler,
+                                conn,
+                                &conn->spare.wait_until.read_key);
+  if (!success_add_watch_1) goto fail;
+
+  const bool success_add_watch_2 =
+    event_loop_socket_watch_add(http->loop,
+                                http->stop_sockets[STOP_SOCKET_RECV],
+                                create_stream_events(true, false),
+                                wait_until_ready_handler,
+                                conn,
+                                &conn->spare.wait_until.stop_key);
+  if (!success_add_watch_2) goto fail;
+
+  return;
+
+ fail:
+  log_error("wait_until_ready failed!");
+
+  if (conn->spare.wait_until.read_key) {
+    const bool success_remove_watch =
+      event_loop_watch_remove(http->loop, conn->spare.wait_until.read_key);
+    if (!success_remove_watch) log_error("Error removing read watch");
+  }
+
+  if (conn->spare.wait_until.stop_key) {
+    const bool success_remove_watch =
+      event_loop_watch_remove(http->loop, conn->spare.wait_until.stop_key);
+    if (!success_remove_watch) log_error("Error removing stopwatch");
+  }
+
+  client_coroutine(GENERIC_EVENT, NULL, conn);
+}
+
+#define _HTTP_SERVER_ACCEPT_DONE_EVENT EVENT_LOOP_SOCKET_EVENT
+
+static
+socket_t
+_http_server_sock_from_accept_event(EventLoopSocketEvent *ev) {
+  socket_t ret = accept(ev->socket, NULL, NULL);
+  if (ret == INVALID_SOCKET) return ret;
+
+  bool success = set_socket_non_blocking(ret);
+  if (!success) {
+    closesocket(ret);
+    return INVALID_SOCKET;
+  }
+
+  return ret;
+}
+
+static
+bool
+_http_server_accept(http_server_t http) {
+  return event_loop_socket_watch_add(http->loop,
+                                     http->sock,
+                                     create_stream_events(true, false),
+                                     accept_handler,
+                                     http,
+                                     &http->accept_watch_key);
+}
+
+static
+bool
+_http_server_stop_accept(http_server_t http) {
+  if (!http->accept_watch_key) return true;
+
+  bool success_watch_remove =
+    event_loop_watch_remove(http->loop, http->accept_watch_key);
+  if (success_watch_remove) http->accept_watch_key = 0;
+  return success_watch_remove;
+}
+
+static
+void
+_http_server_destroy(http_server_t http) {
+  for (unsigned i = 0; i < NELEMS(http->stop_sockets); ++i) {
+    if (http->stop_sockets[i] != INVALID_SOCKET) {
+      /* log if fail */
+      closesocket(http->stop_sockets[i]);
+    }
+  }
+
+  free(http);
+}
+
+static
+void
+_http_server_wake_up_client_handlers(http_server_t http) {
+  const int ret =
+    send(http->stop_sockets[STOP_SOCKET_SEND], "hai", sizeof("hai"), 0);
+  if (ret < 0) {
+    log_error("Error while writing to stop socket: %s",
+              last_socket_error_message());
+  }
+}
+
 http_server_t
-http_server_start(http_backend_t backend,
+http_server_start(event_loop_handle_t loop,
+                  socket_t sock,
                   event_handler_t handler,
                   void *ud) {
   struct _http_server *http = malloc(sizeof(*http));
@@ -211,12 +370,26 @@ http_server_start(http_backend_t backend,
   }
 
   *http = (struct _http_server) {
-    .backend = backend,
+    .loop = loop,
+    .sock = sock,
     .handler = handler,
+    .stop_sockets = {INVALID_SOCKET, INVALID_SOCKET},
     .ud = ud,
   };
 
-  http_backend_accept(backend, accept_handler, http);
+  /* create stop signal listener for keep-alive
+     client requests */
+  int ret = localhost_socketpair(http->stop_sockets);
+  if (ret) {
+    _http_server_destroy(http);
+    return NULL;
+  }
+
+  bool success_watch = _http_server_accept(http);
+  if (!success_watch) {
+    _http_server_destroy(http);
+    return NULL;
+  }
 
   return http;
 }
@@ -224,7 +397,10 @@ http_server_start(http_backend_t backend,
 void
 http_server_stop(http_server_t http,
                  event_handler_t cb, void *user_data) {
-  http_backend_stop_accept(http->backend);
+  bool success_stop = _http_server_stop_accept(http);
+  if (!success_stop) {
+    log_error("Error trying to stop accepting");
+  }
 
   http->shutting_down = true;
   http->stop_cb = cb;
@@ -232,8 +408,13 @@ http_server_stop(http_server_t http,
 
   if (!http->num_connections) {
     /* no more connections, call callback immediately */
-    free(http);
+    /* TODO: log if closesocket fails */
+    _http_server_destroy(http);
     cb(HTTP_SERVER_STOP_DONE_EVENT, NULL, user_data);
+  }
+  else {
+    /* write to the stop socket to wake connections up */
+    _http_server_wake_up_client_handlers(http);
   }
 }
 
@@ -855,24 +1036,27 @@ http_get_header_value(const HTTPRequestHeaders *rhs, const char *header_name) {
 static
 EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
   UNUSED(ev_type);
-  assert(ev_type == HTTP_BACKEND_ACCEPT_DONE_EVENT);
-  HttpBackendAcceptDoneEvent *accept_done_ev = ev;
-  HTTPServer *http = ud;
-
-  if (accept_done_ev->error) {
+  assert(ev_type == _HTTP_SERVER_ACCEPT_DONE_EVENT);
+  const socket_t sock = _http_server_sock_from_accept_event(ev);
+  if (sock == INVALID_SOCKET) {
     log_error("accept() client connection failed!");
     return;
   }
 
+  HTTPServer *const http = ud;
+
   /* accept again before running client
      (which could stop the server) */
   assert(!http->shutting_down);
-  http_backend_accept(http->backend, accept_handler, http);
+  const bool success_accept = _http_server_accept(http);
+  if (!success_accept) {
+    log_error("Couldn't accept again!");
+  }
 
   /* run client */
-  HTTPConnection *ctx = malloc_or_abort(sizeof(*ctx));
+  HTTPConnection *const ctx = malloc_or_abort(sizeof(*ctx));
   *ctx = (HTTPConnection) {
-    .handle = accept_done_ev->handle,
+    .sock = sock,
     .f = {
       .read_fn = (read_fn_t) _http_connection_read,
       .handle = ctx,
@@ -904,7 +1088,7 @@ UTHR_DEFINE(client_coroutine) {
   cc->conn_end = time(NULL) + MAXIMUM_CONN_TIME;
 
   while (_http_connection_do_another_request(cc)) {
-    /* initialize the request context */
+    /* (re-)initialize the request context */
     cc->rctx = (HTTPRequestContext) {
       .conn = cc,
     };
@@ -914,6 +1098,14 @@ UTHR_DEFINE(client_coroutine) {
        give some timeout to total request processing
        XXX: even more now because of indefinite keep-alive
     */
+
+    /* wait here until connection becomes read ready
+       or we get the server stop signal */
+    UTHR_YIELD(cc, _http_connection_wait_until_ready(cc));
+
+    if (!_http_connection_do_another_request(cc)) {
+      break;
+    }
 
     /* create request event, we can do this on the stack
        because the handler shouldn't use this after */
@@ -994,9 +1186,10 @@ UTHR_DEFINE(client_coroutine) {
   }
 
   log_debug("conn %p Client done, closing conn", cc);
-  bool success_close = http_backend_close(cc->server->backend, cc->handle);
-  /* XXX: this must succeed */
-  ASSERT_TRUE(success_close);
+  bool success_close = _http_connection_close(cc);
+  if (!success_close) {
+    log_error("conn %p, error while closing client connection...", cc);
+  }
 
   /* NB: ordinarily we'd call UTHR_RETURN, but we need
      to free the memory first before calling the stop handler */
@@ -1006,7 +1199,7 @@ UTHR_DEFINE(client_coroutine) {
   if (!server->num_connections && server->shutting_down) {
     event_handler_t cb = server->stop_cb;
     void *ud = server->stop_ud;
-    free(server);
+    _http_server_destroy(server);
     return cb(HTTP_SERVER_STOP_DONE_EVENT, NULL, ud);
   }
   else {

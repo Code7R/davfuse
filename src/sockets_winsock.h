@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 typedef int socklen_t;
-typedef SOCKET fd_t;
+typedef SOCKET socket_t;
 typedef int socket_ssize_t;
 
 typedef enum {
@@ -45,6 +45,11 @@ typedef enum {
 HEADER_FUNCTION socket_error_t
 last_socket_error(void) {
   return (socket_error_t) WSAGetLastError();
+}
+
+HEADER_FUNCTION socket_t
+socket_from_fd(int fd) {
+  return INVALID_SOCKET;
 }
 
 const char *

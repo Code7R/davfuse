@@ -33,10 +33,11 @@
 #include <time.h>
 
 #include "events.h"
+#include "event_loop.h"
 #include "http_helpers.h"
 #include "http_server.h"
-#include "http_backend.h"
 #include "logging.h"
+#include "sockets.h"
 #include "uthread.h"
 #include "util.h"
 #include "webdav_backend.h"
@@ -2454,7 +2455,8 @@ EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
 }
 
 webdav_server_t
-webdav_server_start(http_backend_t http_backend,
+webdav_server_start(event_loop_handle_t loop,
+                    socket_t sock,
                     const char *public_uri_root,
                     const char *internal_root,
                     webdav_backend_t fs) {
@@ -2483,7 +2485,7 @@ webdav_server_start(http_backend_t http_backend,
     goto error;
   }
 
-  http = http_server_start(http_backend, handle_request, serv);
+  http = http_server_start(loop, sock, handle_request, serv);
   if (!http) {
     goto error;
   }

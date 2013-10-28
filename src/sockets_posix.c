@@ -38,7 +38,7 @@ shutdown_socket_subsystem(void) {
 }
 
 bool
-set_socket_non_blocking(fd_t fd) {
+set_socket_non_blocking(socket_t fd) {
   int flags = fcntl(fd, F_GETFL, 0);
   if (flags < 0) {
     log_warning("Couldn't read file flags: %s", strerror(errno));

@@ -24,7 +24,7 @@
 #undef FUSE_USE_VERSION
 
 #include "events.h"
-#include "fdevent.h"
+#include "event_loop.h"
 
 struct async_fuse_fs;
 
@@ -35,7 +35,7 @@ typedef struct {
 } FuseFsOpDoneEvent;
 
 async_fuse_fs_t
-async_fuse_fs_new(fdevent_loop_t loop);
+async_fuse_fs_new(event_loop_handle_t loop);
 
 void
 async_fuse_fs_open(async_fuse_fs_t fs,

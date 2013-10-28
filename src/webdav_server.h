@@ -20,7 +20,8 @@
 #define WEBDAV_SERVER_H
 
 #include "events.h"
-#include "http_backend.h"
+#include "event_loop.h"
+#include "sockets.h"
 #include "util.h"
 #include "webdav_backend.h"
 
@@ -81,7 +82,8 @@ typedef struct {
 } WebdavPutRequestReadDoneEvent;
 
 webdav_server_t
-webdav_server_start(http_backend_t http_backend,
+webdav_server_start(event_loop_handle_t loop,
+                    socket_t sock,
                     const char *public_uri_root,
                     const char *internal_root,
 		    webdav_backend_t fs);
