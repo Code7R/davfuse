@@ -173,7 +173,12 @@ UTHR_DEFINE(_webdav_backend_fs_get_uthr) {
     goto done;
   }
 
-  FsAttrs attrs;
+  /* need to initialize `is_directory` & `size` to avoid spurious
+     -Wmaybe-uninitialized warnings from GCC */
+  FsAttrs attrs = {
+    .size = 0,
+    .is_directory = false,
+  };
   const fs_error_t ret_fgetattr = fs_fgetattr(ctx->pbctx->fs, ctx->fd, &attrs);
   if (ret_fgetattr) {
     error = WEBDAV_ERROR_GENERAL;
@@ -323,7 +328,9 @@ UTHR_DEFINE(_webdav_backend_fs_put_uthr) {
     const size_t amount_read = read_done_ev->nbyte;
     size_t amount_written = 0;
     while (amount_written < amount_read) {
-      size_t new_amount_written;
+      /* need to initialize `new_amount_written` to avoid
+         spurious -Wmaybe-uninitialized warnings from GCC */
+      size_t new_amount_written = 0;
       const fs_error_t ret_write = fs_write(ctx->pbctx->fs, ctx->fd,
                                             ctx->buf + amount_written,
                                             amount_read - amount_written,
@@ -336,6 +343,7 @@ UTHR_DEFINE(_webdav_backend_fs_put_uthr) {
         goto done;
       }
 
+      assert(new_amount_written);
       amount_written += new_amount_written;
     }
 
@@ -659,7 +667,9 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
                              event_handler_t cb, void *ud) {
   assert(depth == DEPTH_INF ||
 	 (depth == DEPTH_0 && !is_move));
+
   webdav_error_t err;
+  bool dst_existed;
 
   char *const file_path = path_from_uri(pbctx, src_relative_uri);
   char *const destination_path = path_from_uri(pbctx, dst_relative_uri);
@@ -702,7 +712,6 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
     goto done;
   }
 
-  bool dst_existed;
   const int ret_exists_3 = util_fs_file_exists(pbctx->fs, destination_path,
                                                &dst_existed);
   if (ret_exists_3) {
@@ -788,12 +797,13 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
   free(destination_path);
   free(destination_path_dirname);
 
+  bool initted_dst_existed = err ? false : dst_existed;
   if (is_move) {
     WebdavMoveDoneEvent move_done_ev = {
       .error = err,
       /* TODO: implement */
       .failed_to_move = LINKED_LIST_INITIALIZER,
-      .dst_existed = dst_existed,
+      .dst_existed = initted_dst_existed,
     };
     return cb(WEBDAV_MOVE_DONE_EVENT, &move_done_ev, ud);
   }
@@ -802,7 +812,7 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
       .error = err,
       /* TODO: implement */
       .failed_to_copy = LINKED_LIST_INITIALIZER,
-      .dst_existed = dst_existed,
+      .dst_existed = initted_dst_existed,
     };
     return cb(WEBDAV_COPY_DONE_EVENT, &copy_done_ev, ud);
   }

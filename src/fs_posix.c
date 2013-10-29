@@ -67,7 +67,7 @@ handle_to_singleton(fs_posix_handle_t single) {
 
 static void
 ASSERT_VALID_FS(fs_posix_handle_t fs) {
-  UNUSED(fs);
+  UNUSED(handle_to_singleton(fs));
   assert(handle_to_singleton(fs) == _FS_POSIX_SINGLETON);
 }
 

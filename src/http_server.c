@@ -223,6 +223,7 @@ _http_connection_do_another_request(HTTPConnection *conn) {
 
 static
 EVENT_HANDLER_DEFINE(wait_until_ready_handler, ev_type, ev_, ud) {
+  UNUSED(ev_type);
   assert(ev_type == EVENT_LOOP_SOCKET_EVENT);
   EventLoopSocketEvent *const ev = ev_;
   HTTPConnection *const conn = ud;
