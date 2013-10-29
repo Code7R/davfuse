@@ -212,7 +212,7 @@ localhost_socketpair(socket_t sv[2]) {
   if (ret_connect) goto fail;
 
   socklen_t filled = sizeof(connect_addr);
-  const int ret_accept =
+  const socket_t ret_accept =
     accept(socket_fd, (struct sockaddr *) &connect_addr, &filled);
   if (ret_accept == INVALID_SOCKET) goto fail;
 
