@@ -102,15 +102,32 @@ windows_is_dir(DWORD attrs) {
   return attrs & FILE_ATTRIBUTE_DIRECTORY;
 }
 
+static const fs_time_t WINDOWS_UNIX_TIME_OFFSET = 11644473600;
+static const DWORDLONG WINDOWS_UNIX_TIME_MULTIPLIER = 10000000;
+
 static fs_time_t
-windows_time_to_fs_time(FILETIME *a) {
+windows_time_to_fs_time(const FILETIME *a) {
   ULARGE_INTEGER uli;
-  assert(sizeof(a->dwLowDateTime) + sizeof(a->dwHighDateTime) <=
-         sizeof(fs_time_t));
-  assert(sizeof(uli.QuadPart) <= sizeof(fs_time_t));
+  STATIC_ASSERT(sizeof(a->dwLowDateTime) + sizeof(a->dwHighDateTime) <=
+                sizeof(fs_time_t), "fs_time_t is too small!");
+  STATIC_ASSERT(sizeof(uli.QuadPart) <= sizeof(fs_time_t),
+                "fs_time_t is too small!");
   uli.LowPart  = a->dwLowDateTime;
   uli.HighPart = a->dwHighDateTime;
-  return ((fs_time_t) (uli.QuadPart / 10000000)) - 11644473600;
+  return (((fs_time_t) (uli.QuadPart / WINDOWS_UNIX_TIME_MULTIPLIER)) -
+          WINDOWS_UNIX_TIME_OFFSET);
+}
+
+static void
+fs_time_to_windows_time(FILETIME *a, fs_time_t new_time) {
+  const fs_time_t offsetted = new_time + WINDOWS_UNIX_TIME_OFFSET;
+  assert(offsetted >= 0);
+  DWORDLONG mult = ((DWORDLONG) offsetted * WINDOWS_UNIX_TIME_MULTIPLIER);
+  static const DWORD MAX_DWORD = 0xffffffff;
+  a->dwLowDateTime = mult & MAX_DWORD;
+  a->dwHighDateTime = (mult >> (sizeof(a->dwLowDateTime) * 8)) & MAX_DWORD;
+  STATIC_ASSERT(sizeof(a->dwLowDateTime) + sizeof(a->dwHighDateTime) ==
+                sizeof(mult), "dwords aren't 4 bytes long");
 }
 
 static fs_off_t
@@ -219,6 +236,8 @@ fs_win32_open(fs_win32_handle_t fs,
       if (created) {
         /* NB: with OPEN_ALWAYS, GetLastError() will return
            ERROR_ALREADY_EXISTS if the file was already there */
+        assert(!GetLastError() ||
+               GetLastError() == ERROR_ALREADY_EXISTS);
         *created = !GetLastError();
       }
     }
@@ -691,12 +710,53 @@ fs_win32_set_times(fs_win32_handle_t fs,
                    const char *path,
                    fs_time_t atime,
                    fs_time_t mtime) {
-  /* not implemented right right now */
   ASSERT_VALID_FS(fs);
-  UNUSED(path);
-  UNUSED(atime);
-  UNUSED(mtime);
-  return FS_ERROR_IO;
+
+  FILETIME atime_to_set;
+  if (atime != FS_INVALID_TIME) {
+    fs_time_to_windows_time(&atime_to_set, atime);
+  }
+
+  FILETIME mtime_to_set;
+  if (mtime != FS_INVALID_TIME) {
+    fs_time_to_windows_time(&mtime_to_set, mtime);
+  }
+
+  const LPWSTR wpath = utf8_to_mb(path);
+  if (!wpath) return FS_ERROR_NO_MEM;
+
+  const DWORD access = GENERIC_WRITE;
+  const DWORD share_mode = (FILE_SHARE_WRITE |
+                            FILE_SHARE_READ |
+                            FILE_SHARE_DELETE);
+  const DWORD flags = FILE_FLAG_BACKUP_SEMANTICS;
+  HANDLE file_handle =
+    CreateFileW(wpath, access, share_mode, NULL,
+                OPEN_EXISTING, flags, NULL);
+  if (file_handle == INVALID_HANDLE_VALUE) goto err;
+
+  const BOOL res =
+    SetFileTime(file_handle, NULL,
+                atime == FS_INVALID_TIME ? NULL : &atime_to_set,
+                mtime == FS_INVALID_TIME ? NULL : &mtime_to_set);
+  if (!res) goto err;
+
+  fs_error_t toret;
+  if (false) {
+  err:
+    toret = windows_error_to_fs_error();
+  }
+  else toret = FS_ERROR_SUCCESS;
+
+  const BOOL success_close = CloseHandle(file_handle);
+  if (!success_close) {
+    log_error("Error while closing %s during set_times",
+              path);
+  }
+
+  free(wpath);
+
+  return toret;
 }
 
 bool
