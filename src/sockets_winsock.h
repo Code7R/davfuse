@@ -49,6 +49,7 @@ last_socket_error(void) {
 
 HEADER_FUNCTION socket_t
 socket_from_fd(int fd) {
+  UNUSED(fd);
   return INVALID_SOCKET;
 }
 

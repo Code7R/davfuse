@@ -86,7 +86,9 @@ util_fs_file_exists(fs_handle_t fs, const char *file_path, bool *exists) {
 
 fs_error_t
 util_fs_file_is_dir(fs_handle_t fs, const char *file_path, bool *is_dir) {
-  FsAttrs attrs;
+  /* need to initialize `is_directory` to avoid spurious
+     -Wmaybe-uninitialized warnings from GCC */
+  FsAttrs attrs = {.is_directory = false};
   const fs_error_t ret = fs_getattr(fs, file_path, &attrs);
   if (ret) {
     if (ret == ENOENT) {
@@ -232,7 +234,9 @@ util_fs_copyfile(fs_handle_t fs,
   fs_off_t offset = 0;
   while (true) {
     char buffer[BUF_SIZE];
-    size_t amt;
+    /* need to initialize `amt` to avoid spurious
+       -Wmaybe-uninitialized warnings from GCC */
+    size_t amt = 0;
     const fs_error_t ret_read =
       fs_read(fs, src_handle, buffer, sizeof(buffer), offset, &amt);
     if (ret_read) {
@@ -247,7 +251,9 @@ util_fs_copyfile(fs_handle_t fs,
 
     size_t written = 0;
     while (written < amt) {
-      size_t just_wrote;
+      /* need to initialize `just_wrote` to avoid spurious
+         -Wmaybe-uninitialized warnings from GCC */
+      size_t just_wrote = 0;
       const fs_error_t ret_write =
         fs_write(fs, dst_handle,
                  buffer + written, amt - written,
