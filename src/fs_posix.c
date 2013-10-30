@@ -333,7 +333,14 @@ fs_posix_readdir(fs_posix_handle_t fs, fs_posix_directory_handle_t dir_handle,
       break;
     }
 
-    char *const ent_name = ent->d_name;
+    /* since we're possibly using -fcatch-undefined-behavior
+       we have to do this cast, otherwise we'll get misaligned pointer errors
+       (some systems return a `struct dirent *` that's not aligned to a byte
+       boundary implied by the header definition of `struct dirent`:
+       http://clang-developers.42468.n3.nabble.com/fcatch-undefined-behavior-false-positive-with-readdir-td4026941.html */
+    /* `d_name` is an array embedded in `struct dirent` */
+    /* char *const ent_name = ent->d_name; */
+    char *const ent_name = (char *) ent + offsetof(struct dirent, d_name);
 
     if (str_equals(ent_name, ".") ||
         str_equals(ent_name, "..")) {

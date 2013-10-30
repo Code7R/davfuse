@@ -33,9 +33,7 @@ EVENT_LOOP_IMPL_EXTRA_IFACE_DEFS = SOCKETS_DEF=${SOCKETS_IMPL}
 CPPFLAGS_RELEASE ?= -DNDEBUG
 
 CFLAGS += -std=c99 -Wall -Wextra -Werror
-# we can't use -fcatch-undefined-behavior because it catches false positives
-# i.e. readdir() http://clang-developers.42468.n3.nabble.com/fcatch-undefined-behavior-false-positive-with-readdir-td4026941.html
-CFLAGS_DEBUG ?= -g -ftrapv
+CFLAGS_DEBUG ?= -g -ftrapv -fcatch-undefined-behavior
 CFLAGS_RELEASE ?= -O4
 
 CXXFLAGS += -std=c++11 -Wall -Wextra -Werror -stdlib=libc++
