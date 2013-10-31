@@ -83,10 +83,26 @@ fbungetc(ReadBuffer *f, int c) {
   *f->buf_start = c;
 }
 
+typedef struct {
+  UTHR_CTX_BASE;
+  /* args */
+  event_handler_t cb;
+  void *ud;
+  ReadBuffer *f;
+  char *buf;
+  size_t buf_size;
+  match_function_t match_fn;
+  size_t *out;
+  /* state */
+  char *buf_end;
+  int peeked_char;
+} GetWhileState;
+
 static
 UTHR_DEFINE(_c_getwhile) {
   UTHR_HEADER(GetWhileState, state);
   state->buf_end = state->buf;
+  *state->out = 0;
 
   /* find terminator in existing buffer */
   do {
@@ -104,12 +120,13 @@ UTHR_DEFINE(_c_getwhile) {
       break;
     }
 
-    *state->buf_end++ = state->peeked_char;
-  }
-  while (state->buf_end < state->buf + state->buf_size);
+    if (state->buf_end < state->buf + state->buf_size) {
+      *state->buf_end++ = state->peeked_char;
+    }
 
-  /* TODO: move this to event finish, also errors */
-  *state->out = state->buf_end - state->buf;
+    *state->out +=1;
+  }
+  while (true);
 
   UTHR_RETURN(state, state->cb(C_GETWHILE_DONE_EVENT, NULL, state->ud));
 

@@ -534,11 +534,10 @@ EVENT_HANDLER_DEFINE(_chunked_request_coro, ev_type, ev, ud) {
                        &cctx->amt_parsed,
                        _chunked_request_coro, ud));
     assert(C_GETWHILE_DONE_EVENT == ev_type);
-    assert(cctx->amt_parsed <= sizeof(cctx->var_buf) - 1);
-
-    if (!cctx->amt_parsed) {
+    if (!cctx->amt_parsed ||
+        cctx->amt_parsed > sizeof(cctx->var_buf) - 1) {
       /* nothing was parsed, either EOF or wrong character */
-      log_info("There was no chunk size to be parsed!");
+      log_info("didn't parse enough to parsed too much");
       goto error;
     }
 
@@ -1266,9 +1265,9 @@ UTHR_DEFINE(c_get_request) {
                           var, sizeof(var) - 1, fn, &state->parsed,     \
                           c_get_request, state));                       \
     assert(UTHR_EVENT_TYPE() == C_GETWHILE_DONE_EVENT);                 \
-    assert(state->parsed <= sizeof(var) - 1);                           \
-    if (!state->parsed) {						\
-      log_error("Parsed empty var!");					\
+    if (state->parsed > sizeof(var) - 1 ||                             \
+        !state->parsed) {						\
+      log_error("parsed too much or not enough!");                      \
       goto error;							\
     }									\
     /* we don't protect against there being a '\0' in the http */       \

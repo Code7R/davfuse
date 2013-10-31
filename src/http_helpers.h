@@ -18,6 +18,10 @@
 
 #ifndef HTTP_HELPERS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 
 #include "events.h"
@@ -74,5 +78,9 @@ generate_http_date(char *buf, size_t buf_size, time_t time);
 
 bool
 parse_http_date(const char *buf, time_t *time);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* HTTP_HELPERS_H */

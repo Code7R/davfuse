@@ -94,21 +94,6 @@ typedef bool (*match_function_t)(char);
 
 typedef struct {
   UTHR_CTX_BASE;
-  /* args */
-  event_handler_t cb;
-  void *ud;
-  ReadBuffer *f;
-  char *buf;
-  size_t buf_size;
-  match_function_t match_fn;
-  size_t *out;
-  /* state */
-  char *buf_end;
-  int peeked_char;
-} GetWhileState;
-
-typedef struct {
-  UTHR_CTX_BASE;
   size_t amt_read;
   /* args */
   ReadBuffer *f;
