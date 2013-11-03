@@ -122,12 +122,8 @@ const char *
 fs_posix_path_sep(fs_posix_handle_t fs);
 
 bool
-fs_posix_path_equals(fs_posix_handle_t fs, const char *a, const char *b);
-
-bool
-fs_posix_path_is_parent(fs_posix_handle_t fs,
-                        const char *potential_parent,
-                        const char *potential_child);
+fs_posix_path_component_equals(fs_posix_handle_t fs,
+                               const char *a, const char *b);
 
 bool
 fs_posix_path_is_valid(fs_posix_handle_t fs,

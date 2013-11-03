@@ -282,15 +282,113 @@ util_fs_copyfile(fs_handle_t fs,
   return toret;
 }
 
+bool
+util_fs_path_equals(fs_handle_t fs,
+                    const char *a, const char *b) {
+  assert(a && fs_path_is_valid(fs, a));
+  assert(b && fs_path_is_valid(fs, b));
+
+  bool toret;
+  char *a_copy = NULL;
+  char *b_copy = NULL;
+  char *a_basename = NULL;
+  char *b_basename = NULL;
+
+  /* first copy both a and b so we can use that buffer */
+  a_copy = davfuse_util_strdup(a);
+  if (!a_copy) goto err;
+
+  b_copy = davfuse_util_strdup(b);
+  if (!b_copy) goto err;
+
+  while (true) {
+    /* if either is a root, we're done */
+    if (fs_path_is_root(fs, a_copy) ||
+        fs_path_is_root(fs, b_copy)) {
+      toret = !strcmp(a_copy, b_copy);
+      goto done;
+    }
+
+    free(a_basename);
+    a_basename = util_fs_path_basename(fs, a_copy);
+    if (!a_basename) goto err;
+
+    free(b_basename);
+    b_basename = util_fs_path_basename(fs, b_copy);
+    if (!b_basename) goto err;
+
+    if (strcmp(a_basename, b_basename)) {
+      toret = false;
+      goto done;
+    }
+
+    char *new_a_copy = util_fs_path_dirname(fs, a_copy);
+    free(a_copy);
+    a_copy = new_a_copy;
+
+    char *new_b_copy = util_fs_path_dirname(fs, b_copy);
+    free(b_copy);
+    b_copy = new_b_copy;
+  }
+
+  if (false) {
+  err:
+    // XXX: fix this interface to allow for errors
+    abort();
+  }
+
+ done:
+  free(a_copy);
+  free(a_basename);
+  free(b_copy);
+  free(b_basename);
+
+  return toret;
+}
+
+bool
+util_fs_path_is_parent(fs_handle_t fs,
+                       const char *a, const char *b) {
+  assert(a && fs_path_is_valid(fs, a));
+  assert(b && fs_path_is_valid(fs, b));
+
+  bool toret;
+  char *b_parent = NULL;
+
+  b_parent = util_fs_path_dirname(fs, b);
+  if (!b_parent) goto err;
+
+  toret = false;
+  while (!fs_path_is_root(fs, b_parent)) {
+    if (util_fs_path_equals(fs, a, b_parent)) {
+      toret = true;
+      break;
+    }
+    char *new_b_parent = util_fs_path_dirname(fs, b_parent);
+    free(b_parent);
+    b_parent = new_b_parent;
+  }
+
+  if (false) {
+  err:
+    // XXX: fix this interface to allow for errors
+    abort();
+  }
+
+  free(b_parent);
+
+  return toret;
+}
+
 static char *
 reparent_path(fs_handle_t fs,
               const char *from_path, const char *to_path,
               const char *to_transform) {
-  if (fs_path_equals(fs, from_path, to_transform)) {
+  if (util_fs_path_equals(fs, from_path, to_transform)) {
     return davfuse_util_strdup(to_path);
   }
 
-  assert(fs_path_is_parent(fs, from_path, to_transform));
+  assert(util_fs_path_is_parent(fs, from_path, to_transform));
 
   size_t from_path_len = strlen(from_path);
   return util_fs_path_join(fs, to_path,
@@ -400,6 +498,8 @@ util_fs_copytree(fs_handle_t fs,
 
 char *
 util_fs_path_dirname(fs_handle_t fs, const char *path) {
+  assert(path && fs_path_is_valid(fs, path));
+
   if (fs_path_is_root(fs, path)) {
     return davfuse_util_strdup(path);
   }
@@ -410,13 +510,44 @@ util_fs_path_dirname(fs_handle_t fs, const char *path) {
     return NULL;
   }
 
-  /* do this */
   const char *end_of_path = strrchr(path, path_sep[0]);
-  return strndup_x(path, end_of_path - path);
+
+  /* first keep trailing separator */
+  char *toret = strndup_x(path, 1 + end_of_path - path);
+  if (!toret) return NULL;
+
+  /* check if this is a root, if not, cut off trailing slash */
+  if (!fs_path_is_root(fs, toret)) {
+    toret[end_of_path - path] = '\0';
+  }
+
+  return toret;
+}
+
+char *
+util_fs_path_basename(fs_handle_t fs, const char *path) {
+  assert(path && fs_path_is_valid(fs, path));
+
+  if (fs_path_is_root(fs, path)) {
+    return davfuse_util_strdup(path);
+  }
+
+  const char *path_sep = fs_path_sep(fs);
+  /* TODO: support this */
+  if (strlen(path_sep) != 1) {
+    return NULL;
+  }
+
+  const char *end_of_path = strrchr(path, path_sep[0]);
+
+  return davfuse_util_strdup(end_of_path + 1);
 }
 
 char *
 util_fs_path_join(fs_handle_t fs, const char *path, const char *name) {
+  assert(path && fs_path_is_valid(fs, path));
+  assert(name && strlen(name));
+
   size_t len_of_basename = strlen(name);
 
   bool add_sep = true;

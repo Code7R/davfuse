@@ -466,29 +466,17 @@ fs_posix_destroy(fs_posix_handle_t fs) {
 bool
 fs_posix_path_is_root(fs_posix_handle_t fs, const char *a) {
   ASSERT_VALID_FS(fs);
+  assert(fs_posix_path_is_valid(fs, path));
 
   return str_equals(a, "/");
 }
 
 bool
-fs_posix_path_equals(fs_posix_handle_t fs, const char *a, const char *b) {
+fs_posix_path_component_equals(fs_posix_handle_t fs,
+                               const char *a, const char *b) {
   ASSERT_VALID_FS(fs);
 
   return str_equals(a, b);
-}
-
-bool
-fs_posix_path_is_parent(fs_posix_handle_t fs,
-                        const char *potential_parent,
-                        const char *potential_child) {
-  ASSERT_VALID_FS(fs);
-
-  if (!str_startswith(potential_child, potential_parent)) {
-    return false;
-  }
-
-  size_t potential_parent_len = strlen(potential_parent);
-  return potential_child[potential_parent_len] == '/';
 }
 
 const char *

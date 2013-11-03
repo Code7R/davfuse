@@ -194,18 +194,10 @@ fs_dynamic_path_sep(fs_dynamic_handle_t fs) {
 }
 
 bool
-fs_dynamic_path_equals(fs_dynamic_handle_t fs, const char *a, const char *b) {
+fs_dynamic_path_component_equals(fs_dynamic_handle_t fs,
+                                 const char *a, const char *b) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
-  return fs_dyn->ops->path_equals(fs_dyn->fs, a, b);
-}
-
-bool
-fs_dynamic_path_is_parent(fs_dynamic_handle_t fs,
-                          const char *potential_parent,
-                          const char *potential_child) {
-  FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
-  return fs_dyn->ops->path_is_parent(fs_dyn->fs, potential_parent,
-                                     potential_child);
+  return fs_dyn->ops->path_component_equals(fs_dyn->fs, a, b);
 }
 
 bool

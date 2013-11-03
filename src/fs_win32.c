@@ -768,34 +768,51 @@ fs_win32_destroy(fs_win32_handle_t fs) {
 bool
 fs_win32_path_is_root(fs_win32_handle_t fs, const char *path) {
   ASSERT_VALID_FS(fs);
+  assert(fs_win32_path_is_valid(fs, path));
+
   if (!path) return false;
-  /* TODO: add support for UNC paths and multi-letter prefixes */
+  /* TODO: add support for UNC paths */
   return (strlen(path) == 3 &&
-          (('a' <= path[0] && path[0] <= 'z') ||
+          /* we only allow upper case roots for now,
+             since the interface currently allows bytewise
+             comparisons for roots */
+          (/*('a' <= path[0] && path[0] <= 'z') || */
            ('A' <= path[0] && path[0] <= 'Z')) &&
           path[1] == ':' && path[2] == '\\');
 }
 
 bool
-fs_win32_path_equals(fs_win32_handle_t fs, const char *a, const char *b) {
-  ASSERT_VALID_FS(fs);
-  return str_case_equals(a, b);
-}
-
-bool
-fs_win32_path_is_parent(fs_win32_handle_t fs,
-                        const char *potential_parent,
-                        const char *potential_child) {
+fs_win32_path_component_equals(fs_win32_handle_t fs,
+                               const char *a, const char *b) {
   ASSERT_VALID_FS(fs);
 
-  if (!str_case_startswith(potential_child, potential_parent)) {
-    return false;
+  //MSDN recommends we upper both file names and compare
+  LPWSTR path_a = NULL;
+  LPWSTR path_b = NULL;
+  bool toret = false;
+
+  path_a = utf8_to_mb(a);
+  if (!path_a) goto err;
+
+  path_b = utf8_to_mb(b);
+  if (!path_b) goto err;
+
+  CharUpperW(path_a);
+  CharUpperW(path_b);
+
+  toret = !wcscmp(path_a, path_b);
+
+  if (false) {
+  err:
+    // XXX: if there was actually an error it would be nice
+    //      to return that, instead we just abort()
+    abort();
   }
 
-  size_t potential_parent_len = strlen(potential_parent);
-  return !strncmp(&potential_child[potential_parent_len],
-                  fs_win32_path_sep(fs),
-                  strlen(fs_win32_path_sep(fs)));
+  free(path_a);
+  free(path_b);
+
+  return toret;
 }
 
 const char *
@@ -811,7 +828,9 @@ fs_win32_path_is_valid(fs_win32_handle_t fs,
   if (!path) return false;
 
   if (strlen(path) >= 3 &&
-      (('a' <= path[0] && path[0] <= 'z') ||
+      /* we only allow upper case roots for now,
+         since the interface currently allows bytewise comparisons for roots */
+      (/*('a' <= path[0] && path[0] <= 'z') || */
        ('A' <= path[0] && path[0] <= 'Z')) &&
       path[1] == ':' && path[2] == '\\') {
     return true;

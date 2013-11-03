@@ -64,6 +64,17 @@ char *
 util_fs_path_dirname(fs_handle_t fs, const char *path);
 
 char *
+util_fs_path_basename(fs_handle_t fs, const char *path);
+
+bool
+util_fs_path_equals(fs_handle_t fs,
+                    const char *a, const char *b);
+
+bool
+util_fs_path_is_parent(fs_handle_t fs,
+                       const char *a, const char *b);
+
+char *
 util_fs_path_join(fs_handle_t fs, const char *path, const char *name);
 
 #ifdef __cplusplus

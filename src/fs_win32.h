@@ -116,12 +116,8 @@ bool
 fs_win32_path_is_root(fs_win32_handle_t fs, const char *path);
 
 bool
-fs_win32_path_equals(fs_win32_handle_t fs, const char *a, const char *b);
-
-bool
-fs_win32_path_is_parent(fs_win32_handle_t fs,
-                        const char *potential_parent,
-                        const char *potential_child);
+fs_win32_path_component_equals(fs_win32_handle_t fs,
+                               const char *a, const char *b);
 
 const char *
 fs_win32_path_sep(fs_win32_handle_t fs);

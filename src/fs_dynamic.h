@@ -57,8 +57,9 @@ typedef fs_error_t (*fs_dynamic_rename_fn)(void *, const char *, const char *);
 typedef fs_error_t (*fs_dynamic_set_times_fn)(void *fs, const char *path, fs_time_t atime, fs_time_t mtime);
 typedef bool (*fs_dynamic_path_is_root_fn)(void *fs, const char *a);
 typedef const char *(*fs_dynamic_path_sep_fn)(void *fss);
-typedef bool (*fs_dynamic_path_equals_fn)(void *fs, const char *a, const char *b);
-typedef bool (*fs_dynamic_path_is_parent_fn)(void *fs, const char *p, const char *c);
+typedef bool (*fs_dynamic_path_component_equals_fn)(void *fs,
+                                                    const char *a,
+                                                    const char *b);
 typedef bool (*fs_dynamic_path_is_valid_fn)(void *fs, const char *path);
 typedef bool (*fs_dynamic_destroy_fn)(void *fs);
 
@@ -79,8 +80,7 @@ typedef struct {
   fs_dynamic_set_times_fn set_times;
   fs_dynamic_path_is_root_fn path_is_root;
   fs_dynamic_path_sep_fn path_sep;
-  fs_dynamic_path_equals_fn path_equals;
-  fs_dynamic_path_is_parent_fn path_is_parent;
+  fs_dynamic_path_component_equals_fn path_component_equals;
   fs_dynamic_path_is_valid_fn path_is_valid;
   fs_dynamic_destroy_fn destroy;
 } FsOperations;
@@ -168,12 +168,8 @@ const char *
 fs_dynamic_path_sep(fs_dynamic_handle_t fs);
 
 bool
-fs_dynamic_path_equals(fs_dynamic_handle_t fs, const char *a, const char *b);
-
-bool
-fs_dynamic_path_is_parent(fs_dynamic_handle_t fs,
-                          const char *potential_parent,
-                          const char *potential_child);
+fs_dynamic_path_component_equals(fs_dynamic_handle_t fs,
+                                 const char *a, const char *b);
 
 bool
 fs_dynamic_path_is_valid(fs_dynamic_handle_t fs,
