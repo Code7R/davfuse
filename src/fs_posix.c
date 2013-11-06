@@ -466,7 +466,7 @@ fs_posix_destroy(fs_posix_handle_t fs) {
 bool
 fs_posix_path_is_root(fs_posix_handle_t fs, const char *a) {
   ASSERT_VALID_FS(fs);
-  assert(fs_posix_path_is_valid(fs, path));
+  assert(fs_posix_path_is_valid(fs, a));
 
   return str_equals(a, "/");
 }
