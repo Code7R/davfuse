@@ -513,7 +513,7 @@ fs_posix_set_times(fs_posix_handle_t fs,
   const int res_utimes = utimes(path, new_times);
   if (res_utimes < 0) return errno_to_fs_error();
 
-  return FS_INVALID_TIME;
+  return FS_ERROR_SUCCESS;
 }
 
 bool

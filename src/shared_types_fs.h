@@ -51,10 +51,10 @@ typedef intmax_t fs_time_t;
 typedef intmax_t fs_off_t;
 typedef uintmax_t fs_file_id_t;
 
-/* NB: not totally sure about defining constants like this,
-   a #define might be better */
-HEADER_CONST const fs_time_t FS_INVALID_TIME = INTMAX_MAX;
-HEADER_CONST const fs_off_t FS_INVALID_OFF = INTMAX_MAX;
+enum {
+  FS_INVALID_TIME = INTMAX_MAX,
+  FS_INVALID_OFF = INTMAX_MAX,
+};
 
 typedef struct {
   fs_time_t modified_time;
