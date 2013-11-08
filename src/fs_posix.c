@@ -519,7 +519,14 @@ fs_posix_set_times(fs_posix_handle_t fs,
 bool
 fs_posix_path_is_valid(fs_posix_handle_t fs,
                        const char *path) {
-  UNUSED(fs);
+  ASSERT_VALID_FS(fs);
   /* TODO: check if path is valid UTF-8 */
   return path && path[0] == '/';
+}
+
+bool
+fs_posix_path_component_is_valid(fs_posix_handle_t fs,
+                                 const char *component) {
+  ASSERT_VALID_FS(fs);
+  return !strchr(component, '/');
 }

@@ -40,3 +40,4 @@ path_is_root
 path_component_equals
 path_sep
 path_is_valid
+path_component_is_valid

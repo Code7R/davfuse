@@ -61,6 +61,7 @@ typedef bool (*fs_dynamic_path_component_equals_fn)(void *fs,
                                                     const char *a,
                                                     const char *b);
 typedef bool (*fs_dynamic_path_is_valid_fn)(void *fs, const char *path);
+typedef bool (*fs_dynamic_path_component_is_valid_fn)(void *fs, const char *comp);
 typedef bool (*fs_dynamic_destroy_fn)(void *fs);
 
 typedef struct {
@@ -82,6 +83,7 @@ typedef struct {
   fs_dynamic_path_sep_fn path_sep;
   fs_dynamic_path_component_equals_fn path_component_equals;
   fs_dynamic_path_is_valid_fn path_is_valid;
+  fs_dynamic_path_component_is_valid_fn path_component_is_valid;
   fs_dynamic_destroy_fn destroy;
 } FsOperations;
 
@@ -174,6 +176,10 @@ fs_dynamic_path_component_equals(fs_dynamic_handle_t fs,
 bool
 fs_dynamic_path_is_valid(fs_dynamic_handle_t fs,
                          const char *path);
+
+bool
+fs_dynamic_path_component_is_valid(fs_dynamic_handle_t fs,
+                                   const char *comp);
 
 CREATE_IMPL_TAG(FS_DYNAMIC_IMPL);
 

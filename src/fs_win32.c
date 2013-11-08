@@ -840,3 +840,38 @@ fs_win32_path_is_valid(fs_win32_handle_t fs,
 
   return false;
 }
+
+bool
+fs_win32_path_component_is_valid(fs_win32_handle_t fs,
+                                 const char *component) {
+/* lots of restrictions here:
+http://msdn.microsoft.com/en-us/library/windows/desktop/aa365247(v=vs.85).aspx
+*/
+  static const char BAD_WIN_CHARS[] =
+    "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F"
+    "\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F"
+    "<>:\"/\|?*";
+
+  ASSERT_VALID_FS(fs);
+  char *first_bad = strpbrk(component, BAD_WIN_CHARS);
+
+  if (first_bad) return false;
+
+  static const char *BAD_WIN_NAMES[] = {
+    ".", "..", "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4",
+    "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4",
+    "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+  };
+  for (unsigned i = 0; i < NELEMS(BAD_WIN_NAMES); ++i) {
+    if (str_equals(component, BAD_WIN_NAMES[i])) {
+      return false;
+    }
+  }
+
+  size_t num_component_chars = strlen(component);
+  if (component[num_component_chars - 1] == '.' ||
+      component[num_component_chars - 1] == ' ') return false;
+
+  return true;
+}
+

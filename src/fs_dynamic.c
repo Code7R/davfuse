@@ -206,3 +206,10 @@ fs_dynamic_path_is_valid(fs_dynamic_handle_t fs,
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
   return fs_dyn->ops->path_is_valid(fs_dyn->fs, path);
 }
+
+bool
+fs_dynamic_path_component_is_valid(fs_dynamic_handle_t fs,
+                                   const char *comp) {
+  FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
+  return fs_dyn->ops->path_component_is_valid(fs_dyn->fs, comp);
+}

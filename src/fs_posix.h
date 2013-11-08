@@ -129,6 +129,10 @@ bool
 fs_posix_path_is_valid(fs_posix_handle_t fs,
                        const char *path);
 
+bool
+fs_posix_path_component_is_valid(fs_posix_handle_t fs,
+                                 const char *component);
+
 CREATE_IMPL_TAG(FS_POSIX_IMPL);
 
 #ifdef __cplusplus

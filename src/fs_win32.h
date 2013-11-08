@@ -126,6 +126,10 @@ bool
 fs_win32_path_is_valid(fs_win32_handle_t fs,
                        const char *path);
 
+bool
+fs_win32_path_component_is_valid(fs_win32_handle_t fs,
+                                 const char *component);
+
 CREATE_IMPL_TAG(FS_WIN32_IMPL);
 
 #ifdef __cplusplus
