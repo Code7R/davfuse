@@ -28,6 +28,23 @@
 
 #include "event_loop_select.h"
 
+/* workaround undefined behavior bug in darwin...
+   https://groups.google.com/forum/#!topic/darwin-dev/xNf5wDSqhLk
+ */
+#ifdef __DARWIN_FD_ISSET
+static int
+__my_darwin_fd_isset(int _n, const struct fd_set *_p) {
+  return (_p->fds_bits[(unsigned long)_n/__DARWIN_NFDBITS] &
+          ((int32_t)(((unsigned long)1)<<((unsigned long)_n % __DARWIN_NFDBITS))));
+}
+
+#define MY_FD_ISSET(n, p) __my_darwin_fd_isset(n, p)
+#define MY_FD_SET(n, p) do { int __fd = (n); ((p)->fds_bits[__fd/__DARWIN_NFDBITS] |= ((unsigned long)1<<(__fd % __DARWIN_NFDBITS))); } while(0)
+#else
+#define MY_FD_ISSET(n, p) FD_ISSET(n, p)
+#define MY_FD_SET(n, p) FD_SET(n, p)
+#endif
+
 enum {
   /* set to false to cause program to spin
      instead of waiting on select */
@@ -184,20 +201,20 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
         continue;
       }
 
-      if (ll->ew.events.read && !FD_ISSET(ll->ew.fd, &readfds)) {
+      if (ll->ew.events.read && !MY_FD_ISSET(ll->ew.fd, &readfds)) {
         log_debug("Adding fd %d to read set", ll->ew.fd);
-	FD_SET(ll->ew.fd, &readfds);
+        MY_FD_SET(ll->ew.fd, &readfds);
         readfds_watched += 1;
       }
 
-      if (ll->ew.events.write && !FD_ISSET(ll->ew.fd, &writefds)) {
+      if (ll->ew.events.write && !MY_FD_ISSET(ll->ew.fd, &writefds)) {
         log_debug("Adding fd %d to write set", ll->ew.fd);
-	FD_SET(ll->ew.fd, &writefds);
+        MY_FD_SET(ll->ew.fd, &writefds);
         writefds_watched += 1;
       }
 
       if ((int) ll->ew.fd > nfds) {
-	nfds = ll->ew.fd;
+        nfds = ll->ew.fd;
       }
 
       ll = ll->next;
@@ -252,8 +269,8 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
       StreamEvents events;
 
       if (ll->active) {
-        events = create_stream_events(FD_ISSET(ll->ew.fd, &readfds),
-                                      FD_ISSET(ll->ew.fd, &writefds));
+        events = create_stream_events(MY_FD_ISSET(ll->ew.fd, &readfds),
+                                      MY_FD_ISSET(ll->ew.fd, &writefds));
         if ((events.read && ll->ew.events.read) ||
             (events.write && ll->ew.events.write)) {
           event_handler_t h = ll->ew.handler;
