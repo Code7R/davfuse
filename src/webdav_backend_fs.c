@@ -304,6 +304,15 @@ UTHR_DEFINE(_webdav_backend_fs_put_uthr) {
 
   ctx->resource_existed = !created;
 
+  const fs_error_t ret_truncate =
+    fs_ftruncate(ctx->pbctx->fs, ctx->fd, 0);
+  if (ret_truncate) {
+    log_info("Error truncated \"%s\": %s", ctx->file_path,
+             util_fs_strerror(ret_truncate));
+    error = WEBDAV_ERROR_GENERAL;
+    goto done;
+  }
+
   ctx->total_amount_transferred = 0;
   while (true) {
     UTHR_YIELD(ctx,
