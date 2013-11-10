@@ -1467,7 +1467,7 @@ pretty_print_xml(const char *xml_body, size_t len, log_level_t level) {
   }
 
   if (!len) {
-    log(level, "<empty xml body>");
+    logging_log(level, "<empty xml body>");
     return;
   }
 
@@ -1476,7 +1476,7 @@ pretty_print_xml(const char *xml_body, size_t len, log_level_t level) {
   auto xml_error = doc.Parse(xml_body, len);
   if (xml_error) {
     assert(len <= INT_MAX);
-    log(level, "%.*s", (int) len, xml_body);
+    logging_log(level, "%.*s", (int) len, xml_body);
     return;
   }
 
@@ -1484,7 +1484,7 @@ pretty_print_xml(const char *xml_body, size_t len, log_level_t level) {
 
   doc.Print(&printer);
 
-  log(level, "%s", printer.CStr());
+  logging_log(level, "%s", printer.CStr());
 
   return;
 }
