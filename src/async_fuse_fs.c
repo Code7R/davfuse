@@ -309,6 +309,12 @@ UTHR_DEFINE(_send_message) {
                                          NULL);
       ASSERT_TRUE(ret);
       UTHR_YIELD(ctx, 0);
+      UTHR_RECEIVE_EVENT(EVENT_LOOP_FD_EVENT, EventLoopFdEvent, fd_ev);
+      if (fd_ev->error) {
+        log_error("error during fd watch");
+        error = true;
+        break;
+      }
     }
     else {
       error = true;
@@ -371,6 +377,12 @@ UTHR_DEFINE(_receive_reply_message) {
                                          NULL);
       ASSERT_TRUE(ret);
       UTHR_YIELD(ctx, 0);
+      UTHR_RECEIVE_EVENT(EVENT_LOOP_FD_EVENT, EventLoopFdEvent, fd_ev);
+      if (fd_ev->error) {
+        log_error("error during fd watch");
+        error = true;
+        break;
+      }
     }
     else {
       error = true;

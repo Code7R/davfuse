@@ -82,15 +82,20 @@ typedef struct {
 } WebdavPutRequestReadDoneEvent;
 
 webdav_server_t
-webdav_server_start(event_loop_handle_t loop,
-                    socket_t sock,
-                    const char *public_uri_root,
-                    const char *internal_root,
-		    webdav_backend_t fs);
+webdav_server_new(event_loop_handle_t loop,
+                  socket_t sock,
+                  const char *public_uri_root,
+                  const char *internal_root,
+                  webdav_backend_t fs);
 
-void
-webdav_server_stop(webdav_server_t ws,
-                   event_handler_t cb, void *user_data);
+bool
+webdav_server_destroy(webdav_server_t ws);
+
+bool
+webdav_server_start(webdav_server_t ws);
+
+bool
+webdav_server_stop(webdav_server_t ws);
 
 void
 webdav_get_request_size_hint(webdav_get_request_ctx_t get_ctx,

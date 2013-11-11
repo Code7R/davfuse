@@ -77,6 +77,11 @@ socket_from_fd(int fd) {
   return fd;
 }
 
+HEADER_FUNCTION int
+fd_from_socket(socket_t sock) {
+  return sock;
+}
+
 #ifdef __cplusplus
 }
 #endif

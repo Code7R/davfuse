@@ -53,7 +53,8 @@ enum {
 
 /* opaque structures */
 typedef struct {
-  socket_t fd;
+  bool is_fd_watch;
+  socket_t sock;
   void *ud;
   StreamEvents events;
   event_handler_t handler;
@@ -70,7 +71,7 @@ typedef struct _event_loop_select_handle {
   EventLoopSelectLink *ll;
 } EventLoopSelectLoop;
 
-NON_NULL_ARGS0() event_loop_select_handle_t
+event_loop_select_handle_t
 event_loop_select_default_new(void) {
   EventLoopSelectLoop *loop = malloc(sizeof(*loop));
   if (!loop) {
@@ -88,13 +89,15 @@ event_loop_select_destroy(event_loop_select_handle_t a) {
   return true;
 }
 
-NON_NULL_ARGS2(1, 4) bool
-event_loop_select_socket_watch_add(event_loop_select_handle_t loop,
-                                   socket_t fd,
-                                   StreamEvents events,
-                                   event_handler_t handler,
-                                   void *ud,
-                                   event_loop_select_watch_key_t *key) {
+static
+bool
+_event_loop_select_watch_add(event_loop_select_handle_t loop,
+                             bool is_fd_watch,
+                             socket_t sock,
+                             StreamEvents events,
+                             event_handler_t handler,
+                             void *ud,
+                             event_loop_select_watch_key_t *key) {
   EventLoopSelectLink *ew;
 
   assert(loop);
@@ -107,7 +110,13 @@ event_loop_select_socket_watch_add(event_loop_select_handle_t loop,
   }
 
   *ew = (EventLoopSelectLink) {
-    .ew = {fd, ud, events, handler},
+    .ew = {
+      .is_fd_watch = is_fd_watch,
+      .sock = sock,
+      .ud = ud,
+      .events = events,
+      .handler = handler
+    },
     .prev = NULL,
     .next = NULL,
     .active = true,
@@ -130,6 +139,16 @@ event_loop_select_socket_watch_add(event_loop_select_handle_t loop,
 }
 
 bool
+event_loop_select_socket_watch_add(event_loop_select_handle_t loop,
+                                   socket_t sock,
+                                   StreamEvents events,
+                                   event_handler_t handler,
+                                   void *ud,
+                                   event_loop_select_watch_key_t *key) {
+  return _event_loop_select_watch_add(loop, false, sock, events, handler, ud, key);
+}
+
+bool
 event_loop_select_fd_watch_add(event_loop_select_handle_t loop,
                                int fd,
                                StreamEvents events,
@@ -138,8 +157,8 @@ event_loop_select_fd_watch_add(event_loop_select_handle_t loop,
                                event_loop_select_watch_key_t *key) {
   socket_t socket = socket_from_fd(fd);
   if (socket == INVALID_SOCKET) return false;
-  return event_loop_select_socket_watch_add(loop, socket, events, handler,
-                                            ud, key);
+  return _event_loop_select_watch_add(loop, true, socket, events, handler,
+                                      ud, key);
 }
 
 NON_NULL_ARGS0() bool
@@ -201,20 +220,20 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
         continue;
       }
 
-      if (ll->ew.events.read && !MY_FD_ISSET(ll->ew.fd, &readfds)) {
-        log_debug("Adding fd %d to read set", ll->ew.fd);
-        MY_FD_SET(ll->ew.fd, &readfds);
+      if (ll->ew.events.read && !MY_FD_ISSET(ll->ew.sock, &readfds)) {
+        log_debug("Adding fd %d to read set", ll->ew.sock);
+        MY_FD_SET(ll->ew.sock, &readfds);
         readfds_watched += 1;
       }
 
-      if (ll->ew.events.write && !MY_FD_ISSET(ll->ew.fd, &writefds)) {
-        log_debug("Adding fd %d to write set", ll->ew.fd);
-        MY_FD_SET(ll->ew.fd, &writefds);
+      if (ll->ew.events.write && !MY_FD_ISSET(ll->ew.sock, &writefds)) {
+        log_debug("Adding fd %d to write set", ll->ew.sock);
+        MY_FD_SET(ll->ew.sock, &writefds);
         writefds_watched += 1;
       }
 
-      if ((int) ll->ew.fd > nfds) {
-        nfds = ll->ew.fd;
+      if ((int) ll->ew.sock > nfds) {
+        nfds = ll->ew.sock;
       }
 
       ll = ll->next;
@@ -238,55 +257,70 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
     }
 
     log_debug("before select");
+    bool select_error = false;
     if (ACTUALLY_WAIT_ON_SELECT) {
-      fd_set *readfds_ptr = readfds_watched
+      fd_set *const readfds_ptr = readfds_watched
         ? &readfds
         : NULL;
-      fd_set *writefds_ptr = writefds_watched
+      fd_set *const writefds_ptr = writefds_watched
         ? &writefds
         : NULL;
       while (true) {
         int ret_select =
           select(nfds + 1, readfds_ptr, writefds_ptr, NULL, NULL);
-        if (ret_select != SOCKET_ERROR) {
-          break;
+
+        if (ret_select == SOCKET_ERROR &&
+            last_socket_error() == SOCKET_EINTR) {
+          log_info("select() interrupted!");
+          continue;
         }
 
-        if (last_socket_error() != SOCKET_EINTR) {
+        if (ret_select == SOCKET_ERROR) {
           log_error("Error while doing select(): %s",
                     last_socket_error_message());
-          return false;
+          select_error = true;
         }
 
-        log_info("select() interrupted!");
+        break;
       }
     }
     log_debug("after select");
 
     /* now dispatch on events */
-    ll = loop->ll;
-    while (ll) {
-      StreamEvents events;
-
+    for (ll = loop->ll; ll; ll = ll->next) {
       if (ll->active) {
-        events = create_stream_events(MY_FD_ISSET(ll->ew.fd, &readfds),
-                                      MY_FD_ISSET(ll->ew.fd, &writefds));
-        if ((events.read && ll->ew.events.read) ||
+        const StreamEvents events = select_error
+          ? create_stream_events(false, false)
+          : create_stream_events(MY_FD_ISSET(ll->ew.sock, &readfds),
+                                 MY_FD_ISSET(ll->ew.sock, &writefds));
+
+        if (select_error ||
+            (events.read && ll->ew.events.read) ||
             (events.write && ll->ew.events.write)) {
-          event_handler_t h = ll->ew.handler;
-          socket_t fd = ll->ew.fd;
-          void *ud = ll->ew.ud;
-          EventLoopSelectSocketEvent e = {
-            .loop = loop,
-            .socket = fd,
-            .events = events,
-          };
+          /* NB: this just marks removal, doesn't actually free */
           event_loop_select_watch_remove(loop, ll);
-          h(EVENT_LOOP_SOCKET_EVENT, &e, ud);
+
+          if (ll->ew.is_fd_watch) {
+            EventLoopSelectFdEvent e = {
+              .loop = loop,
+              .fd = fd_from_socket(ll->ew.sock),
+              .events = events,
+              .error = select_error,
+            };
+            assert(e.fd >= 0);
+            ll->ew.handler(EVENT_LOOP_FD_EVENT, &e, ll->ew.ud);
+          }
+          else {
+            EventLoopSelectSocketEvent e = {
+              .loop = loop,
+              .socket = ll->ew.sock,
+              .events = events,
+              .error = select_error,
+            };
+            ll->ew.handler(EVENT_LOOP_SOCKET_EVENT, &e, ll->ew.ud);
+          }
         }
       }
-
-      ll = ll->next;
     }
   }
 }

@@ -20,6 +20,7 @@ watch_key_t
 
 # transparent struct types
 SocketEvent
+FdEvent
 
 # functions
 default_new

@@ -123,8 +123,6 @@ typedef struct _http_server {
   void *ud;
   bool shutting_down;
   size_t num_connections;
-  event_handler_t stop_cb;
-  void *stop_ud;
   socket_t stop_sockets[2];
 } HTTPServer;
 
@@ -231,9 +229,10 @@ EVENT_HANDLER_DEFINE(wait_until_ready_handler, ev_type, ev_, ud) {
   assert(conn->spare.wait_until.stop_key &&
          conn->spare.wait_until.read_key);
 
+  /* we have to remove the opposite watch key since we're
+     waiting for the first one to arrive */
   event_loop_watch_key_t to_remove = 0;
   if (ev->socket == conn->sock) {
-    /* the socket has data */
     log_debug("Client request socket has ready data!");
     to_remove = conn->spare.wait_until.stop_key;
   }
@@ -243,10 +242,16 @@ EVENT_HANDLER_DEFINE(wait_until_ready_handler, ev_type, ev_, ud) {
     to_remove = conn->spare.wait_until.read_key;
   }
 
-  event_loop_watch_remove(conn->server->loop, to_remove);
+  /* TODO: handle this better */
+  bool success_remove =
+    event_loop_watch_remove(conn->server->loop, to_remove);
+  ASSERT_TRUE(success_remove);
 
   conn->spare.wait_until.stop_key = 0;
   conn->spare.wait_until.read_key = 0;
+
+  /* if there was an error waiting, close down the connection */
+  if (ev->error) conn->last_error_number = 1;
 
   return client_coroutine(GENERIC_EVENT, NULL, conn);
 }
@@ -301,7 +306,9 @@ _http_connection_wait_until_ready(HTTPConnection *conn) {
 
 static
 socket_t
-_http_server_sock_from_accept_event(EventLoopSocketEvent *ev) {
+_http_server_sock_from_accept_event(const EventLoopSocketEvent *ev) {
+  if (ev->error) return INVALID_SOCKET;
+
   socket_t ret = accept(ev->socket, NULL, NULL);
   if (ret == INVALID_SOCKET) return ret;
 
@@ -341,8 +348,12 @@ void
 _http_server_destroy(http_server_t http) {
   for (unsigned i = 0; i < NELEMS(http->stop_sockets); ++i) {
     if (http->stop_sockets[i] != INVALID_SOCKET) {
-      /* log if fail */
-      closesocket(http->stop_sockets[i]);
+      int ret_close = closesocket(http->stop_sockets[i]);
+      if (ret_close == SOCKET_ERROR) {
+        /* we don't fail hard here, we just leak a descriptor */
+        log_error("Couldn't close socket: %ld: %s",
+                  (long) http->stop_sockets[i], last_socket_error_message());
+      }
     }
   }
 
@@ -354,21 +365,21 @@ void
 _http_server_wake_up_client_handlers(http_server_t http) {
   const int ret =
     send(http->stop_sockets[STOP_SOCKET_SEND], "hai", sizeof("hai"), 0);
-  if (ret < 0) {
+  if (ret == SOCKET_ERROR) {
     log_error("Error while writing to stop socket: %s",
               last_socket_error_message());
+    /* TODO: handle this */
+    ASSERT_TRUE(false);
   }
 }
 
 http_server_t
-http_server_start(event_loop_handle_t loop,
-                  socket_t sock,
-                  event_handler_t handler,
-                  void *ud) {
-  struct _http_server *http = malloc(sizeof(*http));
-  if (!http) {
-    return http;
-  }
+http_server_new(event_loop_handle_t loop,
+                socket_t sock,
+                event_handler_t handler,
+                void *ud) {
+  struct _http_server *const http = malloc(sizeof(*http));
+  if (!http) return NULL;
 
   *http = (struct _http_server) {
     .loop = loop,
@@ -386,37 +397,33 @@ http_server_start(event_loop_handle_t loop,
     return NULL;
   }
 
-  bool success_watch = _http_server_accept(http);
-  if (!success_watch) {
-    _http_server_destroy(http);
-    return NULL;
-  }
-
   return http;
 }
 
-void
-http_server_stop(http_server_t http,
-                 event_handler_t cb, void *user_data) {
-  bool success_stop = _http_server_stop_accept(http);
-  if (!success_stop) {
-    log_error("Error trying to stop accepting");
-  }
+bool
+http_server_start(http_server_t http) {
+  return _http_server_accept(http);
+}
+
+bool
+http_server_stop(http_server_t http) {
+  const bool success_stop = _http_server_stop_accept(http);
+  if (!success_stop) return false;
 
   http->shutting_down = true;
-  http->stop_cb = cb;
-  http->stop_ud = user_data;
 
-  if (!http->num_connections) {
-    /* no more connections, call callback immediately */
-    /* TODO: log if closesocket fails */
-    _http_server_destroy(http);
-    cb(HTTP_SERVER_STOP_DONE_EVENT, NULL, user_data);
-  }
-  else {
+  if (http->num_connections) {
     /* write to the stop socket to wake connections up */
     _http_server_wake_up_client_handlers(http);
   }
+
+  return true;
+}
+
+bool
+http_server_destroy(http_server_t http) {
+  _http_server_destroy(http);
+  return true;
 }
 
 typedef struct {
@@ -1037,21 +1044,24 @@ static
 EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
   UNUSED(ev_type);
   assert(ev_type == _HTTP_SERVER_ACCEPT_DONE_EVENT);
+  HTTPServer *const http = ud;
+  /* our key has been invalidated */
+  http->accept_watch_key = (event_loop_watch_key_t) 0;
+
   const socket_t sock = _http_server_sock_from_accept_event(ev);
   if (sock == INVALID_SOCKET) {
-    log_error("accept() client connection failed!");
+    log_error("accept() client connection failed, shutting down server!");
+    bool success_http_stop = http_server_stop(http);
+    /* TODO: handle more gracefully */
+    ASSERT_TRUE(success_http_stop);
     return;
   }
-
-  HTTPServer *const http = ud;
 
   /* accept again before running client
      (which could stop the server) */
   assert(!http->shutting_down);
   const bool success_accept = _http_server_accept(http);
-  if (!success_accept) {
-    log_error("Couldn't accept again!");
-  }
+  if (!success_accept) log_error("Couldn't accept again!");
 
   /* run client */
   HTTPConnection *const ctx = malloc_or_abort(sizeof(*ctx));
@@ -1188,23 +1198,11 @@ UTHR_DEFINE(client_coroutine) {
   log_debug("conn %p Client done, closing conn", cc);
   bool success_close = _http_connection_close(cc);
   if (!success_close) {
-    log_error("conn %p, error while closing client connection...", cc);
+    log_error("conn %p, error while closing client connection, leaking...", cc);
   }
 
-  /* NB: ordinarily we'd call UTHR_RETURN, but we need
-     to free the memory first before calling the stop handler */
-  HTTPServer *server = cc->server;
-  UTHR_FREE(cc);
-  server->num_connections -= 1;
-  if (!server->num_connections && server->shutting_down) {
-    event_handler_t cb = server->stop_cb;
-    void *ud = server->stop_ud;
-    _http_server_destroy(server);
-    return cb(HTTP_SERVER_STOP_DONE_EVENT, NULL, ud);
-  }
-  else {
-    return;
-  }
+  cc->server->num_connections -= 1;
+  UTHR_RETURN(cc, 0);
 
   UTHR_FOOTER();
 }

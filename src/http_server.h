@@ -142,15 +142,24 @@ typedef struct {
   size_t nbyte;
 } HTTPRequestReadDoneEvent;
 
-NON_NULL_ARGS2(1, 3) http_server_t
-http_server_start(event_loop_handle_t loop,
-                  socket_t sock,
-                  event_handler_t handler,
-		  void *ud);
+NON_NULL_ARGS2(1, 3)
+http_server_t
+http_server_new(event_loop_handle_t loop,
+                socket_t sock,
+                event_handler_t handler,
+                void *ud);
 
-void
-http_server_stop(http_server_t http,
-                 event_handler_t cb, void *user_data);
+NON_NULL_ARGS1(1)
+bool
+http_server_destroy(http_server_t http);
+
+NON_NULL_ARGS1(1)
+bool
+http_server_start(http_server_t http);
+
+NON_NULL_ARGS1(1)
+bool
+http_server_stop(http_server_t http);
 
 NON_NULL_ARGS3(1, 2, 3) void
 http_request_read_headers(http_request_handle_t rh,

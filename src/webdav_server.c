@@ -877,7 +877,7 @@ UTHR_DEFINE(request_proc) {
 
   /* handle quit message */
   if (str_equals(hc->rhs.uri, WEBDAV_SERVER_QUIT_URL)) {
-    webdav_server_stop(hc->serv, NULL, NULL);
+    webdav_server_stop(hc->serv);
   }
 
   /* check if path isn't in our namespace so we can return 404 */
@@ -2455,11 +2455,11 @@ EVENT_HANDLER_DEFINE(handle_request, ev_type, ev, ud) {
 }
 
 webdav_server_t
-webdav_server_start(event_loop_handle_t loop,
-                    socket_t sock,
-                    const char *public_uri_root,
-                    const char *internal_root,
-                    webdav_backend_t fs) {
+webdav_server_new(event_loop_handle_t loop,
+                  socket_t sock,
+                  const char *public_uri_root,
+                  const char *internal_root,
+                  webdav_backend_t fs) {
   char *public_uri_root_copy = NULL;
   char *internal_root_copy = NULL;
   http_server_t http = (http_server_t) 0;
@@ -2471,24 +2471,16 @@ webdav_server_start(event_loop_handle_t loop,
   }
 
   public_uri_root_copy = davfuse_util_strdup(public_uri_root);
-  if (!public_uri_root_copy) {
-    goto error;
-  }
+  if (!public_uri_root_copy) goto error;
 
   internal_root_copy = davfuse_util_strdup(internal_root);
-  if (!internal_root_copy) {
-    goto error;
-  }
+  if (!internal_root_copy) goto error;
 
   serv = malloc(sizeof(*serv));
-  if (!serv) {
-    goto error;
-  }
+  if (!serv) goto error;
 
-  http = http_server_start(loop, sock, handle_request, serv);
-  if (!http) {
-    goto error;
-  }
+  http = http_server_new(loop, sock, handle_request, serv);
+  if (!http) goto error;
 
   *serv = (struct webdav_server) {
     .http = http,
@@ -2502,7 +2494,10 @@ webdav_server_start(event_loop_handle_t loop,
 
  error:
   if (http) {
-    http_server_stop(http, NULL, NULL);
+    const bool success_http_destroy = http_server_destroy(http);
+    if (!success_http_destroy) {
+      log_error("error while trying to destroy http server, leaking...");
+    }
   }
   free(serv);
   free(public_uri_root_copy);
@@ -2511,38 +2506,31 @@ webdav_server_start(event_loop_handle_t loop,
   return NULL;
 }
 
-static
-EVENT_HANDLER_DEFINE(_webdav_stop_cb, ev_type, ev, ud) {
-  UNUSED(ev);
-  UNUSED(ev_type);
+bool
+webdav_server_destroy(webdav_server_t ws) {
+  struct webdav_server *serv = ws;
 
-  struct webdav_server *serv = ud;
-
-  assert(ev_type == HTTP_SERVER_STOP_DONE_EVENT);
+  const bool success_http_destroy = http_server_destroy(serv->http);
+  if (!success_http_destroy) return false;
 
   linked_list_free(serv->locks, free_webdav_lock_descriptor);
   free(serv->public_uri_root);
   free(serv->internal_root);
 
-  event_handler_t cb = serv->stop_cb;
-  void *cb_ud = serv->stop_ud;
-
   free(serv);
 
-  if (cb) {
-    return cb(GENERIC_EVENT, NULL, cb_ud);
-  }
+  return true;
 }
 
-void
-webdav_server_stop(webdav_server_t ws,
-                   event_handler_t cb, void *user_data) {
-  struct webdav_server *serv = ws;
-  serv->stop_cb = cb;
-  serv->stop_ud = user_data;
-  return http_server_stop(serv->http, _webdav_stop_cb, serv);
+bool
+webdav_server_start(webdav_server_t ws) {
+  return http_server_start(ws->http);
 }
 
+bool
+webdav_server_stop(webdav_server_t ws) {
+  return http_server_stop(ws->http);
+}
 
 /* private api, specifically helper functions for the xml implementation */
 

@@ -125,15 +125,21 @@ main(int argc, char *argv[]) {
   /* init xml parser */
   init_xml_parser();
 
-  /* start webdav server */
-  webdav_server_t ws = webdav_server_start(loop, sock,
-                                           public_uri_root,
-                                           internal_root,
-                                           wd_backend);
+  /* create webdav server */
+  webdav_server_t ws = webdav_server_new(loop, sock,
+                                         public_uri_root,
+                                         internal_root,
+                                         wd_backend);
   ASSERT_TRUE(ws);
 
+  /* start webdav server */
+  bool success_start = webdav_server_start(ws);
+  ASSERT_TRUE(success_start);
+
   log_info("Starting main loop");
-  event_loop_main_loop(loop);
+  bool success_main_loop = event_loop_main_loop(loop);
+  ASSERT_TRUE(success_main_loop);
+
   log_info("Server stopped");
 
   log_info("Shutting down xml parser");

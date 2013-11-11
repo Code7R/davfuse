@@ -47,7 +47,15 @@ typedef struct {
   event_loop_select_handle_t loop;
   socket_t socket;
   StreamEvents events;
+  bool error;
 } EventLoopSelectSocketEvent;
+
+typedef struct {
+  event_loop_select_handle_t loop;
+  int fd;
+  StreamEvents events;
+  bool error;
+} EventLoopSelectFdEvent;
 
 event_loop_select_handle_t
 event_loop_select_default_new();

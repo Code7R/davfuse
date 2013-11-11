@@ -53,6 +53,12 @@ socket_from_fd(int fd) {
   return INVALID_SOCKET;
 }
 
+HEADER_FUNCTION int
+fd_from_socket(socket_t sock) {
+  UNUSED(sock);
+  return -1;
+}
+
 const char *
 socket_error_message(socket_error_t);
 

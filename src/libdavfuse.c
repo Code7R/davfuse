@@ -119,6 +119,7 @@ static void *
 http_thread(void *ud) {
   HTTPThreadArguments *args = (HTTPThreadArguments *) ud;
   webdav_backend_async_fuse_t webdav_backend = 0;
+  webdav_server_t wd_serv = 0;
   socket_t listen_sock = INVALID_SOCKET;
 
   if (args->listen_str) {
@@ -148,25 +149,37 @@ http_thread(void *ud) {
 
   /* start webdav server */
   log_info("Create webdav server");
-  webdav_server_t wd_serv = webdav_server_start(args->loop,
-                                                listen_sock,
-                                                args->public_uri_root,
-                                                args->internal_root,
-                                                webdav_backend);
+  wd_serv = webdav_server_new(args->loop,
+                              listen_sock,
+                              args->public_uri_root,
+                              args->internal_root,
+                              webdav_backend);
   /* the server owns the fd now */
   if (!wd_serv) {
     log_critical("Couldn't start webdav server!");
     goto done;
   }
 
+  bool success_server_start = webdav_server_start(wd_serv);
+  if (!success_server_start) {
+    log_critical("Couldn't start webdav server");
+    goto done;
+  }
+
   log_info("Starting WebDAV server loop");
 
-  event_loop_main_loop(args->loop);
+  bool success_main_loop = event_loop_main_loop(args->loop);
+  if (!success_main_loop) log_error("Main loop stopped prematurely");
 
   /* this will end if a handler stops the server */
   log_info("Ending WebDAV server loop");
 
  done:
+  if (wd_serv) {
+    log_info("Destroying webdav server");
+    webdav_server_destroy(wd_serv);
+  }
+
   if (webdav_backend) {
     log_info("Destroying webdav backend");
     webdav_backend_async_fuse_destroy(webdav_backend);

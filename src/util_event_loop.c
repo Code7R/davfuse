@@ -61,6 +61,12 @@ UTHR_DEFINE(_util_event_loop_socket_read_uthr) {
       }
       else {
         UTHR_YIELD(ctx, 0);
+        UTHR_RECEIVE_EVENT(EVENT_LOOP_SOCKET_EVENT, EventLoopSocketEvent, socket_ev);
+        if (socket_ev->error) {
+          log_error("error during socket watch");
+          ret = SOCKET_ERROR;
+          break;
+        }
       }
     }
     else {
@@ -134,7 +140,12 @@ UTHR_DEFINE(_util_event_loop_write_uthr) {
         }
         else {
           UTHR_YIELD(state, 0);
-          continue;
+          UTHR_RECEIVE_EVENT(EVENT_LOOP_SOCKET_EVENT, EventLoopSocketEvent, socket_ev);
+          if (socket_ev->error) {
+            log_error("error during socket watch");
+            ret = SOCKET_ERROR;
+            break;
+          } else continue;
         }
       }
       else {
