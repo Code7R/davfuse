@@ -346,6 +346,14 @@ _http_server_stop_accept(http_server_t http) {
 static
 void
 _http_server_destroy(http_server_t http) {
+  if (http->sock != INVALID_SOCKET) {
+    int ret_close = closesocket(http->sock);
+    if (ret_close == SOCKET_ERROR) {
+      log_error("Couldn't close socket: %ld: %s",
+                (long) http->sock, last_socket_error_message());
+    }
+  }
+
   for (unsigned i = 0; i < NELEMS(http->stop_sockets); ++i) {
     if (http->stop_sockets[i] != INVALID_SOCKET) {
       int ret_close = closesocket(http->stop_sockets[i]);
