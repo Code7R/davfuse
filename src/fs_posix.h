@@ -118,20 +118,18 @@ fs_posix_destroy(fs_posix_handle_t fs);
 bool
 fs_posix_path_is_root(fs_posix_handle_t fs, const char *a);
 
-const char *
-fs_posix_path_sep(fs_posix_handle_t fs);
-
 bool
-fs_posix_path_component_equals(fs_posix_handle_t fs,
-                               const char *a, const char *b);
+fs_posix_path_is_valid(fs_posix_handle_t fs, const char *path);
 
-bool
-fs_posix_path_is_valid(fs_posix_handle_t fs,
-                       const char *path);
+char *
+fs_posix_path_dirname(fs_posix_handle_t fs, const char *path);
 
-bool
-fs_posix_path_component_is_valid(fs_posix_handle_t fs,
-                                 const char *component);
+char *
+fs_posix_path_basename(fs_posix_handle_t fs, const char *path);
+
+char *
+fs_posix_path_join(fs_posix_handle_t fs,
+                   const char *dirname, const char *basename);
 
 CREATE_IMPL_TAG(FS_POSIX_IMPL);
 

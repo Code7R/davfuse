@@ -41,55 +41,45 @@ typedef struct _webdav_backend_fs {
   size_t base_path_len;
 } WebdavBackendFs;
 
-static size_t
-count_chars(const char *str, char needle) {
-  size_t num_slashes = 0;
-  const char *cur_start = str;
-  while (cur_start) {
-    cur_start = strchr(cur_start, needle);
-    if (cur_start) {
-      cur_start += 1;
-      num_slashes += 1;
-    }
-  }
-
-  return num_slashes;
-}
-
 static char *
 path_from_uri(WebdavBackendFs *pbctx, const char *real_uri) {
+  char *toret = NULL;
+
   assert(str_startswith(real_uri, "/"));
 
-  /* count all '/' in the uri str */
-  size_t num_slashes = count_chars(real_uri, '/');
-  const char *path_sep = fs_path_sep(pbctx->fs);
-  size_t path_sep_len = strlen(path_sep);
+  toret = davfuse_util_strdup(pbctx->base_path);
+  if (!toret) goto err;
 
-  size_t uri_len = strlen(real_uri);
-  size_t new_len = uri_len + num_slashes * (path_sep_len - 1);
+  if (str_equals(real_uri, "/")) return toret;
 
-  char *toret = malloc(pbctx->base_path_len + new_len + 1);
-  if (!toret) {
-    return NULL;
+  const char *start_of_dirname = real_uri;
+  while (*start_of_dirname) {
+    start_of_dirname += 1;
+
+    const char *next = strchr(start_of_dirname, '/');
+    if (!next) next = start_of_dirname + strlen(start_of_dirname);
+
+    char *path_comp = malloc(next - start_of_dirname + 1);
+    if (!path_comp) goto err;
+
+    memcpy(path_comp, start_of_dirname, next - start_of_dirname);
+    path_comp[next - start_of_dirname] = '\0';
+
+    char *newtoret = util_fs_path_join(pbctx->fs, toret, path_comp);
+    free(path_comp);
+
+    if (!newtoret) goto err;
+    free(toret);
+    toret = newtoret;
+
+    start_of_dirname = next;
   }
 
-  memcpy(toret, pbctx->base_path, pbctx->base_path_len);
-  size_t offset = pbctx->base_path_len;
-
-  for (size_t i = 0; real_uri[i]; ++i) {
-    if (real_uri[i] == '/') {
-      if (i != uri_len - 1) {
-        /* don't include trailing slash */
-        memcpy(toret + offset, path_sep, path_sep_len);
-        offset += path_sep_len;
-      }
-    }
-    else {
-      toret[offset] = real_uri[i];
-      offset += 1;
-    }
+  if (false) {
+  err:
+    free(toret);
+    toret = NULL;
   }
-  toret[offset] = '\0';
 
   return toret;
 }
@@ -98,8 +88,7 @@ webdav_backend_fs_t
 webdav_backend_fs_new(fs_handle_t fs, const char *root) {
   char *base_path = NULL;
 
-  if (!fs_path_is_root(fs, root) &&
-      str_endswith(root, fs_path_sep(fs))) {
+  if (!fs_path_is_valid(fs, root)) {
     log_info("Bad input path: %s", root);
     return NULL;
   }

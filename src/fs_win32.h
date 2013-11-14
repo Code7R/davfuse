@@ -116,19 +116,19 @@ bool
 fs_win32_path_is_root(fs_win32_handle_t fs, const char *path);
 
 bool
-fs_win32_path_component_equals(fs_win32_handle_t fs,
-                               const char *a, const char *b);
-
-const char *
-fs_win32_path_sep(fs_win32_handle_t fs);
-
-bool
 fs_win32_path_is_valid(fs_win32_handle_t fs,
                        const char *path);
 
-bool
-fs_win32_path_component_is_valid(fs_win32_handle_t fs,
-                                 const char *component);
+char *
+fs_win32_path_dirname(fs_posix_handle_t fs, const char *path);
+
+char *
+fs_win32_path_basename(fs_posix_handle_t fs, const char *path);
+
+char *
+fs_win32_path_join(fs_posix_handle_t fs,
+                   const char *dirname, const char *basename);
+
 
 CREATE_IMPL_TAG(FS_WIN32_IMPL);
 

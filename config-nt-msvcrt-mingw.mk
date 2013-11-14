@@ -20,6 +20,7 @@ SOCKETS_IMPL = winsock
 LOG_PRINTER_IMPL = outputdebugstring
 
 FS_IMPL = win32
+FS_IMPL_EXTRA_SOURCES = fs_helpers.c
 
 EVENT_LOOP_IMPL = select
 EVENT_LOOP_IMPL_EXTRA_SOURCES =

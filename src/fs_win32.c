@@ -16,13 +16,15 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>
  */
 
-#include <windows.h>
+#include "fs_win32.h"
+
+#include "fs_helpers.h"
+#include "util.h"
 
 #include <assert.h>
 #include <stdint.h>
 
-#include "fs_win32.h"
-#include "util.h"
+#include <windows.h>
 
 enum {
   _FS_SINGLETON=1,
@@ -770,55 +772,11 @@ fs_win32_path_is_root(fs_win32_handle_t fs, const char *path) {
   ASSERT_VALID_FS(fs);
   assert(fs_win32_path_is_valid(fs, path));
 
-  if (!path) return false;
   /* TODO: add support for UNC paths */
   return (strlen(path) == 3 &&
-          /* we only allow upper case roots for now,
-             since the interface currently allows bytewise
-             comparisons for roots */
-          (/*('a' <= path[0] && path[0] <= 'z') || */
+          (('a' <= path[0] && path[0] <= 'z') || */
            ('A' <= path[0] && path[0] <= 'Z')) &&
           path[1] == ':' && path[2] == '\\');
-}
-
-bool
-fs_win32_path_component_equals(fs_win32_handle_t fs,
-                               const char *a, const char *b) {
-  ASSERT_VALID_FS(fs);
-
-  //MSDN recommends we upper both file names and compare
-  LPWSTR path_a = NULL;
-  LPWSTR path_b = NULL;
-  bool toret = false;
-
-  path_a = utf8_to_mb(a);
-  if (!path_a) goto err;
-
-  path_b = utf8_to_mb(b);
-  if (!path_b) goto err;
-
-  CharUpperW(path_a);
-  CharUpperW(path_b);
-
-  toret = !wcscmp(path_a, path_b);
-
-  if (false) {
-  err:
-    // XXX: if there was actually an error it would be nice
-    //      to return that, instead we just abort()
-    abort();
-  }
-
-  free(path_a);
-  free(path_b);
-
-  return toret;
-}
-
-const char *
-fs_win32_path_sep(fs_win32_handle_t fs) {
-  ASSERT_VALID_FS(fs);
-  return "\\";
 }
 
 bool
@@ -828,9 +786,7 @@ fs_win32_path_is_valid(fs_win32_handle_t fs,
   if (!path) return false;
 
   if (strlen(path) >= 3 &&
-      /* we only allow upper case roots for now,
-         since the interface currently allows bytewise comparisons for roots */
-      (/*('a' <= path[0] && path[0] <= 'z') || */
+      (('a' <= path[0] && path[0] <= 'z') ||
        ('A' <= path[0] && path[0] <= 'Z')) &&
       path[1] == ':' && path[2] == '\\') {
     return true;
@@ -841,7 +797,7 @@ fs_win32_path_is_valid(fs_win32_handle_t fs,
   return false;
 }
 
-bool
+static bool
 fs_win32_path_component_is_valid(fs_win32_handle_t fs,
                                  const char *component) {
 /* lots of restrictions here:
@@ -875,3 +831,49 @@ http://msdn.microsoft.com/en-us/library/windows/desktop/aa365247(v=vs.85).aspx
   return true;
 }
 
+char *
+fs_win32_path_dirname(fs_posix_handle_t fs, const char *path) {
+  ASSERT_VALID_FS(fs);
+  assert(fs_posix_path_is_valid(fs, path));
+
+  if (fs_posix_path_is_root(fs, path)) {
+    return davfuse_util_strdup(path);
+  }
+
+  const char *end_of_path = strrchr(path, '\\');
+  /* a valid path would have a \ character in it */
+  assert(end_of_path);
+
+  /* if this last \ character, then that means the dirname
+     is a root, so we want to keep the \ character */
+  if (end_of_path[-1] == ':' &&
+      (('a' <= end_of_path[-2] && end_of_path[-2] <= 'z') ||
+       ('A' <= end_of_path[-2] && end_of_path[-2] <= 'Z'))) {
+    end_of_path += 1;
+  }
+
+  return strndup_x(path, end_of_path - path);
+}
+
+char *
+fs_win32_path_basename(fs_posix_handle_t fs, const char *path) {
+  ASSERT_VALID_FS(fs);
+  assert(fs_posix_path_is_valid(fs, path));
+
+  if (fs_win32_path_is_root(fs, path)) {
+    return davfuse_util_strdup(path);
+  }
+
+  return fs_helpers_basename("\\", path);
+}
+
+char *
+fs_win32_path_join(fs_posix_handle_t fs,
+                   const char *dirname, const char *basename) {
+  ASSERT_VALID_FS(fs);
+  assert(fs_posix_path_is_valid(fs, dirname));
+  if (!fs_win32_path_component_is_valid(fs, basename)) {
+    return NULL;
+  }
+  return fs_helpers_join("\\", path);
+}

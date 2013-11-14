@@ -187,19 +187,6 @@ fs_dynamic_path_is_root(fs_dynamic_handle_t fs, const char *a) {
   return fs_dyn->ops->path_is_root(fs_dyn->fs, a);
 }
 
-const char *
-fs_dynamic_path_sep(fs_dynamic_handle_t fs) {
-  FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
-  return fs_dyn->ops->path_sep(fs_dyn->fs);
-}
-
-bool
-fs_dynamic_path_component_equals(fs_dynamic_handle_t fs,
-                                 const char *a, const char *b) {
-  FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
-  return fs_dyn->ops->path_component_equals(fs_dyn->fs, a, b);
-}
-
 bool
 fs_dynamic_path_is_valid(fs_dynamic_handle_t fs,
                          const char *path) {
@@ -207,9 +194,21 @@ fs_dynamic_path_is_valid(fs_dynamic_handle_t fs,
   return fs_dyn->ops->path_is_valid(fs_dyn->fs, path);
 }
 
-bool
-fs_dynamic_path_component_is_valid(fs_dynamic_handle_t fs,
-                                   const char *comp) {
+char *
+fs_dynamic_path_dirname(fs_dynamic_handle_t fs, const char *path) {
   FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
-  return fs_dyn->ops->path_component_is_valid(fs_dyn->fs, comp);
+  return fs_dyn->ops->path_dirname(fs_dyn->fs, path);
+}
+
+char *
+fs_dynamic_path_basename(fs_dynamic_handle_t fs, const char *path) {
+  FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
+  return fs_dyn->ops->path_basename(fs_dyn->fs, path);
+}
+
+char *
+fs_dynamic_path_join(fs_dynamic_handle_t fs,
+                     const char *dirname, const char *basename) {
+  FsDynamic *fs_dyn = fs_handle_to_pointer(fs);
+  return fs_dyn->ops->path_join(fs_dyn->fs, dirname, basename);
 }

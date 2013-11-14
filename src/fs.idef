@@ -37,7 +37,7 @@ close
 set_times
 destroy
 path_is_root
-path_component_equals
-path_sep
 path_is_valid
-path_component_is_valid
+path_basename
+path_dirname
+path_join

@@ -23,6 +23,7 @@
 #include "fs_posix.h"
 
 #include "fd_utils.h"
+#include "fs_helpers.h"
 #include "fstatat.h"
 #include "util.h"
 
@@ -457,35 +458,6 @@ fs_posix_rename(fs_posix_handle_t fs,
   return FS_ERROR_SUCCESS;
 }
 
-bool
-fs_posix_destroy(fs_posix_handle_t fs) {
-  ASSERT_VALID_FS(fs);
-  return true;
-}
-
-bool
-fs_posix_path_is_root(fs_posix_handle_t fs, const char *a) {
-  ASSERT_VALID_FS(fs);
-  assert(fs_posix_path_is_valid(fs, a));
-
-  return str_equals(a, "/");
-}
-
-bool
-fs_posix_path_component_equals(fs_posix_handle_t fs,
-                               const char *a, const char *b) {
-  ASSERT_VALID_FS(fs);
-
-  return str_equals(a, b);
-}
-
-const char *
-fs_posix_path_sep(fs_posix_handle_t fs) {
-  ASSERT_VALID_FS(fs);
-
-  return "/";
-}
-
 fs_error_t
 fs_posix_set_times(fs_posix_handle_t fs,
                    const char *path,
@@ -517,16 +489,69 @@ fs_posix_set_times(fs_posix_handle_t fs,
 }
 
 bool
-fs_posix_path_is_valid(fs_posix_handle_t fs,
-                       const char *path) {
+fs_posix_destroy(fs_posix_handle_t fs) {
   ASSERT_VALID_FS(fs);
-  /* TODO: check if path is valid UTF-8 */
-  return path && path[0] == '/';
+  return true;
 }
 
 bool
+fs_posix_path_is_root(fs_posix_handle_t fs, const char *path) {
+  ASSERT_VALID_FS(fs);
+  assert(fs_posix_path_is_valid(fs, path));
+  return str_equals(path, "/");
+}
+
+bool
+fs_posix_path_is_valid(fs_posix_handle_t fs,
+                       const char *path) {
+  ASSERT_VALID_FS(fs);
+  return (str_startswith(path, "/") &&
+          (str_equals(path, "/") || !str_endswith(path, "/")));
+}
+
+char *
+fs_posix_path_dirname(fs_posix_handle_t fs, const char *path) {
+  ASSERT_VALID_FS(fs);
+  assert(fs_posix_path_is_valid(fs, path));
+
+  if (fs_posix_path_is_root(fs, path)) {
+    return davfuse_util_strdup(path);
+  }
+
+  const char *end_of_path = strrchr(path, '/');
+  if (end_of_path == path) {
+    return davfuse_util_strdup("/");
+  }
+
+  return strndup_x(path, end_of_path - path);
+}
+
+char *
+fs_posix_path_basename(fs_posix_handle_t fs, const char *path) {
+  ASSERT_VALID_FS(fs);
+  assert(fs_posix_path_is_valid(fs, path));
+
+  if (fs_posix_path_is_root(fs, path)) {
+    return davfuse_util_strdup(path);
+  }
+
+  return fs_helpers_basename("/", path);
+}
+
+static bool
 fs_posix_path_component_is_valid(fs_posix_handle_t fs,
                                  const char *component) {
   ASSERT_VALID_FS(fs);
   return !strchr(component, '/');
+}
+
+char *
+fs_posix_path_join(fs_posix_handle_t fs,
+                   const char *dirname, const char *basename) {
+  ASSERT_VALID_FS(fs);
+  assert(fs_posix_path_is_valid(fs, dirname));
+  if (!fs_posix_path_component_is_valid(fs, basename)) {
+    return NULL;
+  }
+  return fs_helpers_join("/", dirname, basename);
 }
