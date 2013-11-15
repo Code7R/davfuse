@@ -50,6 +50,7 @@ typedef enum {
 typedef intmax_t fs_time_t;
 typedef intmax_t fs_off_t;
 typedef uintmax_t fs_file_id_t;
+typedef uintmax_t fs_volume_id_t;
 
 enum {
   FS_INVALID_TIME = INTMAX_MAX,
@@ -62,6 +63,7 @@ typedef struct {
   bool is_directory;
   fs_off_t size;
   fs_file_id_t file_id;
+  fs_volume_id_t volume_id;
 } FsAttrs;
 
 #ifdef __cplusplus

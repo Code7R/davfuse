@@ -138,6 +138,7 @@ fill_attrs(FsAttrs *attrs, struct stat *st) {
     .is_directory = S_ISDIR(st->st_mode),
     .size = st->st_size,
     .file_id = st->st_ino,
+    .volume_id = st->st_dev,
   };
 }
 

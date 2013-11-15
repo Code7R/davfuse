@@ -519,7 +519,8 @@ fs_win32_readdir(fs_win32_handle_t fs, fs_win32_directory_handle_t dir_handle,
         *attrs_is_filled = true;
       }
       if (attrs) {
-
+        /* TODO: we can't get file_id info from this structure
+           we have use to GetFileInformationByHandle */
         *attrs = FILL_ATTRS(h->last_find_data);
       }
     }
