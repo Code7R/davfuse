@@ -719,6 +719,24 @@ _webdav_backend_fs_copy_move(WebdavBackendFs *pbctx,
     goto done;
   }
 
+  /* if this is a move and an overwrite, first attempt native fs method
+     NB: This is not an optimization, we need this for correctness when
+     the user is changing the case of a file on a case-insensitive FS
+     (otherwise we'll delete the source inadvertently while trying to
+     delete whatever is at the destination)
+     */
+  if (is_move && overwrite) {
+    fs_error_t ret_rename = fs_rename(pbctx->fs, file_path, destination_path);
+    if (ret_rename) {
+      log_info("Error while calling eagerly calling rename(\"%s\", \"%s\")",
+               file_path, destination_path);
+    }
+    else {
+      err = WEBDAV_ERROR_NONE;
+      goto done;
+    }
+  }
+
   /* kill directory if we're overwriting it */
   if (dst_existed) {
     if (!overwrite) {
