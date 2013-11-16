@@ -201,7 +201,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
   log_info("fdevent select main loop started");
 
   while (true) {
-    fd_set readfds, writefds;
+    fd_set readfds, writefds, errorfds;
     int nfds = -1;
     unsigned readfds_watched = 0;
     unsigned writefds_watched = 0;
@@ -211,6 +211,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
 
     FD_ZERO(&readfds);
     FD_ZERO(&writefds);
+    FD_ZERO(&errorfds);
 
     while (ll) {
       if (!ll->active) {
@@ -223,12 +224,14 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
       if (ll->ew.events.read && !MY_FD_ISSET(ll->ew.sock, &readfds)) {
         log_debug("Adding fd %d to read set", ll->ew.sock);
         MY_FD_SET(ll->ew.sock, &readfds);
+        MY_FD_SET(ll->ew.sock, &errorfds);
         readfds_watched += 1;
       }
 
       if (ll->ew.events.write && !MY_FD_ISSET(ll->ew.sock, &writefds)) {
         log_debug("Adding fd %d to write set", ll->ew.sock);
         MY_FD_SET(ll->ew.sock, &writefds);
+        MY_FD_SET(ll->ew.sock, &errorfds);
         writefds_watched += 1;
       }
 
@@ -259,15 +262,9 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
     log_debug("before select");
     bool select_error = false;
     if (ACTUALLY_WAIT_ON_SELECT) {
-      fd_set *const readfds_ptr = readfds_watched
-        ? &readfds
-        : NULL;
-      fd_set *const writefds_ptr = writefds_watched
-        ? &writefds
-        : NULL;
       while (true) {
         int ret_select =
-          select(nfds + 1, readfds_ptr, writefds_ptr, NULL, NULL);
+          select(nfds + 1, &readfds, &writefds, &errorfds, NULL);
 
         if (ret_select == SOCKET_ERROR &&
             last_socket_error() == SOCKET_EINTR) {
@@ -289,12 +286,14 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
     /* now dispatch on events */
     for (ll = loop->ll; ll; ll = ll->next) {
       if (ll->active) {
-        const StreamEvents events = select_error
+        const bool sock_error = (select_error ||
+                                 MY_FD_ISSET(ll->ew.sock, &errorfds));
+        const StreamEvents events = sock_error
           ? create_stream_events(false, false)
           : create_stream_events(MY_FD_ISSET(ll->ew.sock, &readfds),
                                  MY_FD_ISSET(ll->ew.sock, &writefds));
 
-        if (select_error ||
+        if (sock_error ||
             (events.read && ll->ew.events.read) ||
             (events.write && ll->ew.events.write)) {
           /* NB: this just marks removal, doesn't actually free */
@@ -305,7 +304,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
               .loop = loop,
               .fd = fd_from_socket(ll->ew.sock),
               .events = events,
-              .error = select_error,
+              .error = sock_error,
             };
             assert(e.fd >= 0);
             ll->ew.handler(EVENT_LOOP_FD_EVENT, &e, ll->ew.ud);
@@ -315,7 +314,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
               .loop = loop,
               .socket = ll->ew.sock,
               .events = events,
-              .error = select_error,
+              .error = sock_error,
             };
             ll->ew.handler(EVENT_LOOP_SOCKET_EVENT, &e, ll->ew.ud);
           }
