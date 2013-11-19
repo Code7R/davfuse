@@ -41,6 +41,17 @@ typedef struct {
 UTHR_DEFINE(_util_event_loop_socket_read_uthr) {
   UTHR_HEADER(SocketReadCtx, ctx);
 
+  /* first we set a 0-timeout to reset stack
+     this is roughly okay because system reads are implicitly expensive */
+  EventLoopTimeout timeout = {0, 0};
+  bool success_wait = event_loop_timeout_add(ctx->loop, &timeout,
+                                             _util_event_loop_socket_read_uthr, ctx,
+                                             NULL);
+  if (!success_wait) log_warning("Couldn't set up stack-reset timeout");
+  else {
+    UTHR_YIELD(ctx, 0);
+  }
+
   socket_ssize_t ret;
   while (true) {
     ret = recv(ctx->sock, ctx->buf, ctx->nbyte, 0);

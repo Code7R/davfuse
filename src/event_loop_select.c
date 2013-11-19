@@ -24,6 +24,7 @@
 #include "events.h"
 #include "logging.h"
 #include "sockets.h"
+#include "util.h"
 #include "util_sockets.h"
 
 #include "event_loop_select.h"
@@ -51,35 +52,118 @@ enum {
   ACTUALLY_WAIT_ON_SELECT=true,
 };
 
+typedef clock_t monotonic_time_t;
+static const monotonic_time_t ERR_MONOTONIC_TIME = -1;
+#define MONOTONIC_TIME_PER_SEC CLOCKS_PER_SEC
+
 /* opaque structures */
 typedef struct {
   bool is_fd_watch;
   socket_t sock;
-  void *ud;
   StreamEvents events;
   event_handler_t handler;
+  void *ud;
 } EventLoopSelectWatcher;
 
-typedef struct _event_loop_select_link {
-  EventLoopSelectWatcher ew;
-  struct _event_loop_select_link *prev;
-  struct _event_loop_select_link *next;
-  bool active;
-} EventLoopSelectLink;
+typedef struct {
+  clock_t end_clock;
+  event_handler_t handler;
+  void *ud;
+} EventLoopSelectTimeoutCtx;
+
+#define DEFINE_LL(_name, inner_type, inner_name)        \
+  struct _name {                                        \
+    inner_type inner_name;                              \
+    struct _name *prev;                                 \
+    struct _name *next;                                 \
+    bool is_active;                                     \
+  }
+
+DEFINE_LL(_event_loop_select_watch_link,
+          EventLoopSelectWatcher, watch);
+DEFINE_LL(_event_loop_select_timeout_link,
+          EventLoopSelectTimeoutCtx, timeout);
+
+typedef struct _event_loop_select_watch_link EventLoopSelectLink;
+typedef struct _event_loop_select_timeout_link EventLoopSelectTimeoutLink;
 
 typedef struct _event_loop_select_handle {
   EventLoopSelectLink *ll;
+  EventLoopSelectTimeoutLink *timeout_ll;
 } EventLoopSelectLoop;
+
+#define DEFINE_ADD_LL_FN(name, LINK_TYPE, INNER_TYPE, INNER_NAME)  \
+  bool                                                  \
+  name(const INNER_TYPE *data, LINK_TYPE **root_ptr, LINK_TYPE **key) { \
+    LINK_TYPE *timeout_ll;                              \
+    timeout_ll = malloc(sizeof(*timeout_ll));           \
+    if (!timeout_ll) return false;                      \
+                                                        \
+    *timeout_ll = (LINK_TYPE) {                         \
+      .INNER_NAME = *data,                              \
+      .prev = NULL,                                     \
+      .next = NULL,                                     \
+      .is_active = true,                                \
+    };                                                  \
+                                                        \
+    if (*root_ptr) {                                                    \
+      (*root_ptr)->prev = timeout_ll;                                   \
+      timeout_ll->next = *root_ptr;                                     \
+    }                                                                   \
+                                                                        \
+    *root_ptr = timeout_ll;                                             \
+                                                                        \
+    if (key) *key = timeout_ll;                                         \
+                                                                        \
+    return true;                                                        \
+  }
+
+static
+DEFINE_ADD_LL_FN(_add_watch_link, EventLoopSelectLink,
+                 EventLoopSelectWatcher, watch);
+
+static
+DEFINE_ADD_LL_FN(_add_timeout_link, EventLoopSelectTimeoutLink,
+                 EventLoopSelectTimeoutCtx, timeout);
+
+#define FREE_LINK(root_ptr, link_ptr) \
+  do {                                \
+    if ((link_ptr)->prev) {           \
+      ll->prev->next = ll->next;      \
+    }                                 \
+                                      \
+    if ((link_ptr)->next) {           \
+      ll->next->prev = ll->prev;      \
+    }                                 \
+                                      \
+    if ((link_ptr) == *(root_ptr)) {          \
+      assert(!(link_ptr)->prev);              \
+      *(root_ptr) = (link_ptr)->next;         \
+    }                                 \
+                                      \
+    free(link_ptr);                   \
+  }                                   \
+  while (false)
+
+static
+bool
+timeout_is_triggered(EventLoopSelectTimeoutCtx *timeout_ctx,
+                     monotonic_time_t curclock) {
+  return timeout_ctx->end_clock < curclock;
+}
+
+static
+monotonic_time_t
+monotonic_time() {
+  /* XXX: on some platforms (not mac, windows, linux)
+     clock() can return the time of child processes waited
+     on during wait*() */
+  return clock();
+}
 
 event_loop_select_handle_t
 event_loop_select_default_new(void) {
-  EventLoopSelectLoop *loop = malloc(sizeof(*loop));
-  if (!loop) {
-    return NULL;
-  }
-
-  loop->ll = NULL;
-  return loop;
+  return calloc(1, sizeof(EventLoopSelectLoop));
 }
 
 bool
@@ -98,44 +182,18 @@ _event_loop_select_watch_add(event_loop_select_handle_t loop,
                              event_handler_t handler,
                              void *ud,
                              event_loop_select_watch_key_t *key) {
-  EventLoopSelectLink *ew;
-
   assert(loop);
   assert(handler);
 
-  ew = malloc(sizeof(*ew));
-  if (!ew) {
-    *key = 0;
-    return false;
-  }
-
-  *ew = (EventLoopSelectLink) {
-    .ew = {
-      .is_fd_watch = is_fd_watch,
-      .sock = sock,
-      .ud = ud,
-      .events = events,
-      .handler = handler
-    },
-    .prev = NULL,
-    .next = NULL,
-    .active = true,
+  EventLoopSelectWatcher watch = {
+    .is_fd_watch = is_fd_watch,
+    .sock = sock,
+    .ud = ud,
+    .events = events,
+    .handler = handler
   };
 
-  if (loop->ll) {
-    ew->next = loop->ll;
-    loop->ll->prev = ew;
-    loop->ll = ew;
-  }
-  else {
-    loop->ll = ew;
-  }
-
-  if (key) {
-    *key = ew;
-  }
-
-  return true;
+  return _add_watch_link(&watch, &loop->ll, key);
 }
 
 bool
@@ -161,39 +219,51 @@ event_loop_select_fd_watch_add(event_loop_select_handle_t loop,
                                       ud, key);
 }
 
-NON_NULL_ARGS0() bool
+bool
 event_loop_select_watch_remove(event_loop_select_handle_t loop,
                                event_loop_select_watch_key_t key) {
   UNUSED(loop);
-
-  /* event_loop_select_watch_key_t types are actually pointers to EventLoopSelectLink types */
-  EventLoopSelectLink *ll = key;
-
   assert(loop);
   assert(loop->ll);
   assert(key);
-
-  ll->active = false;
-
+  assert(key->is_active);
+  /* TODO: assert that this watch is apart of this loop */
+  key->is_active = false;
   return true;
 }
 
-static void
-_actually_free_link(EventLoopSelectLoop *loop, EventLoopSelectLink *ll) {
-  if (ll->prev) {
-    ll->prev->next = ll->next;
-  }
+bool
+event_loop_select_timeout_add(event_loop_select_handle_t loop,
+                              const EventLoopSelectTimeout *timeout,
+                              event_handler_t handler,
+                              void *ud,
+                              event_loop_select_timeout_key_t *key) {
+  assert(loop);
+  assert(timeout);
+  assert(handler);
 
-  if (ll->next) {
-    ll->next->prev = ll->prev;
-  }
+  monotonic_time_t cur_clock = monotonic_time();
+  if (cur_clock == ERR_MONOTONIC_TIME) return false;
 
-  if (ll == loop->ll) {
-    assert(!ll->prev);
-    loop->ll = ll->next;
-  }
+  EventLoopSelectTimeoutCtx timeout_ctx = {
+    .end_clock = timeout->sec * MONOTONIC_TIME_PER_SEC + cur_clock,
+    .handler = handler,
+    .ud = ud,
+  };
 
-  free(ll);
+  return _add_timeout_link(&timeout_ctx, &loop->timeout_ll, key);
+}
+
+bool
+event_loop_select_timeout_remove(event_loop_select_handle_t loop,
+                                 event_loop_select_timeout_key_t key) {
+  UNUSED(loop);
+  assert(loop->ll);
+  assert(key);
+  assert(key->is_active);
+  /* TODO: assert that this timeout is apart of this loop */
+  key->is_active = false;
+  return true;
 }
 
 bool
@@ -201,42 +271,63 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
   log_info("fdevent select main loop started");
 
   while (true) {
+    log_debug("Looping...");
+
+    /* first clear out inactive timeouts and
+       find select wait time
+     */
+    bool select_stop_clock_is_enabled = false;
+    monotonic_time_t select_stop_clock;
+    for (EventLoopSelectTimeoutLink *ll = loop->timeout_ll; ll;) {
+      if (ll->is_active) {
+        select_stop_clock = select_stop_clock_is_enabled
+          ? ll->timeout.end_clock
+          : MIN(ll->timeout.end_clock, select_stop_clock);
+
+        if (!select_stop_clock_is_enabled) select_stop_clock_is_enabled = true;
+        ll = ll->next;
+        continue;
+      }
+      else {
+        EventLoopSelectTimeoutLink *tmpll = ll->next;
+        FREE_LINK(&loop->timeout_ll, ll);
+        ll = tmpll;
+      }
+    }
+
     fd_set readfds, writefds, errorfds;
     int nfds = -1;
     unsigned readfds_watched = 0;
     unsigned writefds_watched = 0;
-    EventLoopSelectLink *ll = loop->ll;
-
-    log_debug("Looping...");
 
     FD_ZERO(&readfds);
     FD_ZERO(&writefds);
     FD_ZERO(&errorfds);
 
-    while (ll) {
-      if (!ll->active) {
+    for (EventLoopSelectLink *ll = loop->ll; ll;) {
+      if (!ll->is_active) {
         EventLoopSelectLink *tmpll = ll->next;
-        _actually_free_link(loop, ll);
+        FREE_LINK(&loop->ll, ll);
         ll = tmpll;
         continue;
       }
 
-      if (ll->ew.events.read && !MY_FD_ISSET(ll->ew.sock, &readfds)) {
-        log_debug("Adding fd %d to read set", ll->ew.sock);
-        MY_FD_SET(ll->ew.sock, &readfds);
-        MY_FD_SET(ll->ew.sock, &errorfds);
+      if (ll->watch.events.read && !MY_FD_ISSET(ll->watch.sock, &readfds)) {
+        log_debug("Adding fd %d to read set", ll->watch.sock);
+        MY_FD_SET(ll->watch.sock, &readfds);
+        MY_FD_SET(ll->watch.sock, &errorfds);
         readfds_watched += 1;
       }
 
-      if (ll->ew.events.write && !MY_FD_ISSET(ll->ew.sock, &writefds)) {
-        log_debug("Adding fd %d to write set", ll->ew.sock);
-        MY_FD_SET(ll->ew.sock, &writefds);
-        MY_FD_SET(ll->ew.sock, &errorfds);
+      if (ll->watch.events.write && !MY_FD_ISSET(ll->watch.sock, &writefds)) {
+        log_debug("Adding fd %d to write set", ll->watch.sock);
+        MY_FD_SET(ll->watch.sock, &writefds);
+        MY_FD_SET(ll->watch.sock, &errorfds);
         writefds_watched += 1;
       }
 
-      if ((int) ll->ew.sock > nfds) {
-        nfds = ll->ew.sock;
+      if ((int) ll->watch.sock > nfds) {
+        nfds = ll->watch.sock;
       }
 
       ll = ll->next;
@@ -255,7 +346,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
     }
 
     /* if there is nothing to select for, then stop the main loop */
-    if (!readfds_watched && !writefds_watched) {
+    if (!readfds_watched && !writefds_watched && !select_stop_clock_is_enabled) {
       return true;
     }
 
@@ -263,8 +354,28 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
     bool select_error = false;
     if (ACTUALLY_WAIT_ON_SELECT) {
       while (true) {
+        struct timeval *select_timeout_p;
+        struct timeval select_timeout;
+        if (select_stop_clock_is_enabled) {
+          monotonic_time_t curclock = monotonic_time();
+          if (curclock == ERR_MONOTONIC_TIME) {
+            log_error("monotonic_time() failed, just polling...");
+            select_timeout = (struct timeval) {0, 0};
+          }
+          else {
+            select_timeout = (struct timeval) {
+              (select_stop_clock > curclock
+               ? (select_stop_clock - curclock) / MONOTONIC_TIME_PER_SEC
+               : 0),
+              0,
+            };
+          }
+          select_timeout_p = &select_timeout;
+        }
+        else select_timeout_p = NULL;
+
         int ret_select =
-          select(nfds + 1, &readfds, &writefds, &errorfds, NULL);
+          select(nfds + 1, &readfds, &writefds, &errorfds, select_timeout_p);
 
         if (ret_select == SOCKET_ERROR &&
             last_socket_error() == SOCKET_EINTR) {
@@ -283,42 +394,56 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
     }
     log_debug("after select");
 
-    /* now dispatch on events */
-    for (ll = loop->ll; ll; ll = ll->next) {
-      if (ll->active) {
-        const bool sock_error = (select_error ||
-                                 MY_FD_ISSET(ll->ew.sock, &errorfds));
-        const StreamEvents events = sock_error
-          ? create_stream_events(false, false)
-          : create_stream_events(MY_FD_ISSET(ll->ew.sock, &readfds),
-                                 MY_FD_ISSET(ll->ew.sock, &writefds));
+    /* trigger timeouts that have activated */
+    monotonic_time_t curclock = monotonic_time();
+    /* TODO: handle this error */
+    ASSERT_TRUE(curclock != ERR_MONOTONIC_TIME);
+    for (EventLoopSelectTimeoutLink *ll = loop->timeout_ll; ll; ll = ll->next) {
+      if (!ll->is_active) continue;
+      if (!timeout_is_triggered(&ll->timeout, curclock)) continue;
 
-        if (sock_error ||
-            (events.read && ll->ew.events.read) ||
-            (events.write && ll->ew.events.write)) {
-          /* NB: this just marks removal, doesn't actually free */
-          event_loop_select_watch_remove(loop, ll);
+      ll->is_active = false;
+      ll->timeout.handler(EVENT_LOOP_TIMEOUT_EVENT, NULL, ll->timeout.ud);
+    }
 
-          if (ll->ew.is_fd_watch) {
-            EventLoopSelectFdEvent e = {
-              .loop = loop,
-              .fd = fd_from_socket(ll->ew.sock),
-              .events = events,
-              .error = sock_error,
-            };
-            assert(e.fd >= 0);
-            ll->ew.handler(EVENT_LOOP_FD_EVENT, &e, ll->ew.ud);
-          }
-          else {
-            EventLoopSelectSocketEvent e = {
-              .loop = loop,
-              .socket = ll->ew.sock,
-              .events = events,
-              .error = sock_error,
-            };
-            ll->ew.handler(EVENT_LOOP_SOCKET_EVENT, &e, ll->ew.ud);
-          }
-        }
+    /* now dispatch io events */
+    for (EventLoopSelectLink *ll = loop->ll; ll; ll = ll->next) {
+      if (!ll->is_active) continue;
+
+      const bool sock_error = (select_error ||
+                               MY_FD_ISSET(ll->watch.sock, &errorfds));
+      const StreamEvents events = sock_error
+        ? create_stream_events(false, false)
+        : create_stream_events(MY_FD_ISSET(ll->watch.sock, &readfds),
+                               MY_FD_ISSET(ll->watch.sock, &writefds));
+
+      /* if the io event was not triggered, continue */
+      if (!sock_error &&
+          !(events.read && ll->watch.events.read) &&
+          !(events.write && ll->watch.events.write)) continue;
+
+      /* before triggering the handler, mark it inactive
+         (all watches are one-shot) */
+      ll->is_active = false;
+
+      if (ll->watch.is_fd_watch) {
+        EventLoopSelectFdEvent e = {
+          .loop = loop,
+          .fd = fd_from_socket(ll->watch.sock),
+          .events = events,
+          .error = sock_error,
+        };
+        assert(e.fd >= 0);
+        ll->watch.handler(EVENT_LOOP_FD_EVENT, &e, ll->watch.ud);
+      }
+      else {
+        EventLoopSelectSocketEvent e = {
+          .loop = loop,
+          .socket = ll->watch.sock,
+          .events = events,
+          .error = sock_error,
+        };
+        ll->watch.handler(EVENT_LOOP_SOCKET_EVENT, &e, ll->watch.ud);
       }
     }
   }

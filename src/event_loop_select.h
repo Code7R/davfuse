@@ -20,6 +20,7 @@
 #define _EVENT_LOOP_SELECT_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "c_util.h"
 #include "events.h"
@@ -34,10 +35,12 @@ extern "C" {
 
 /* forward decl */
 struct _event_loop_select_handle;
-struct _event_loop_select_link;
+struct _event_loop_select_watch_link;
+struct _event_loop_select_timeout_link;
 
 typedef struct _event_loop_select_handle *event_loop_select_handle_t;
-typedef struct _event_loop_select_link *event_loop_select_watch_key_t;
+typedef struct _event_loop_select_watch_link *event_loop_select_watch_key_t;
+typedef struct _event_loop_select_timeout_link *event_loop_select_timeout_key_t;
 
 #define _INCLUDE_EVENT_LOOP_COMMON_H
 #include "_event_loop_common.h"
@@ -57,9 +60,15 @@ typedef struct {
   bool error;
 } EventLoopSelectFdEvent;
 
+typedef struct {
+  uint64_t sec;
+  uint64_t nsec;
+} EventLoopSelectTimeout;
+
 event_loop_select_handle_t
 event_loop_select_default_new();
 
+NON_NULL_ARGS2(1, 4)
 bool
 event_loop_select_socket_watch_add(event_loop_select_handle_t loop,
                                    socket_t fd,
@@ -68,6 +77,7 @@ event_loop_select_socket_watch_add(event_loop_select_handle_t loop,
                                    void *ud,
                                    event_loop_select_watch_key_t *key);
 
+NON_NULL_ARGS2(1, 4)
 bool
 event_loop_select_fd_watch_add(event_loop_select_handle_t loop,
                                int fd,
@@ -76,13 +86,29 @@ event_loop_select_fd_watch_add(event_loop_select_handle_t loop,
                                void *ud,
                                event_loop_select_watch_key_t *key);
 
+NON_NULL_ARGS2(1, 2)
 bool
 event_loop_select_watch_remove(event_loop_select_handle_t wt,
                                event_loop_select_watch_key_t key);
 
+NON_NULL_ARGS3(1, 2, 3)
+bool
+event_loop_select_timeout_add(event_loop_select_handle_t loop,
+                              const EventLoopSelectTimeout *timeout,
+                              event_handler_t handler,
+                              void *ud,
+                              event_loop_select_timeout_key_t *key);
+
+NON_NULL_ARGS()
+bool
+event_loop_select_timeout_remove(event_loop_select_handle_t loop,
+                                 event_loop_select_timeout_key_t key);
+
+NON_NULL_ARGS1(1)
 bool
 event_loop_select_main_loop(event_loop_select_handle_t loop);
 
+NON_NULL_ARGS1(1)
 bool
 event_loop_select_destroy(event_loop_select_handle_t loop);
 

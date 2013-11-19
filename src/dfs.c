@@ -39,7 +39,7 @@ clear_pointer_postorder(void *p) {
   return (void *)(((intptr_t) p) & ~0x1);
 }
 
-NON_NULL_ARGS3(1, 3, 4) depth_first_t
+depth_first_t
 dfs_create(void *init,
            bool is_postorder,
            expand_fn expand_,
@@ -64,7 +64,7 @@ dfs_create(void *init,
   return df;
 }
 
-NON_NULL_ARGS0() void *
+void *
 dfs_next(depth_first_t ctx) {
   CRBEGIN(ctx->coropos);
 
@@ -119,12 +119,11 @@ my_free(void *p, void *ud) {
   ctx->free_(ctx->user_data, clear_pointer_postorder(p));
 }
 
-NON_NULL_ARGS0() void
+void
 dfs_destroy(depth_first_t ctx) {
   linked_list_free_ud(ctx->stack, my_free, ctx);
   free(ctx);
 }
-
 
 void
 dfs_ignore_user_data_free(void *ctx, void *ptr) {

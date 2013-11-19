@@ -1516,7 +1516,7 @@ UTHR_DEFINE(c_get_request) {
   UTHR_FOOTER();
 }
 
-NON_NULL_ARGS0() bool
+bool
 http_response_add_header(HTTPResponseHeaders *rsp,
                          const char *name, const char *value_fmt, ...) {
   if (NELEMS(rsp->headers) == rsp->num_headers) {

@@ -46,10 +46,10 @@ dfs_create(void *init,
            free_fn free_,
            void *user_data);
 
-NON_NULL_ARGS0() void *
+NON_NULL_ARGS() void *
 dfs_next(depth_first_t t);
 
-NON_NULL_ARGS0() void
+NON_NULL_ARGS() void
 dfs_destroy(depth_first_t t);
 
 void

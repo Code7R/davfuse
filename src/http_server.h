@@ -183,10 +183,10 @@ http_request_write(http_request_handle_t rh,
 		   const void *buf, size_t nbyte,
 		   event_handler_t cb, void *cb_ud);
 
-NON_NULL_ARGS0() void
+NON_NULL_ARGS() void
 http_request_end(http_request_handle_t rh);
 
-NON_NULL_ARGS0() const char *
+NON_NULL_ARGS() const char *
 http_get_header_value(const HTTPRequestHeaders *rhs, const char *header_name);
 
 HEADER_FUNCTION NON_NULL_ARGS1(1) bool

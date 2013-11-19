@@ -34,7 +34,7 @@ extern "C" {
 #define CONST_FUNCTION __attribute__ ((const))
 #define PURE_FUNCTION __attribute__ ((pure))
 
-#define NON_NULL_ARGS0() __attribute__ ((nonnull))
+#define NON_NULL_ARGS() __attribute__ ((nonnull))
 #define NON_NULL_ARGS1(a) __attribute__ ((nonnull (a)))
 #define NON_NULL_ARGS2(a, b) __attribute__ ((nonnull (a, b)))
 #define NON_NULL_ARGS3(a, b, c) __attribute__ ((nonnull (a, b, c)))
@@ -50,7 +50,7 @@ extern "C" {
 #define CONST_FUNCTION
 #define PURE_FUNCTION
 
-#define NON_NULL_ARGS0()
+#define NON_NULL_ARGS()
 #define NON_NULL_ARGS1(a)
 #define NON_NULL_ARGS2(a, b)
 #define NON_NULL_ARGS3(a, b, c)
