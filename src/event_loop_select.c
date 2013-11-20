@@ -151,12 +151,12 @@ timeout_is_triggered(EventLoopSelectTimeoutCtx *timeout_ctx,
 
 static
 bool
-uptime_in_seconds(uptime_mach_time_t *out) {
-  uptime_mach_time_t numer, denom;
-  bool success_timebase = uptime_mach_timebase(&numer, &denom);
+uptime_in_seconds(uptime_time_t *out) {
+  uptime_time_t numer, denom;
+  bool success_timebase = uptime_timebase(&numer, &denom);
   if (!success_timebase) return false;
-  uptime_mach_time_t uptime;
-  bool success_time = uptime_mach_time(&uptime);
+  uptime_time_t uptime;
+  bool success_time = uptime_time(&uptime);
   if (!success_time) return false;
   *out = uptime * numer / denom;
   return true;
