@@ -196,6 +196,7 @@ ${OUTROOT}/*/headers/fstatat.h: ${SRCROOT}/fstatat.idef
 ${OUTROOT}/*/headers/log_printer.h: ${SRCROOT}/log_printer.idef
 ${OUTROOT}/*/headers/sockets.h: ${SRCROOT}/sockets.idef
 ${OUTROOT}/*/headers/webdav_backend.h: ${SRCROOT}/webdav_backend.idef
+${OUTROOT}/*/headers/uptime.h: ${SRCROOT}/uptime.idef
 
 ${OUTROOT}/libwebdav_server_fs/headers/fs_native.h: ${SRCROOT}/fs.idef
 

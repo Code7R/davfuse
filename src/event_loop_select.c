@@ -24,6 +24,7 @@
 #include "events.h"
 #include "logging.h"
 #include "sockets.h"
+#include "uptime.h"
 #include "util.h"
 #include "util_sockets.h"
 
@@ -52,10 +53,6 @@ enum {
   ACTUALLY_WAIT_ON_SELECT=true,
 };
 
-typedef clock_t monotonic_time_t;
-static const monotonic_time_t ERR_MONOTONIC_TIME = -1;
-#define MONOTONIC_TIME_PER_SEC CLOCKS_PER_SEC
-
 /* opaque structures */
 typedef struct {
   bool is_fd_watch;
@@ -66,7 +63,7 @@ typedef struct {
 } EventLoopSelectWatcher;
 
 typedef struct {
-  clock_t end_clock;
+  uptime_time_t end_clock;
   event_handler_t handler;
   void *ud;
 } EventLoopSelectTimeoutCtx;
@@ -148,17 +145,21 @@ DEFINE_ADD_LL_FN(_add_timeout_link, EventLoopSelectTimeoutLink,
 static
 bool
 timeout_is_triggered(EventLoopSelectTimeoutCtx *timeout_ctx,
-                     monotonic_time_t curclock) {
+                     uptime_time_t curclock) {
   return timeout_ctx->end_clock < curclock;
 }
 
 static
-monotonic_time_t
-monotonic_time() {
-  /* XXX: on some platforms (not mac, windows, linux)
-     clock() can return the time of child processes waited
-     on during wait*() */
-  return clock();
+bool
+uptime_in_seconds(uptime_mach_time_t *out) {
+  uptime_mach_time_t numer, denom;
+  bool success_timebase = uptime_mach_timebase(&numer, &denom);
+  if (!success_timebase) return false;
+  uptime_mach_time_t uptime;
+  bool success_time = uptime_mach_time(&uptime);
+  if (!success_time) return false;
+  *out = uptime * numer / denom;
+  return true;
 }
 
 event_loop_select_handle_t
@@ -242,11 +243,12 @@ event_loop_select_timeout_add(event_loop_select_handle_t loop,
   assert(timeout);
   assert(handler);
 
-  monotonic_time_t cur_clock = monotonic_time();
-  if (cur_clock == ERR_MONOTONIC_TIME) return false;
+  uptime_time_t cur_clock;
+  bool success_uptime = uptime_in_seconds(&cur_clock);
+  if (!success_uptime) return false;
 
   EventLoopSelectTimeoutCtx timeout_ctx = {
-    .end_clock = timeout->sec * MONOTONIC_TIME_PER_SEC + cur_clock,
+    .end_clock = timeout->sec + cur_clock,
     .handler = handler,
     .ud = ud,
   };
@@ -277,7 +279,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
        find select wait time
      */
     bool select_stop_clock_is_enabled = false;
-    monotonic_time_t select_stop_clock;
+    uptime_time_t select_stop_clock;
     for (EventLoopSelectTimeoutLink *ll = loop->timeout_ll; ll;) {
       if (ll->is_active) {
         select_stop_clock = select_stop_clock_is_enabled
@@ -357,15 +359,16 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
         struct timeval *select_timeout_p;
         struct timeval select_timeout;
         if (select_stop_clock_is_enabled) {
-          monotonic_time_t curclock = monotonic_time();
-          if (curclock == ERR_MONOTONIC_TIME) {
-            log_error("monotonic_time() failed, just polling...");
+          uptime_time_t curclock;
+          bool success_uptime = uptime_in_seconds(&curclock);
+          if (!success_uptime) {
+            log_error("uptime_in_seconds() failed, just polling...");
             select_timeout = (struct timeval) {0, 0};
           }
           else {
             select_timeout = (struct timeval) {
               (select_stop_clock > curclock
-               ? (select_stop_clock - curclock) / MONOTONIC_TIME_PER_SEC
+               ? select_stop_clock - curclock
                : 0),
               0,
             };
@@ -395,9 +398,10 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
     log_debug("after select");
 
     /* trigger timeouts that have activated */
-    monotonic_time_t curclock = monotonic_time();
+    uptime_time_t curclock;
+    bool success_uptime = uptime_in_seconds(&curclock);
     /* TODO: handle this error */
-    ASSERT_TRUE(curclock != ERR_MONOTONIC_TIME);
+    ASSERT_TRUE(success_uptime);
     for (EventLoopSelectTimeoutLink *ll = loop->timeout_ll; ll; ll = ll->next) {
       if (!ll->is_active) continue;
       if (!timeout_is_triggered(&ll->timeout, curclock)) continue;

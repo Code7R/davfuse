@@ -21,9 +21,6 @@
 */
 #define _ISOC99_SOURCE
 
-/* TODO: replace this by something that is X-platform */
-#include <sys/time.h>
-
 #include <assert.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -38,6 +35,7 @@
 #include "http_server.h"
 #include "logging.h"
 #include "sockets.h"
+#include "uptime.h"
 #include "uthread.h"
 #include "util.h"
 #include "webdav_backend.h"
@@ -508,15 +506,13 @@ perform_write_lock(struct webdav_server *ws,
   }
 
   /* generate a lock token */
-  struct timeval curtime;
-  int ret = gettimeofday(&curtime, NULL);
-  if (ret < 0 ) {
-    return false;
-  }
+  uptime_time_t uptime;
+  bool success_uptime = uptime_time(&uptime);
+  if (!success_uptime) return false;
 
   char s_lock_token[256];
-  int len = snprintf(s_lock_token, sizeof(s_lock_token), "x-this-lock-token:///%ld.%ld",
-                     (long) curtime.tv_sec, (long) curtime.tv_usec);
+  int len = snprintf(s_lock_token, sizeof(s_lock_token), "x-this-lock-token:///%lu",
+                     (long unsigned) uptime);
   if (len < 0 || (size_t) len >= sizeof(s_lock_token)) {
     /* lock token string was too long */
     return false;
