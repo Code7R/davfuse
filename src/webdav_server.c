@@ -506,13 +506,13 @@ perform_write_lock(struct webdav_server *ws,
   }
 
   /* generate a lock token */
-  uptime_time_t uptime;
+  UptimeMachTimespec uptime;
   bool success_uptime = uptime_time(&uptime);
   if (!success_uptime) return false;
 
   char s_lock_token[256];
-  int len = snprintf(s_lock_token, sizeof(s_lock_token), "x-this-lock-token:///%lu",
-                     (long unsigned) uptime);
+  int len = snprintf(s_lock_token, sizeof(s_lock_token), "x-this-lock-token:///%lu.%lu",
+                     (long unsigned) uptime.seconds, (long unsigned) uptime.nanoseconds);
   if (len < 0 || (size_t) len >= sizeof(s_lock_token)) {
     /* lock token string was too long */
     return false;

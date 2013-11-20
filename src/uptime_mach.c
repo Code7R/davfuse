@@ -46,17 +46,11 @@ _ensure_timebase_info(void) {
 }
 
 bool
-uptime_mach_timebase(uptime_mach_time_t *numer, uptime_mach_time_t *denom) {
-  assert(numer);
-  assert(denom);
+uptime_mach_time(UptimeMachTimespec *out) {
   if (!_ensure_timebase_info()) return false;
-  *numer = _g_info.numer;
-  *denom = _g_info.denom * NANOSECONDS_PER_SECOND;
-  return true;
-}
-
-bool
-uptime_mach_time(uptime_mach_time_t *out) {
-  *out = mach_absolute_time();
+  uint64_t t = mach_absolute_time();
+  uint64_t nanos = t * _g_info.numer / _g_info.denom;
+  out->seconds = nanos / NANOSECONDS_PER_SECOND;
+  out->nanoseconds = nanos % NANOSECONDS_PER_SECOND;
   return true;
 }

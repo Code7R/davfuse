@@ -63,7 +63,7 @@ typedef struct {
 } EventLoopSelectWatcher;
 
 typedef struct {
-  uptime_time_t end_clock;
+  uint64_t end_clock;
   event_handler_t handler;
   void *ud;
 } EventLoopSelectTimeoutCtx;
@@ -145,20 +145,17 @@ DEFINE_ADD_LL_FN(_add_timeout_link, EventLoopSelectTimeoutLink,
 static
 bool
 timeout_is_triggered(EventLoopSelectTimeoutCtx *timeout_ctx,
-                     uptime_time_t curclock) {
+                     uint64_t curclock) {
   return timeout_ctx->end_clock < curclock;
 }
 
 static
 bool
-uptime_in_seconds(uptime_time_t *out) {
-  uptime_time_t numer, denom;
-  bool success_timebase = uptime_timebase(&numer, &denom);
-  if (!success_timebase) return false;
-  uptime_time_t uptime;
+uptime_in_seconds(uint64_t *out) {
+  UptimeTimespec uptime;
   bool success_time = uptime_time(&uptime);
   if (!success_time) return false;
-  *out = uptime * numer / denom;
+  *out = uptime.seconds;
   return true;
 }
 
@@ -243,7 +240,7 @@ event_loop_select_timeout_add(event_loop_select_handle_t loop,
   assert(timeout);
   assert(handler);
 
-  uptime_time_t cur_clock;
+  uint64_t cur_clock;
   bool success_uptime = uptime_in_seconds(&cur_clock);
   if (!success_uptime) return false;
 
@@ -279,7 +276,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
        find select wait time
      */
     bool select_stop_clock_is_enabled = false;
-    uptime_time_t select_stop_clock;
+    uint64_t select_stop_clock;
     for (EventLoopSelectTimeoutLink *ll = loop->timeout_ll; ll;) {
       if (ll->is_active) {
         select_stop_clock = select_stop_clock_is_enabled
@@ -359,7 +356,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
         struct timeval *select_timeout_p;
         struct timeval select_timeout;
         if (select_stop_clock_is_enabled) {
-          uptime_time_t curclock;
+          uint64_t curclock;
           bool success_uptime = uptime_in_seconds(&curclock);
           if (!success_uptime) {
             log_error("uptime_in_seconds() failed, just polling...");
@@ -398,7 +395,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
     log_debug("after select");
 
     /* trigger timeouts that have activated */
-    uptime_time_t curclock;
+    uint64_t curclock;
     bool success_uptime = uptime_in_seconds(&curclock);
     /* TODO: handle this error */
     ASSERT_TRUE(success_uptime);

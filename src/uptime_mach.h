@@ -22,12 +22,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef uint64_t uptime_mach_time_t;
+typedef struct {
+  uint64_t seconds;
+  uint64_t nanoseconds;
+} UptimeMachTimespec;
 
 bool
-uptime_mach_timebase(uptime_mach_time_t *numer, uptime_mach_time_t *denom);
-
-bool
-uptime_mach_time(uptime_mach_time_t *out);
+uptime_mach_time(UptimeMachTimespec *out);
 
 #endif
