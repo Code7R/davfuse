@@ -16,8 +16,8 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>
  */
 
-#ifndef _UPTIME_CLOCK_GETTIME_H
-#define _UPTIME_CLOCK_GETTIME_H
+#ifndef _UPTIME_GET_TICK_COUNT_H
+#define _UPTIME_GET_TICK_COUNT_H
 
 #include <stdbool.h>
 #include <stdint.h>
