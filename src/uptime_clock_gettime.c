@@ -19,7 +19,7 @@
 #define _ISOC99_SOURCE
 #define _POSIX_C_SOURCE 199309L
 
-#include "uptime_mach.h"
+#include "uptime_clock_gettime.h"
 
 #include "c_util.h"
 #include "util.h"
@@ -30,7 +30,7 @@
 #include <time.h>
 
 bool
-uptime_clock_gettime_time(UptimeMachTimespec *out) {
+uptime_clock_gettime_time(UptimeClockGettimeTimespec *out) {
   struct timespec uptime;
   /* CLOCK_BOOTTIME requires linux >=2.6.39,
      TODO: on EINVAL we can use /proc
