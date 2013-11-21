@@ -18,6 +18,7 @@
 # This example is made for glibc/gcc
 SOCKETS_IMPL = posix
 LOG_PRINTER_IMPL = stdio
+UPTIME_IMPL = clock_gettime
 
 FS_IMPL = posix
 FS_IMPL_EXTRA_SOURCES = fstatat_native.c fd_utils.c fs_helpers.c
@@ -25,9 +26,9 @@ FS_IMPL_EXTRA_GEN_HEADERS = fstatat.h
 FS_IMPL_EXTRA_IFACE_DEFS = FSTATAT_DEF=native
 
 EVENT_LOOP_IMPL = select
-EVENT_LOOP_IMPL_EXTRA_SOURCES =
-EVENT_LOOP_IMPL_EXTRA_GEN_HEADERS = sockets.h
-EVENT_LOOP_IMPL_EXTRA_IFACE_DEFS = SOCKETS_DEF=${SOCKETS_IMPL}
+EVENT_LOOP_IMPL_EXTRA_SOURCES = uptime_${UPTIME_IMPL}.c
+EVENT_LOOP_IMPL_EXTRA_GEN_HEADERS = sockets.h uptime.h
+EVENT_LOOP_IMPL_EXTRA_IFACE_DEFS = SOCKETS_DEF=${SOCKETS_IMPL} UPTIME_DEF=${UPTIME_IMPL}
 
 # flags
 # this is used on linux for seamless 64-bit filesystem usage
