@@ -375,8 +375,20 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
         }
         else select_timeout_p = NULL;
 
+        /* NB: Winsock requires these pointers to be NULL
+           if no FD has been set */
+        fd_set *const readfds_p = readfds_watched
+          ? &readfds
+          : NULL;
+        fd_set *const writefds_p = writefds_watched
+          ? &writefds
+          : NULL;
+        fd_set *const errorfds_p = writefds_watched || readfds_watched
+          ? &errorfds
+          : NULL;
+
         int ret_select =
-          select(nfds + 1, &readfds, &writefds, &errorfds, select_timeout_p);
+          select(nfds + 1, readfds_p, writefds_p, errorfds_p, select_timeout_p);
 
         if (ret_select == SOCKET_ERROR &&
             last_socket_error() == SOCKET_EINTR) {
