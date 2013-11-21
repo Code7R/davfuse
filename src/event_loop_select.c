@@ -47,12 +47,6 @@ __my_darwin_fd_isset(int _n, const struct fd_set *_p) {
 #define MY_FD_SET(n, p) FD_SET(n, p)
 #endif
 
-enum {
-  /* set to false to cause program to spin
-     instead of waiting on select */
-  ACTUALLY_WAIT_ON_SELECT=true,
-};
-
 /* opaque structures */
 typedef struct {
   bool is_fd_watch;
@@ -350,60 +344,58 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
 
     log_debug("before select");
     bool select_error = false;
-    if (ACTUALLY_WAIT_ON_SELECT) {
-      while (true) {
-        struct timeval *select_timeout_p;
-        struct timeval select_timeout;
-        if (select_stop_clock_is_enabled) {
-          uint64_t curclock;
-          bool success_uptime = uptime_in_seconds(&curclock);
-          if (!success_uptime) {
-            log_error("uptime_in_seconds() failed, just polling...");
-            select_timeout = (struct timeval) {0, 0};
-          }
-          else {
-            select_timeout = (struct timeval) {
-              (select_stop_clock > curclock
-               ? select_stop_clock - curclock
-               : 0),
-              0,
-            };
-          }
-          log_debug("Select will wait for %lu seconds",
-                    (long unsigned) select_timeout.tv_sec);
-          select_timeout_p = &select_timeout;
+    while (true) {
+      struct timeval *select_timeout_p;
+      struct timeval select_timeout;
+      if (select_stop_clock_is_enabled) {
+        uint64_t curclock;
+        bool success_uptime = uptime_in_seconds(&curclock);
+        if (!success_uptime) {
+          log_error("uptime_in_seconds() failed, just polling...");
+          select_timeout = (struct timeval) {0, 0};
         }
-        else select_timeout_p = NULL;
-
-        /* NB: Winsock requires these pointers to be NULL
-           if no FD has been set */
-        fd_set *const readfds_p = readfds_watched
-          ? &readfds
-          : NULL;
-        fd_set *const writefds_p = writefds_watched
-          ? &writefds
-          : NULL;
-        fd_set *const errorfds_p = writefds_watched || readfds_watched
-          ? &errorfds
-          : NULL;
-
-        int ret_select =
-          select(nfds + 1, readfds_p, writefds_p, errorfds_p, select_timeout_p);
-
-        if (ret_select == SOCKET_ERROR &&
-            last_socket_error() == SOCKET_EINTR) {
-          log_info("select() interrupted!");
-          continue;
+        else {
+          select_timeout = (struct timeval) {
+            (select_stop_clock > curclock
+             ? select_stop_clock - curclock
+             : 0),
+            0,
+          };
         }
-
-        if (ret_select == SOCKET_ERROR) {
-          log_error("Error while doing select(): %s",
-                    last_socket_error_message());
-          select_error = true;
-        }
-
-        break;
+        log_debug("Select will wait for %lu seconds",
+                  (long unsigned) select_timeout.tv_sec);
+        select_timeout_p = &select_timeout;
       }
+      else select_timeout_p = NULL;
+
+      /* NB: Winsock requires these pointers to be NULL
+         if no FD has been set */
+      fd_set *const readfds_p = readfds_watched
+        ? &readfds
+        : NULL;
+      fd_set *const writefds_p = writefds_watched
+        ? &writefds
+        : NULL;
+      fd_set *const errorfds_p = writefds_watched || readfds_watched
+        ? &errorfds
+        : NULL;
+
+      int ret_select =
+        select(nfds + 1, readfds_p, writefds_p, errorfds_p, select_timeout_p);
+
+      if (ret_select == SOCKET_ERROR &&
+          last_socket_error() == SOCKET_EINTR) {
+        log_info("select() interrupted!");
+        continue;
+      }
+
+      if (ret_select == SOCKET_ERROR) {
+        log_error("Error while doing select(): %s",
+                  last_socket_error_message());
+        select_error = true;
+      }
+
+      break;
     }
     log_debug("after select");
 
