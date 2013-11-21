@@ -17,6 +17,7 @@
 # integral types
 handle_t
 watch_key_t
+timeout_key_t
 
 # transparent struct types
 SocketEvent

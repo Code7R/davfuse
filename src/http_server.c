@@ -97,7 +97,6 @@ typedef struct _http_connection {
   UTHR_CTX_BASE;
   struct _http_server *server;
   socket_t sock;
-  time_t conn_end;
   int last_error_number;
   ReadBuffer f;
   /* these might become per-request,
@@ -110,6 +109,7 @@ typedef struct _http_connection {
     struct {
       event_loop_watch_key_t read_key;
       event_loop_watch_key_t stop_key;
+      event_loop_timeout_key_t timeout_key;
     } wait_until;
   } spare;
   struct _http_request_context rctx;
@@ -144,19 +144,17 @@ EVENT_HANDLER_DECLARE(client_coroutine);
 static
 UTHR_DECLARE(c_get_request);
 
-/* TODO: make these runtime configurable,
-   we set them really high because this is on the localhost */
+/* TODO: make this runtime configurable, 5 minutes is a decent default */
 enum {
-  MINIMUM_CONN_TIME=3600,
-  MAXIMUM_CONN_TIME=3600,
+  CONN_READ_TIMEOUT = 300,
 };
+
+static const EventLoopTimeout HTTP_READ_TIMEOUT = {CONN_READ_TIMEOUT, 0};
 
 enum {
   STOP_SOCKET_RECV,
   STOP_SOCKET_SEND,
 };
-
-static DEFINE_MIN(time_t);
 
 static PURE_FUNCTION const char *
 _get_header_value(const struct _header_pair *headers, size_t num_headers, const char *header_name) {
@@ -177,7 +175,7 @@ static void
 _http_connection_read(HTTPConnection *conn, void *buf, size_t nbyte,
                       event_handler_t cb, void *ud) {
   return util_event_loop_socket_read(conn->server->loop, conn->sock,
-                                     buf, nbyte, cb, ud);
+                                     buf, nbyte, &HTTP_READ_TIMEOUT, cb, ud);
 }
 
 static void
@@ -198,14 +196,6 @@ _http_connection_is_close(HTTPConnection *conn) {
   return conn->rctx.is_connection_close;
 }
 
-static time_t
-_http_connection_time_left(HTTPConnection *conn) {
-  /* XXX: not using monotonic timer */
-  const time_t conn_end = conn->conn_end;
-  const time_t current_time = time(NULL);
-  return conn_end - current_time;
-}
-
 static bool
 _http_connection_has_error(HTTPConnection *conn) {
   return conn->last_error_number;
@@ -214,44 +204,65 @@ _http_connection_has_error(HTTPConnection *conn) {
 static bool
 _http_connection_do_another_request(HTTPConnection *conn) {
   return (!_http_connection_has_error(conn) &&
-          _http_connection_time_left(conn) > 0 &&
           !_http_connection_is_close(conn) &&
           !conn->server->shutting_down);
 }
 
 static
 EVENT_HANDLER_DEFINE(wait_until_ready_handler, ev_type, ev_, ud) {
-  UNUSED(ev_type);
-  assert(ev_type == EVENT_LOOP_SOCKET_EVENT);
-  EventLoopSocketEvent *const ev = ev_;
   HTTPConnection *const conn = ud;
 
   assert(conn->spare.wait_until.stop_key &&
-         conn->spare.wait_until.read_key);
+         conn->spare.wait_until.read_key &&
+         conn->spare.wait_until.timeout_key);
 
-  /* we have to remove the opposite watch key since we're
-     waiting for the first one to arrive */
-  event_loop_watch_key_t to_remove = 0;
-  if (ev->socket == conn->sock) {
-    log_debug("Client request socket has ready data!");
-    to_remove = conn->spare.wait_until.stop_key;
+  if (ev_type == EVENT_LOOP_SOCKET_EVENT) {
+    EventLoopSocketEvent *const ev = ev_;
+
+    /* we have to remove the opposite watch key since we're
+       waiting for the first one to arrive */
+    event_loop_watch_key_t to_remove = 0;
+    if (ev->socket == conn->sock) {
+      log_debug("Client request socket has ready data!");
+      to_remove = conn->spare.wait_until.stop_key;
+    }
+    else {
+      log_debug("received server stop signal!!");
+      assert(ev->socket == conn->server->stop_sockets[STOP_SOCKET_RECV]);
+      to_remove = conn->spare.wait_until.read_key;
+    }
+
+    /* TODO: handle this better */
+    bool success_remove =
+      event_loop_watch_remove(conn->server->loop, to_remove);
+    ASSERT_TRUE(success_remove);
+
+    bool success_remove_timeout =
+      event_loop_timeout_remove(conn->server->loop, conn->spare.wait_until.timeout_key);
+    ASSERT_TRUE(success_remove_timeout);
+
+    /* if there was an error waiting, close down the connection */
+    if (ev->error) conn->last_error_number = 1;
+  }
+  else if (ev_type == EVENT_LOOP_TIMEOUT_EVENT) {
+    bool success_remove =
+      event_loop_watch_remove(conn->server->loop, conn->spare.wait_until.read_key);
+    ASSERT_TRUE(success_remove);
+    bool success_remove_2 =
+      event_loop_watch_remove(conn->server->loop, conn->spare.wait_until.stop_key);
+    ASSERT_TRUE(success_remove_2);
+
+    /* read timeout ran out, we consider this an error */
+    conn->last_error_number = 1;
   }
   else {
-    log_debug("received server stop signal!!");
-    assert(ev->socket == conn->server->stop_sockets[STOP_SOCKET_RECV]);
-    to_remove = conn->spare.wait_until.read_key;
+    /* should never happen */
+    assert(false);
   }
-
-  /* TODO: handle this better */
-  bool success_remove =
-    event_loop_watch_remove(conn->server->loop, to_remove);
-  ASSERT_TRUE(success_remove);
 
   conn->spare.wait_until.stop_key = 0;
   conn->spare.wait_until.read_key = 0;
-
-  /* if there was an error waiting, close down the connection */
-  if (ev->error) conn->last_error_number = 1;
+  conn->spare.wait_until.timeout_key = 0;
 
   return client_coroutine(GENERIC_EVENT, NULL, conn);
 }
@@ -263,6 +274,7 @@ _http_connection_wait_until_ready(HTTPConnection *conn) {
 
   conn->spare.wait_until.read_key = 0;
   conn->spare.wait_until.stop_key = 0;
+  conn->spare.wait_until.timeout_key = 0;
 
   const bool success_add_watch_1 =
     event_loop_socket_watch_add(http->loop,
@@ -282,6 +294,14 @@ _http_connection_wait_until_ready(HTTPConnection *conn) {
                                 &conn->spare.wait_until.stop_key);
   if (!success_add_watch_2) goto fail;
 
+  const bool success_add_watch_3 =
+    event_loop_timeout_add(http->loop,
+                           &HTTP_READ_TIMEOUT,
+                           wait_until_ready_handler,
+                           conn,
+                           &conn->spare.wait_until.timeout_key);
+  if (!success_add_watch_3) goto fail;
+
   return;
 
  fail:
@@ -297,6 +317,12 @@ _http_connection_wait_until_ready(HTTPConnection *conn) {
     const bool success_remove_watch =
       event_loop_watch_remove(http->loop, conn->spare.wait_until.stop_key);
     if (!success_remove_watch) log_error("Error removing stopwatch");
+  }
+
+  if (conn->spare.wait_until.timeout_key) {
+    const bool success_remove_timeout =
+      event_loop_timeout_remove(http->loop, conn->spare.wait_until.timeout_key);
+    if (!success_remove_timeout) log_error("Error removing read timeout");
   }
 
   client_coroutine(GENERIC_EVENT, NULL, conn);
@@ -798,25 +824,8 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
     EMITS("Connection: close\r\n");
   }
   else {
-    time_t time_left = _http_connection_time_left(whs->request_context->conn);
-    const time_t timeout = min_time_t(time_left, MINIMUM_CONN_TIME);
-    const time_t max_timeout = time_left;
-    assert(timeout >= 0 && timeout <= INT_MAX);
-    assert(max_timeout >= 0 && max_timeout <= INT_MAX);
-    const int ret_sprintf3 =
-      snprintf(whs->response_line, sizeof(whs->response_line),
-               "Keep-Alive: timeout=%d, max=%d\r\n",
-               (int) timeout, (int) max_timeout);
-    if (ret_sprintf3 < 0 ||
-        ret_sprintf3 == sizeof(whs->response_line)) {
-      myerrno = ENOMEM;
-      goto done;
-    }
-    log_debug("conn %p Writing response header: %.*s",
-              whs->request_context->conn,
-              ret_sprintf3 - 2, whs->response_line);
-    EMITN(whs->response_line, ret_sprintf3);
-
+    /* TODO: only do this client sent "Connection: Keep-Alive",
+       not harmful otherwise though, just unnecessary */
     log_debug("conn %p Writing response header: Connection: Keep-Alive",
               whs->request_context->conn);
     EMITS("Connection: Keep-Alive\r\n");
@@ -1103,7 +1112,6 @@ UTHR_DEFINE(client_coroutine) {
   cc->server->num_connections += 1;
 
   log_debug("conn %p new connection!", cc);
-  cc->conn_end = time(NULL) + MAXIMUM_CONN_TIME;
 
   while (_http_connection_do_another_request(cc)) {
     /* (re-)initialize the request context */
@@ -1228,6 +1236,7 @@ UTHR_DEFINE(c_get_request) {
                           c_get_request, state));       \
       assert(UTHR_EVENT_TYPE() == C_FBPEEK_DONE_EVENT); \
     }                                                   \
+    if (state->c == EOF) goto error;                    \
   }                                                     \
   while (false)
 
@@ -1298,14 +1307,6 @@ UTHR_DEFINE(c_get_request) {
   while (false)
 
   PARSEVAR(state->request_headers->method, match_token);
-
-  /* TODO: we need better connection termination in general
-     but put it here since this is the most common place,
-     in theory all network IO should have a timeout */
-  if (_http_connection_time_left(state->rh->conn) <= 0) {
-    log_error("Connection! Timeout!");
-    goto error;
-  }
 
   EXPECT(' ');
 

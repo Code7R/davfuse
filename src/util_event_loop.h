@@ -34,6 +34,7 @@ void
 util_event_loop_socket_read(event_loop_handle_t loop,
                             socket_t sock,
                             void *buf, size_t nbyte,
+                            const EventLoopTimeout *timeout,
                             event_handler_t cb,
                             void *cb_ud);
 

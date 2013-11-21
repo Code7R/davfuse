@@ -146,7 +146,7 @@ static
 bool
 timeout_is_triggered(EventLoopSelectTimeoutCtx *timeout_ctx,
                      uint64_t curclock) {
-  return timeout_ctx->end_clock < curclock;
+  return timeout_ctx->end_clock <= curclock;
 }
 
 static
@@ -280,12 +280,11 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
     for (EventLoopSelectTimeoutLink *ll = loop->timeout_ll; ll;) {
       if (ll->is_active) {
         select_stop_clock = select_stop_clock_is_enabled
-          ? ll->timeout.end_clock
-          : MIN(ll->timeout.end_clock, select_stop_clock);
+          ? MIN(ll->timeout.end_clock, select_stop_clock)
+          : ll->timeout.end_clock;
 
         if (!select_stop_clock_is_enabled) select_stop_clock_is_enabled = true;
         ll = ll->next;
-        continue;
       }
       else {
         EventLoopSelectTimeoutLink *tmpll = ll->next;
@@ -370,6 +369,8 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
               0,
             };
           }
+          log_debug("Select will wait for %lu seconds",
+                    (long unsigned) select_timeout.tv_sec);
           select_timeout_p = &select_timeout;
         }
         else select_timeout_p = NULL;
@@ -394,20 +395,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
     }
     log_debug("after select");
 
-    /* trigger timeouts that have activated */
-    uint64_t curclock;
-    bool success_uptime = uptime_in_seconds(&curclock);
-    /* TODO: handle this error */
-    ASSERT_TRUE(success_uptime);
-    for (EventLoopSelectTimeoutLink *ll = loop->timeout_ll; ll; ll = ll->next) {
-      if (!ll->is_active) continue;
-      if (!timeout_is_triggered(&ll->timeout, curclock)) continue;
-
-      ll->is_active = false;
-      ll->timeout.handler(EVENT_LOOP_TIMEOUT_EVENT, NULL, ll->timeout.ud);
-    }
-
-    /* now dispatch io events */
+    /* dispatch io events */
     for (EventLoopSelectLink *ll = loop->ll; ll; ll = ll->next) {
       if (!ll->is_active) continue;
 
@@ -446,6 +434,21 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
         };
         ll->watch.handler(EVENT_LOOP_SOCKET_EVENT, &e, ll->watch.ud);
       }
+    }
+
+    /* trigger timeouts that have activated,
+       we intentionally do this after socket dispatch
+     */
+    uint64_t curclock;
+    bool success_uptime = uptime_in_seconds(&curclock);
+    /* TODO: handle this error */
+    ASSERT_TRUE(success_uptime);
+    for (EventLoopSelectTimeoutLink *ll = loop->timeout_ll; ll; ll = ll->next) {
+      if (!ll->is_active) continue;
+      if (!timeout_is_triggered(&ll->timeout, curclock)) continue;
+
+      ll->is_active = false;
+      ll->timeout.handler(EVENT_LOOP_TIMEOUT_EVENT, NULL, ll->timeout.ud);
     }
   }
 }

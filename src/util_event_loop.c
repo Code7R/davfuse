@@ -24,6 +24,7 @@
 #include "sockets.h"
 #include "logging.h"
 #include "uthread.h"
+#include "util.h"
 #include "util_sockets.h"
 
 typedef struct {
@@ -33,63 +34,125 @@ typedef struct {
   socket_t sock;
   void *buf;
   size_t nbyte;
+  bool timeout_is_enabled;
+  EventLoopTimeout timeout;
   event_handler_t cb;
   void *cb_ud;
   /* ctx */
+  event_loop_watch_key_t watch_key;
+  event_loop_timeout_key_t timeout_key;
+  socket_ssize_t ret;
 } SocketReadCtx;
 
 UTHR_DEFINE(_util_event_loop_socket_read_uthr) {
   UTHR_HEADER(SocketReadCtx, ctx);
 
-  /* first we set a 0-timeout to reset stack
-     this is roughly okay because system reads are implicitly expensive */
-  EventLoopTimeout timeout = {0, 0};
-  bool success_wait = event_loop_timeout_add(ctx->loop, &timeout,
-                                             _util_event_loop_socket_read_uthr, ctx,
-                                             NULL);
-  if (!success_wait) log_warning("Couldn't set up stack-reset timeout");
-  else {
-    UTHR_YIELD(ctx, 0);
-  }
+  ctx->watch_key = 0;
+  ctx->timeout_key = 0;
 
-  socket_ssize_t ret;
   while (true) {
-    ret = recv(ctx->sock, ctx->buf, ctx->nbyte, 0);
-    if (ret != SOCKET_ERROR) {
+    ctx->ret = recv(ctx->sock, ctx->buf, ctx->nbyte, 0);
+    if (ctx->ret != SOCKET_ERROR) {
+      /* set a 0-timeout to reset stack
+         this is roughly okay because system reads are implicitly expensive */
+      EventLoopTimeout timeout = {0, 0};
+      bool success_wait = event_loop_timeout_add(ctx->loop, &timeout,
+                                                 _util_event_loop_socket_read_uthr, ctx,
+                                                 NULL);
+      if (!success_wait) log_warning("Couldn't set up stack-reset timeout");
+      else {
+        UTHR_YIELD(ctx, 0);
+      }
       break;
     }
 
     if (last_socket_error() == SOCKET_EAGAIN) {
+      if (ctx->timeout_is_enabled) {
+        bool success_timeout = event_loop_timeout_add(ctx->loop, &ctx->timeout,
+                                                      _util_event_loop_socket_read_uthr, ctx,
+                                                      &ctx->timeout_key);
+        if (!success_timeout) {
+          log_error("Couldn't add timeout!");
+          goto err;
+        }
+      }
+
       bool success_watch = event_loop_socket_watch_add(ctx->loop,
                                                        ctx->sock,
                                                        create_stream_events(true, false),
                                                        _util_event_loop_socket_read_uthr,
                                                        ctx,
-                                                       NULL);
+                                                       &ctx->watch_key);
       if (!success_watch) {
+        if (ctx->timeout_key) {
+          bool success_remove_timeout =
+            event_loop_timeout_remove(ctx->loop, ctx->timeout_key);
+          /* TODO: handle gracefully */
+          ASSERT_TRUE(success_remove_timeout);
+          ctx->timeout_key = 0;
+        }
         log_error("Couldn't add fdevent watch!");
-        break;
+        goto err;
       }
-      else {
-        UTHR_YIELD(ctx, 0);
+
+      UTHR_YIELD(ctx, 0);
+
+      switch (UTHR_EVENT_TYPE()) {
+      case EVENT_LOOP_TIMEOUT_EVENT: {
+        assert(ctx->timeout_is_enabled);
+        assert(ctx->timeout_key);
+        ctx->timeout_key = 0;
+
+        if (ctx->watch_key) {
+          bool success_remove_watch =
+            event_loop_watch_remove(ctx->loop, ctx->watch_key);
+          /* TODO: handle gracefully */
+          ASSERT_TRUE(success_remove_watch);
+          ctx->watch_key = 0;
+        }
+
+        log_error("timeout triggered while waiting for read()");
+        goto err;
+      }
+      case EVENT_LOOP_SOCKET_EVENT: {
+        ctx->watch_key = 0;
+
+        if (ctx->timeout_key) {
+          bool success_remove_timeout =
+            event_loop_timeout_remove(ctx->loop, ctx->timeout_key);
+          /* TODO: handle gracefully */
+          ASSERT_TRUE(success_remove_timeout);
+          ctx->timeout_key = 0;
+        }
+
         UTHR_RECEIVE_EVENT(EVENT_LOOP_SOCKET_EVENT, EventLoopSocketEvent, socket_ev);
         if (socket_ev->error) {
           log_error("error during socket watch");
-          ret = SOCKET_ERROR;
-          break;
+          goto err;
         }
+        break;
+      }
+      default: {
+        /* should never happen */
+        assert(false);
+      }
       }
     }
     else {
       log_error("Error while calling read(): %s",
                 last_socket_error_message());
-      break;
+      goto err;
     }
   }
 
+  if (false) {
+  err:
+    ctx->ret = SOCKET_ERROR;
+  }
+
   UtilEventLoopSocketReadDoneEvent ev = {
-    .error = ret == SOCKET_ERROR,
-    .nbyte = (size_t) ret,
+    .error = ctx->ret == SOCKET_ERROR,
+    .nbyte = (size_t) ctx->ret,
   };
   UTHR_RETURN(ctx,
               ctx->cb(UTIL_EVENT_LOOP_SOCKET_READ_DONE_EVENT,
@@ -102,13 +165,19 @@ void
 util_event_loop_socket_read(event_loop_handle_t loop,
                             socket_t sock,
                             void *buf, size_t nbyte,
+                            const EventLoopTimeout *timeout,
                             event_handler_t cb,
                             void *cb_ud) {
-  UTHR_CALL6(_util_event_loop_socket_read_uthr, SocketReadCtx,
+  EventLoopTimeout timeout_to_set = timeout
+    ? *timeout
+    : (EventLoopTimeout) {0, 0};
+  UTHR_CALLA(_util_event_loop_socket_read_uthr, SocketReadCtx,
              .loop = loop,
              .sock = sock,
              .buf = buf,
              .nbyte = nbyte,
+             .timeout_is_enabled = timeout,
+             .timeout = timeout_to_set,
              .cb = cb,
              .cb_ud = cb_ud);
 }
