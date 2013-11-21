@@ -506,7 +506,7 @@ perform_write_lock(struct webdav_server *ws,
   }
 
   /* generate a lock token */
-  UptimeMachTimespec uptime;
+  UptimeTimespec uptime;
   bool success_uptime = uptime_time(&uptime);
   if (!success_uptime) return false;
 
