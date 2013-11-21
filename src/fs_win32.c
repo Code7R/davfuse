@@ -775,7 +775,7 @@ fs_win32_path_is_root(fs_win32_handle_t fs, const char *path) {
 
   /* TODO: add support for UNC paths */
   return (strlen(path) == 3 &&
-          (('a' <= path[0] && path[0] <= 'z') || */
+          (('a' <= path[0] && path[0] <= 'z') ||
            ('A' <= path[0] && path[0] <= 'Z')) &&
           path[1] == ':' && path[2] == '\\');
 }
@@ -807,7 +807,7 @@ http://msdn.microsoft.com/en-us/library/windows/desktop/aa365247(v=vs.85).aspx
   static const char BAD_WIN_CHARS[] =
     "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F"
     "\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F"
-    "<>:\"/\|?*";
+    "<>:\"/\\|?*";
 
   ASSERT_VALID_FS(fs);
   char *first_bad = strpbrk(component, BAD_WIN_CHARS);
@@ -833,11 +833,11 @@ http://msdn.microsoft.com/en-us/library/windows/desktop/aa365247(v=vs.85).aspx
 }
 
 char *
-fs_win32_path_dirname(fs_posix_handle_t fs, const char *path) {
+fs_win32_path_dirname(fs_win32_handle_t fs, const char *path) {
   ASSERT_VALID_FS(fs);
-  assert(fs_posix_path_is_valid(fs, path));
+  assert(fs_win32_path_is_valid(fs, path));
 
-  if (fs_posix_path_is_root(fs, path)) {
+  if (fs_win32_path_is_root(fs, path)) {
     return davfuse_util_strdup(path);
   }
 
@@ -857,9 +857,9 @@ fs_win32_path_dirname(fs_posix_handle_t fs, const char *path) {
 }
 
 char *
-fs_win32_path_basename(fs_posix_handle_t fs, const char *path) {
+fs_win32_path_basename(fs_win32_handle_t fs, const char *path) {
   ASSERT_VALID_FS(fs);
-  assert(fs_posix_path_is_valid(fs, path));
+  assert(fs_win32_path_is_valid(fs, path));
 
   if (fs_win32_path_is_root(fs, path)) {
     return davfuse_util_strdup(path);
@@ -869,12 +869,12 @@ fs_win32_path_basename(fs_posix_handle_t fs, const char *path) {
 }
 
 char *
-fs_win32_path_join(fs_posix_handle_t fs,
+fs_win32_path_join(fs_win32_handle_t fs,
                    const char *dirname, const char *basename) {
   ASSERT_VALID_FS(fs);
-  assert(fs_posix_path_is_valid(fs, dirname));
+  assert(fs_win32_path_is_valid(fs, dirname));
   if (!fs_win32_path_component_is_valid(fs, basename)) {
     return NULL;
   }
-  return fs_helpers_join("\\", path);
+  return fs_helpers_join("\\", dirname, basename);
 }

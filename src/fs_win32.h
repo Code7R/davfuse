@@ -120,15 +120,14 @@ fs_win32_path_is_valid(fs_win32_handle_t fs,
                        const char *path);
 
 char *
-fs_win32_path_dirname(fs_posix_handle_t fs, const char *path);
+fs_win32_path_dirname(fs_win32_handle_t fs, const char *path);
 
 char *
-fs_win32_path_basename(fs_posix_handle_t fs, const char *path);
+fs_win32_path_basename(fs_win32_handle_t fs, const char *path);
 
 char *
-fs_win32_path_join(fs_posix_handle_t fs,
+fs_win32_path_join(fs_win32_handle_t fs,
                    const char *dirname, const char *basename);
-
 
 CREATE_IMPL_TAG(FS_WIN32_IMPL);
 
