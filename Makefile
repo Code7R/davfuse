@@ -81,6 +81,7 @@ LIBWEBDAV_SERVER_FS_SRC_ = \
     event_loop_${EVENT_LOOP_IMPL}.c \
     fs_${FS_IMPL}.c \
     fs_${MAIN_FS_IMPL}.c \
+    uptime_${UPTIME_IMPL}.c \
     ${EVENT_LOOP_IMPL_EXTRA_SOURCES} \
     ${FS_IMPL_EXTRA_SOURCES}
 GEN_HEADERS_LIBWEBDAV_SERVER_FS_ := \
@@ -90,6 +91,7 @@ GEN_HEADERS_LIBWEBDAV_SERVER_FS_ := \
     webdav_backend.h \
     fs.h \
     fs_native.h \
+    uptime.h \
     ${EVENT_LOOP_IMPL_EXTRA_GEN_HEADERS} \
     ${FS_IMPL_EXTRA_GEN_HEADERS}
 LIBWEBDAV_SERVER_FS_IFACE_DEFS := \
@@ -99,6 +101,7 @@ LIBWEBDAV_SERVER_FS_IFACE_DEFS := \
     WEBDAV_BACKEND_DEF=fs \
     FS_DEF=${MAIN_FS_IMPL} \
     FS_NATIVE_DEF=${FS_IMPL}/fs \
+    UPTIME_DEF=${UPTIME_IMPL} \
     ${EVENT_LOOP_IMPL_EXTRA_IFACE_DEFS} \
     ${FS_IMPL_EXTRA_IFACE_DEFS}
 
@@ -132,18 +135,21 @@ LIBDAVFUSE_SRC := \
     ${HTTP_SERVER_SRC} \
     event_loop_${EVENT_LOOP_IMPL}.c sockets_${SOCKETS_IMPL}.c \
     log_printer_${LOG_PRINTER_IMPL}.c \
+    uptime_${UPTIME_IMPL}.c \
     ${WEBDAV_SERVER_SRC} webdav_backend_async_fuse.c
 GEN_HEADERS_LIBDAVFUSE_ := \
     event_loop.h \
     sockets.h \
     log_printer.h \
     webdav_backend.h \
+    uptime.h \
     ${EVENT_LOOP_IMPL_EXTRA_GEN_HEADERS}
 LIBDAVFUSE_IFACE_DEFS := \
     EVENT_LOOP_DEF=${EVENT_LOOP_IMPL} \
     SOCKETS_DEF=${SOCKETS_IMPL} \
     LOG_PRINTER_DEF=${LOG_PRINTER_IMPL} \
     WEBDAV_BACKEND_DEF=async_fuse \
+    UPTIME_DEF=${UPTIME_IMPL} \
     ${EVENT_LOOP_IMPL_EXTRA_IFACE_DEFS}
 
 GEN_HEADERS_LIBDAVFUSE = $(call unique_fn,$(patsubst %,${OUTROOT}/libdavfuse/headers/%,${GEN_HEADERS_LIBDAVFUSE_}))
