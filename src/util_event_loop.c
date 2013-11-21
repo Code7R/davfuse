@@ -199,6 +199,17 @@ typedef struct {
 UTHR_DEFINE(_util_event_loop_write_uthr) {
   UTHR_HEADER(SocketWriteCtx, state);
 
+  /* set a 0-timeout to reset stack
+     this is roughly okay because system writes are implicitly expensive */
+  EventLoopTimeout timeout = {0, 0};
+  bool success_wait = event_loop_timeout_add(state->loop, &timeout,
+                                             _util_event_loop_write_uthr, state,
+                                             NULL);
+  if (!success_wait) log_warning("Couldn't set up stack-reset timeout");
+  else {
+    UTHR_YIELD(state, 0);
+  }
+
   state->buf_loc = state->buf;
   state->count_left = state->nbyte;
 
