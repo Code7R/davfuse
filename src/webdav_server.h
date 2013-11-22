@@ -33,6 +33,7 @@ extern "C" {
 
 #ifndef _IS_WEBDAV_SERVER_C
 extern const char *const WEBDAV_SERVER_QUIT_URL;
+extern const char *const WEBDAV_SERVER_DISCONNECT_URL;
 #endif
 
 enum {
@@ -96,6 +97,9 @@ webdav_server_start(webdav_server_t ws);
 
 bool
 webdav_server_stop(webdav_server_t ws);
+
+void
+webdav_server_disconnect_existing_clients(webdav_server_t ws);
 
 void
 webdav_get_request_size_hint(webdav_get_request_ctx_t get_ctx,

@@ -161,6 +161,10 @@ NON_NULL_ARGS1(1)
 bool
 http_server_stop(http_server_t http);
 
+NON_NULL_ARGS1(1)
+void
+http_server_disconnect_existing_clients(http_server_t http);
+
 NON_NULL_ARGS3(1, 2, 3) void
 http_request_read_headers(http_request_handle_t rh,
 			  HTTPRequestHeaders *request_headers,

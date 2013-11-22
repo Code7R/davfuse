@@ -48,6 +48,7 @@
 #undef _IS_WEBDAV_SERVER_C
 
 const char *const WEBDAV_SERVER_QUIT_URL = "/____quit_handler____";
+const char *const WEBDAV_SERVER_DISCONNECT_URL = "/____disconnect_handler____";
 
 static const char *const WEBDAV_HEADER_DEPTH = "Depth";
 static const char *const WEBDAV_HEADER_DESTINATION = "Destination";
@@ -874,6 +875,9 @@ UTHR_DEFINE(request_proc) {
   /* handle quit message */
   if (str_equals(hc->rhs.uri, WEBDAV_SERVER_QUIT_URL)) {
     webdav_server_stop(hc->serv);
+  }
+  else if (str_equals(hc->rhs.uri, WEBDAV_SERVER_DISCONNECT_URL)) {
+    webdav_server_disconnect_existing_clients(hc->serv);
   }
 
   /* check if path isn't in our namespace so we can return 404 */
@@ -2526,6 +2530,11 @@ webdav_server_start(webdav_server_t ws) {
 bool
 webdav_server_stop(webdav_server_t ws) {
   return http_server_stop(ws->http);
+}
+
+void
+webdav_server_disconnect_existing_clients(webdav_server_t ws) {
+  return http_server_disconnect_existing_clients(ws->http);
 }
 
 /* private api, specifically helper functions for the xml implementation */

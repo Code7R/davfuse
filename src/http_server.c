@@ -99,6 +99,7 @@ typedef struct _http_connection {
   socket_t sock;
   int last_error_number;
   ReadBuffer f;
+  unsigned client_generation;
   /* these might become per-request,
      right now we only do one request at a time,
      i.e. no pipe-lining */
@@ -122,8 +123,10 @@ typedef struct _http_server {
   event_handler_t handler;
   void *ud;
   bool shutting_down;
-  size_t num_connections;
+  size_t waiting_connections;
   socket_t stop_sockets[2];
+  unsigned client_generation;
+  bool client_handlers_should_wake_up;
 } HTTPServer;
 
 const char *const HTTP_HEADER_ALLOW = "Allow";
@@ -202,9 +205,16 @@ _http_connection_has_error(HTTPConnection *conn) {
 }
 
 static bool
+_http_connection_is_old(HTTPConnection *conn) {
+  assert(conn->server->client_generation >= conn->client_generation);
+  return conn->server->client_generation > conn->client_generation;
+}
+
+static bool
 _http_connection_do_another_request(HTTPConnection *conn) {
   return (!_http_connection_has_error(conn) &&
           !_http_connection_is_close(conn) &&
+          !_http_connection_is_old(conn) &&
           !conn->server->shutting_down);
 }
 
@@ -215,6 +225,7 @@ EVENT_HANDLER_DEFINE(wait_until_ready_handler, ev_type, ev_, ud) {
   assert(conn->spare.wait_until.stop_key &&
          conn->spare.wait_until.read_key &&
          conn->spare.wait_until.timeout_key);
+  void *data_is_available = NULL;
 
   if (ev_type == EVENT_LOOP_SOCKET_EVENT) {
     EventLoopSocketEvent *const ev = ev_;
@@ -225,6 +236,7 @@ EVENT_HANDLER_DEFINE(wait_until_ready_handler, ev_type, ev_, ud) {
     if (ev->socket == conn->sock) {
       log_debug("Client request socket has ready data!");
       to_remove = conn->spare.wait_until.stop_key;
+      if (!ev->error) data_is_available = (void *) 0x1;
     }
     else {
       log_debug("received server stop signal!!");
@@ -264,13 +276,48 @@ EVENT_HANDLER_DEFINE(wait_until_ready_handler, ev_type, ev_, ud) {
   conn->spare.wait_until.read_key = 0;
   conn->spare.wait_until.timeout_key = 0;
 
-  return client_coroutine(GENERIC_EVENT, NULL, conn);
+  assert(conn->server->waiting_connections > 0);
+  conn->server->waiting_connections -= 1;
+
+  /* read off signal data if there are no more waiting connections
+     and the clients were signaled to wake up
+   */
+  if (!conn->server->waiting_connections &&
+      conn->server->client_handlers_should_wake_up) {
+    char toread;
+    socket_ssize_t ret =
+      recv(conn->server->stop_sockets[STOP_SOCKET_RECV], &toread, 1, 0);
+    ASSERT_TRUE(ret == 1);
+    conn->server->client_handlers_should_wake_up = false;
+  }
+
+  return client_coroutine(GENERIC_EVENT, data_is_available, conn);
 }
 
+
 static
-void
-_http_connection_wait_until_ready(HTTPConnection *conn) {
+EVENT_HANDLER_DEFINE(wait_until_ready_start_handler, ev_type, ev_, ud) {
+  UNUSED(ev_type);
+  UNUSED(ev_);
+
+  HTTPConnection *const conn = ud;
   HTTPServer *const http = conn->server;
+
+  /* busy-wait until waiting clients have woken up before waiting ourselves
+     (since we only have one signal socket for triggering wake up,
+      and we shouldn't immediately wake ourselves up)
+  */
+  if (conn->server->client_handlers_should_wake_up) {
+    assert(conn->server->waiting_connections);
+    const EventLoopTimeout yield_timeout = {0, 0};
+    bool success_set_timeout =
+      event_loop_timeout_add(conn->server->loop,
+                             &yield_timeout,
+                             wait_until_ready_start_handler, conn,
+                             NULL);
+    ASSERT_TRUE(success_set_timeout);
+    return;
+  }
 
   conn->spare.wait_until.read_key = 0;
   conn->spare.wait_until.stop_key = 0;
@@ -302,6 +349,8 @@ _http_connection_wait_until_ready(HTTPConnection *conn) {
                            &conn->spare.wait_until.timeout_key);
   if (!success_add_watch_3) goto fail;
 
+  conn->server->waiting_connections += 1;
+
   return;
 
  fail:
@@ -326,6 +375,11 @@ _http_connection_wait_until_ready(HTTPConnection *conn) {
   }
 
   client_coroutine(GENERIC_EVENT, NULL, conn);
+}
+
+void
+_http_connection_wait_until_ready(HTTPConnection *conn) {
+  return wait_until_ready_start_handler(GENERIC_EVENT, NULL, conn);
 }
 
 #define _HTTP_SERVER_ACCEPT_DONE_EVENT EVENT_LOOP_SOCKET_EVENT
@@ -396,15 +450,20 @@ _http_server_destroy(http_server_t http) {
 
 static
 void
-_http_server_wake_up_client_handlers(http_server_t http) {
+_http_server_wake_up_sleeping_client_handlers(http_server_t http) {
+  if (!http->waiting_connections) return;
+  if (http->client_handlers_should_wake_up) return;
+
   const int ret =
-    send(http->stop_sockets[STOP_SOCKET_SEND], "hai", sizeof("hai"), 0);
+    send(http->stop_sockets[STOP_SOCKET_SEND], "1", 1, 0);
   if (ret == SOCKET_ERROR) {
     log_error("Error while writing to stop socket: %s",
               last_socket_error_message());
     /* TODO: handle this */
     ASSERT_TRUE(false);
   }
+
+  http->client_handlers_should_wake_up = true;
 }
 
 http_server_t
@@ -446,12 +505,16 @@ http_server_stop(http_server_t http) {
 
   http->shutting_down = true;
 
-  if (http->num_connections) {
-    /* write to the stop socket to wake connections up */
-    _http_server_wake_up_client_handlers(http);
-  }
+  /* write to the stop socket to wake connections up */
+  _http_server_wake_up_sleeping_client_handlers(http);
 
   return true;
+}
+
+void
+http_server_disconnect_existing_clients(http_server_t http) {
+  http->client_generation += 1;
+  _http_server_wake_up_sleeping_client_handlers(http);
 }
 
 bool
@@ -1090,6 +1153,7 @@ EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
       .in_use = false,
     },
     .server = http,
+    .client_generation = http->client_generation,
   };
   UTHR_RUN(client_coroutine, ctx);
 }
@@ -1109,8 +1173,6 @@ static
 UTHR_DEFINE(client_coroutine) {
   UTHR_HEADER(HTTPConnection, cc);
 
-  cc->server->num_connections += 1;
-
   log_debug("conn %p new connection!", cc);
 
   while (_http_connection_do_another_request(cc)) {
@@ -1122,16 +1184,13 @@ UTHR_DEFINE(client_coroutine) {
     /* TODO: Prevent against "slowloris" style attacks
        with clients who send their headers very very slowly:
        give some timeout to total request processing
-       XXX: even more now because of indefinite keep-alive
     */
 
     /* wait here until connection becomes read ready
        or we get the server stop signal */
     UTHR_YIELD(cc, _http_connection_wait_until_ready(cc));
-
-    if (!_http_connection_do_another_request(cc)) {
-      break;
-    }
+    void *const data_is_available = UTHR_EVENT();
+    if (!data_is_available) continue;
 
     /* create request event, we can do this on the stack
        because the handler shouldn't use this after */
@@ -1217,7 +1276,6 @@ UTHR_DEFINE(client_coroutine) {
     log_error("conn %p, error while closing client connection, leaking...", cc);
   }
 
-  cc->server->num_connections -= 1;
   UTHR_RETURN(cc, 0);
 
   UTHR_FOOTER();
