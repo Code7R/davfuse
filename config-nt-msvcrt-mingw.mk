@@ -46,9 +46,9 @@ CXXFLAGS_DEBUG = -g
 CXXFLAGS_RELEASE = -O3 -flto
 
 # compiler and linker
-CC = gcc
-CXX = g++
-LINK_COMMAND = ld -shared
-LINK_FLAG_NAME = -soname
-LINK_FLAG_VERSION_SCRIPT = --version-script
-CXX_LIBS = -lstdc++
+CC ?= gcc
+CXX ?= g++
+LINK_COMMAND ?= ld -shared
+LINK_FLAG_NAME ?= -soname
+LINK_FLAG_VERSION_SCRIPT ?= --version-script
+CXX_LIBS ?= -lstdc++
