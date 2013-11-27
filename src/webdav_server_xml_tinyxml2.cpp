@@ -37,8 +37,6 @@
 
 #include "webdav_server_xml.h"
 
-using namespace tinyxml2;
-
 static const char *const DAV_XML_NS = "DAV:";
 static const char *const DAV_XML_NS_PREFIX = "D";
 static const char * const XML_XML_NS = "http://www.w3.org/XML/1998/namespace";
@@ -47,6 +45,7 @@ static const char * const XMLNS_XML_NS = "http://www.w3.org/2000/xmlns/";
 /* utilities */
 
 /* this little class allows us to get C++ RAII with C based data structures */
+
 template <class T, void (*func)(T)>
 class CFreer {
 private:
@@ -112,7 +111,7 @@ safe_str_equals(const char *a, const char *b) {
 }
 
 static bool
-is_xmlns_attr(const XMLAttribute *a) {
+is_xmlns_attr(const tinyxml2::XMLAttribute *a) {
   const char *attr_name = a->Name();
   return (str_equals(attr_name, "xmlns") ||
           str_startswith(attr_name, "xmlns:"));
@@ -129,7 +128,7 @@ get_ns_name(const char *elt_name) {
 }
 
 static PURE_FUNCTION const char *
-get_ns_name(const XMLElement *elt) {
+get_ns_name(const tinyxml2::XMLElement *elt) {
   return get_ns_name(elt->Name());
 }
 
@@ -146,7 +145,7 @@ make_ns_prefix(const char *tag_name) {
 /* this is an internal function used for parsing,
    do not add special cases to this */
 static const char *
-get_ns_href_for_prefix(const XMLElement *elt, const char *prefix) {
+get_ns_href_for_prefix(const tinyxml2::XMLElement *elt, const char *prefix) {
   char *allocated_attr_to_query = NULL;
   CStringFreer free_allocated_attr_to_query(allocated_attr_to_query);
 
@@ -162,7 +161,7 @@ get_ns_href_for_prefix(const XMLElement *elt, const char *prefix) {
 
   /* okay now find the href for this ns, start at this elt and go up */
   const char *elt_href = NULL;
-  const XMLElement *start_elt = elt;
+  const tinyxml2::XMLElement *start_elt = elt;
   while (start_elt && !elt_href) {
     /* find the xmlns/xmlns:<ns> attributes */
     elt_href = start_elt->Attribute(attr_to_query);
@@ -173,7 +172,7 @@ get_ns_href_for_prefix(const XMLElement *elt, const char *prefix) {
 }
 
 static const char *
-get_ns_href(const XMLElement *elt, const XMLAttribute *attr=NULL) {
+get_ns_href(const tinyxml2::XMLElement *elt, const tinyxml2::XMLAttribute *attr=NULL) {
   const char *raw_elt_name = attr
     ? attr->Name()
     : elt->Name();
@@ -209,20 +208,20 @@ get_ns_href(const XMLElement *elt, const XMLAttribute *attr=NULL) {
 }
 
 static PURE_FUNCTION bool
-ns_equals(const XMLElement *elt, const char *test_href) {
+ns_equals(const tinyxml2::XMLElement *elt, const char *test_href) {
   const char *ns_href = get_ns_href(elt);
   return safe_str_equals(test_href, ns_href);
 }
 
 static PURE_FUNCTION bool
-node_is(const XMLElement *elt, const char *test_href, const char *test_name) {
+node_is(const tinyxml2::XMLElement *elt, const char *test_href, const char *test_name) {
   const char *elt_name = get_ns_name(elt);
   return (str_equals(elt_name, test_name) &&
           ns_equals(elt, test_href));
 }
 
-static XMLElement *
-newChildElement(XMLNode *parent, const char *one, const char *two=NULL) {
+static tinyxml2::XMLElement *
+newChildElement(tinyxml2::XMLNode *parent, const char *one, const char *two=NULL) {
   const char *ns_prefix;
   const char *pure_tag_name;
   const char *tag_name;
@@ -257,8 +256,8 @@ newChildElement(XMLNode *parent, const char *one, const char *two=NULL) {
   return new_element;
 }
 
-static XMLElement *
-newChildElementWithText(XMLNode *parent, const char *one, const char *two,
+static tinyxml2::XMLElement *
+newChildElementWithText(tinyxml2::XMLNode *parent, const char *one, const char *two,
                         const char *three=NULL) {
   const char *ns_prefix;
   const char *tag_name;
@@ -286,15 +285,15 @@ newChildElementWithText(XMLNode *parent, const char *one, const char *two,
 }
 
 static void
-unlinkNode(XMLNode *elt) {
+unlinkNode(tinyxml2::XMLNode *elt) {
   elt->Parent()->DeleteChild(elt);
 }
 
 static bool
-serializeDoc(const XMLDocument & doc, char **out_data, size_t *out_size) {
+serializeDoc(const tinyxml2::XMLDocument & doc, char **out_data, size_t *out_size) {
   /* Windows XP can't handle newlines in XML gracefully... */
   bool compact = true;
-  XMLPrinter streamer(NULL, compact);
+  tinyxml2::XMLPrinter streamer(NULL, compact);
   doc.Print(&streamer);
 
   /* copy the data in streamer to a pointer that the caller
@@ -312,7 +311,7 @@ serializeDoc(const XMLDocument & doc, char **out_data, size_t *out_size) {
 }
 
 static void
-initDoc(XMLDocument & doc) {
+initDoc(tinyxml2::XMLDocument & doc) {
   doc.InsertEndChild(doc.NewDeclaration("xml version=\"1.0\" encoding=\"utf-8\""));
 }
 
@@ -322,10 +321,10 @@ initDoc(XMLDocument & doc) {
    namespace / prefix mappings. This is used for the Owner XML
    element in WebDAV (which needs to be preserved exactly).
 */
-class _OwnerXmlStorer : public XMLVisitor {
+class _OwnerXmlStorer : public tinyxml2::XMLVisitor {
 public:
-  _OwnerXmlStorer(XMLNode *initNode)
-    : m_stack(std::deque<XMLNode *>(1, initNode)),
+  _OwnerXmlStorer(tinyxml2::XMLNode *initNode)
+    : m_stack(std::deque<tinyxml2::XMLNode *>(1, initNode)),
       m_ns_count(0)
   {}
 
@@ -333,23 +332,23 @@ public:
   }
 
   bool
-  VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) override;
+  VisitEnter(const tinyxml2::XMLElement & elt, const tinyxml2::XMLAttribute *attrs) override;
 
   bool
-  VisitExit(const XMLElement & elt) override;
+  VisitExit(const tinyxml2::XMLElement & elt) override;
 
   bool
-  Visit(const XMLText & elt) override;
+  Visit(const tinyxml2::XMLText & elt) override;
 
 private:
-  std::stack<XMLNode *> m_stack;
+  std::stack<tinyxml2::XMLNode *> m_stack;
   uintmax_t m_ns_count;
 
-  const char *FindOrCreatePrefix(XMLElement *start_at, const char *ns_href);
+  const char *FindOrCreatePrefix(tinyxml2::XMLElement *start_at, const char *ns_href);
 };
 
 static const char *
-findPrefix(const XMLElement *start_at, const char *ns_href) {
+findPrefix(const tinyxml2::XMLElement *start_at, const char *ns_href) {
   assert(ns_href &&
          !str_equals(ns_href, "") &&
          !str_equals(ns_href, XMLNS_XML_NS));
@@ -369,10 +368,10 @@ findPrefix(const XMLElement *start_at, const char *ns_href) {
 
   std::unordered_set<const char *, c_str_hash, c_str_pred> prefixes_seen;
 
-  const XMLElement *search = start_at;
+  const tinyxml2::XMLElement *search = start_at;
   while (search && !prefix) {
     /* search each xmlns declaration for the href */
-    for (const XMLAttribute *attr = search->FirstAttribute();
+    for (const tinyxml2::XMLAttribute *attr = search->FirstAttribute();
          attr && !prefix; attr = attr->Next()) {
       /* normal xmlns isn't relevant, since there is no prefix there */
       if (!str_startswith(attr->Name(), "xmlns:")) {
@@ -403,7 +402,7 @@ findPrefix(const XMLElement *start_at, const char *ns_href) {
 }
 
 const char *
-_OwnerXmlStorer::FindOrCreatePrefix(XMLElement *start_at, const char *ns_href) {
+_OwnerXmlStorer::FindOrCreatePrefix(tinyxml2::XMLElement *start_at, const char *ns_href) {
   const char *prefix = findPrefix(start_at, ns_href);
 
   if (!prefix) {
@@ -418,7 +417,7 @@ _OwnerXmlStorer::FindOrCreatePrefix(XMLElement *start_at, const char *ns_href) {
 
     /* requery attribute to get pointer to prefix string that's is managed
        by the document */
-    const XMLAttribute *new_attribute = ((const XMLElement *) start_at)->FindAttribute(buf);
+    const tinyxml2::XMLAttribute *new_attribute = ((const tinyxml2::XMLElement *) start_at)->FindAttribute(buf);
     assert(new_attribute);
     prefix = strchr(new_attribute->Name(), ':') + 1;
   }
@@ -429,12 +428,12 @@ _OwnerXmlStorer::FindOrCreatePrefix(XMLElement *start_at, const char *ns_href) {
 }
 
 bool
-_OwnerXmlStorer::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
+_OwnerXmlStorer::VisitEnter(const tinyxml2::XMLElement & elt, const tinyxml2::XMLAttribute *attrs) {
   const char *elt_name = get_ns_name(&elt);
   const char *elt_href = get_ns_href(&elt);
 
   /* find an xml tag namespace prefix for the current namespace href */
-  XMLElement *parent_element = m_stack.top()->ToElement();
+  tinyxml2::XMLElement *parent_element = m_stack.top()->ToElement();
 
   const char *prefix = elt_href
     ? (parent_element
@@ -449,7 +448,7 @@ _OwnerXmlStorer::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
     new_elt->SetAttribute("xmlns:ns0", elt_href);
   }
 
-  for (const XMLAttribute *curattrs = attrs; curattrs;
+  for (const tinyxml2::XMLAttribute *curattrs = attrs; curattrs;
        curattrs = curattrs->Next()) {
     if (is_xmlns_attr(curattrs)) {
       /* ignore xmlns declarations */
@@ -478,23 +477,23 @@ _OwnerXmlStorer::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
 }
 
 bool
-_OwnerXmlStorer::VisitExit(const XMLElement & elt) {
+_OwnerXmlStorer::VisitExit(const tinyxml2::XMLElement & elt) {
   UNUSED(elt);
   m_stack.pop();
   return true;
 }
 
 bool
-_OwnerXmlStorer::Visit(const XMLText & elt) {
+_OwnerXmlStorer::Visit(const tinyxml2::XMLText & elt) {
   auto new_elt = elt.ShallowClone(m_stack.top()->GetDocument());
   m_stack.top()->InsertEndChild(new_elt);
   return true;
 }
 
 static void
-storeOwnerChildren(XMLElement *owner_elt, owner_xml_t *owner_xml) {
+storeOwnerChildren(tinyxml2::XMLElement *owner_elt, owner_xml_t *owner_xml) {
   /* goal here is to make a new xml document with the children of owner_elt */
-  XMLDocument *doc = new XMLDocument();
+  tinyxml2::XMLDocument *doc = new tinyxml2::XMLDocument();
 
   _OwnerXmlStorer a(doc);
 
@@ -504,8 +503,8 @@ storeOwnerChildren(XMLElement *owner_elt, owner_xml_t *owner_xml) {
 }
 
 static void
-loadOwnerChildren(XMLElement *owner_parent, owner_xml_t owner_xml) {
-  XMLDocument *owner_doc = (XMLDocument *) owner_xml;
+loadOwnerChildren(tinyxml2::XMLElement *owner_parent, owner_xml_t owner_xml) {
+  tinyxml2::XMLDocument *owner_doc = (tinyxml2::XMLDocument *) owner_xml;
 
   _OwnerXmlStorer storer(owner_parent);
 
@@ -514,38 +513,38 @@ loadOwnerChildren(XMLElement *owner_parent, owner_xml_t owner_xml) {
 
 void
 owner_xml_free(owner_xml_t a) {
-  delete ((XMLDocument *) a);
+  delete ((tinyxml2::XMLDocument *) a);
 }
 
-class _DocumentCopier : public XMLVisitor {
+class _DocumentCopier : public tinyxml2::XMLVisitor {
 public:
   _DocumentCopier()
-    : m_stack(std::deque<XMLNode *>(1, new XMLDocument()))
+    : m_stack(std::deque<tinyxml2::XMLNode *>(1, new tinyxml2::XMLDocument()))
   {}
 
   ~_DocumentCopier() {
   }
 
-  XMLDocument *
+  tinyxml2::XMLDocument *
   getCopy() const {
     return m_stack.top()->ToDocument();
   }
 
   bool
-  VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) override;
+  VisitEnter(const tinyxml2::XMLElement & elt, const tinyxml2::XMLAttribute *attrs) override;
 
   bool
-  VisitExit(const XMLElement & elt) override;
+  VisitExit(const tinyxml2::XMLElement & elt) override;
 
   bool
-  Visit(const XMLText & elt) override;
+  Visit(const tinyxml2::XMLText & elt) override;
 
 private:
-  std::stack<XMLNode *> m_stack;
+  std::stack<tinyxml2::XMLNode *> m_stack;
 };
 
 bool
-_DocumentCopier::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
+_DocumentCopier::VisitEnter(const tinyxml2::XMLElement & elt, const tinyxml2::XMLAttribute *attrs) {
   UNUSED(attrs);
   auto new_elt = elt.ShallowClone(m_stack.top()->GetDocument());
   m_stack.top()->InsertEndChild(new_elt);
@@ -554,14 +553,14 @@ _DocumentCopier::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
 }
 
 bool
-_DocumentCopier::VisitExit(const XMLElement & elt) {
+_DocumentCopier::VisitExit(const tinyxml2::XMLElement & elt) {
   UNUSED(elt);
   m_stack.pop();
   return true;
 }
 
 bool
-_DocumentCopier::Visit(const XMLText & elt) {
+_DocumentCopier::Visit(const tinyxml2::XMLText & elt) {
   auto new_elt = elt.ShallowClone(m_stack.top()->GetDocument());
   m_stack.top()->InsertEndChild(new_elt);
   return true;
@@ -569,7 +568,7 @@ _DocumentCopier::Visit(const XMLText & elt) {
 
 owner_xml_t
 owner_xml_copy(owner_xml_t a) {
-  XMLDocument *doc = (XMLDocument *) a;
+  tinyxml2::XMLDocument *doc = (tinyxml2::XMLDocument *) a;
 
   _DocumentCopier copier;
 
@@ -580,42 +579,42 @@ owner_xml_copy(owner_xml_t a) {
 
 /* XML namespace syntax verifier */
 
-class XMLNamespaceVerifier : public XMLVisitor {
+class XMLNamespaceVerifier : public tinyxml2::XMLVisitor {
 public:
   XMLNamespaceVerifier()
     : m_is_valid(true)
   {}
 
   bool
-  VisitEnter(const XMLDocument &) override { return m_is_valid; }
+  VisitEnter(const tinyxml2::XMLDocument &) override { return m_is_valid; }
 
   bool
-  VisitExit(const XMLDocument &) override { return m_is_valid; }
+  VisitExit(const tinyxml2::XMLDocument &) override { return m_is_valid; }
 
   bool
-  VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) override;
+  VisitEnter(const tinyxml2::XMLElement & elt, const tinyxml2::XMLAttribute *attrs) override;
 
   bool
-  VisitExit(const XMLElement &) override { return m_is_valid; }
+  VisitExit(const tinyxml2::XMLElement &) override { return m_is_valid; }
 
   bool
-  Visit(const XMLDeclaration &) override { return m_is_valid; }
+  Visit(const tinyxml2::XMLDeclaration &) override { return m_is_valid; }
 
   bool
-  Visit(const XMLText &) override { return m_is_valid; }
+  Visit(const tinyxml2::XMLText &) override { return m_is_valid; }
 
   bool
-  Visit(const XMLComment &) override { return m_is_valid; }
+  Visit(const tinyxml2::XMLComment &) override { return m_is_valid; }
 
   bool
-  Visit(const XMLUnknown &) override { return m_is_valid; }
+  Visit(const tinyxml2::XMLUnknown &) override { return m_is_valid; }
 
 private:
   bool m_is_valid;
 };
 
 static bool
-is_valid_element(const XMLElement & elt) {
+is_valid_element(const tinyxml2::XMLElement & elt) {
   const char *const tag_name = elt.Name();
   const char *const first_colon = strchr(tag_name, ':');
 
@@ -665,7 +664,7 @@ is_valid_namespace_declaration_name(const char *name) {
 }
 
 static bool
-is_valid_attribute(const XMLElement & elt, const XMLAttribute & attr) {
+is_valid_attribute(const tinyxml2::XMLElement & elt, const tinyxml2::XMLAttribute & attr) {
   const char *const tag_name = attr.Name();
   const char *const first_colon = strchr(tag_name, ':');
 
@@ -724,14 +723,14 @@ is_valid_attribute(const XMLElement & elt, const XMLAttribute & attr) {
 }
 
 bool
-XMLNamespaceVerifier::VisitEnter(const XMLElement & elt, const XMLAttribute *attrs) {
+XMLNamespaceVerifier::VisitEnter(const tinyxml2::XMLElement & elt, const tinyxml2::XMLAttribute *attrs) {
   /* verify tag name and all attributes names */
   if (!is_valid_element(elt)) {
     m_is_valid = false;
   }
   else {
     std::unordered_set<std::pair<std::string,std::string> > seen_attrs;
-    for (const XMLAttribute *curattrs = attrs;
+    for (const tinyxml2::XMLAttribute *curattrs = attrs;
          curattrs && m_is_valid;
          curattrs = curattrs->Next()) {
       if (!is_valid_attribute(elt, *curattrs)) {
@@ -761,8 +760,8 @@ XMLNamespaceVerifier::VisitEnter(const XMLElement & elt, const XMLAttribute *att
   return m_is_valid;
 }
 
-static XMLError
-parseXML(XMLDocument & doc, const char *xml, size_t xml_len) {
+static tinyxml2::XMLError
+parseXML(tinyxml2::XMLDocument & doc, const char *xml, size_t xml_len) {
   auto xml_error = doc.Parse(xml, xml_len);
   if (xml_error) {
     return xml_error;
@@ -771,8 +770,8 @@ parseXML(XMLDocument & doc, const char *xml, size_t xml_len) {
   XMLNamespaceVerifier verifier;
 
   return (doc.Accept(&verifier)
-          ? XML_NO_ERROR
-          : XML_ERROR_PARSING);
+          ? tinyxml2::XML_NO_ERROR
+          : tinyxml2::XML_ERROR_PARSING);
 }
 
 /* PROPFIND method XML functions */
@@ -784,7 +783,7 @@ parse_propfind_request(const char *req_data,
                        linked_list_t *out_props_to_get) {
   xml_parse_code_t toret;
 
-  XMLDocument doc;
+  tinyxml2::XMLDocument doc;
 
   *out_props_to_get = LINKED_LIST_INITIALIZER;
 
@@ -907,7 +906,7 @@ generate_propfind_response(webdav_propfind_req_type_t req_type,
     ? allocated_props_to_get
     : props_to_get_;
 
-  XMLDocument doc;
+  tinyxml2::XMLDocument doc;
   initDoc(doc);
 
   auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
@@ -958,7 +957,7 @@ generate_propfind_response(webdav_propfind_req_type_t req_type,
           : "%Y-%m-%dT%H:%M:%SZ";
 
         size_t num_chars = strftime(time_buf, sizeof(time_buf), fmt, tm_);
-        XMLElement *xml_node;
+        tinyxml2::XMLElement *xml_node;
 
         if (!num_chars) {
           log_error("strftime failed!");
@@ -1069,12 +1068,12 @@ parse_lock_request_body(const char *body, size_t body_len,
 
   bool saw_lockscope = false;
   bool saw_locktype = false;
-  XMLElement *root_element = NULL;
+  tinyxml2::XMLElement *root_element = NULL;
 
   /* this is an optional request parameter */
   *owner_xml = NULL;
 
-  XMLDocument doc;
+  tinyxml2::XMLDocument doc;
   auto error_parse = parseXML(doc, body, body_len);
   if (error_parse) {
     toret = XML_PARSE_ERROR_SYNTAX;
@@ -1126,7 +1125,7 @@ generate_locked_response(const char *locked_path,
                          http_status_code_t *status_code,
                          char **response_body,
                          size_t *response_body_len) {
-  XMLDocument doc;
+  tinyxml2::XMLDocument doc;
   initDoc(doc);
 
   auto error_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "error");
@@ -1156,7 +1155,7 @@ generate_locked_descendant_response(const char *locked_descendant,
                                     http_status_code_t *status_code,
                                     char **response_body,
                                     size_t *response_body_len) {
-  XMLDocument doc;
+  tinyxml2::XMLDocument doc;
   initDoc(doc);
 
   auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
@@ -1191,7 +1190,7 @@ generate_failed_lock_response_body(const char *file_uri,
                                    http_status_code_t *status_code,
                                    char **response_body,
                                    size_t *response_body_len) {
-  XMLDocument doc;
+  tinyxml2::XMLDocument doc;
   initDoc(doc);
 
   auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
@@ -1240,7 +1239,7 @@ generate_success_lock_response_body(const char *file_uri,
                                     http_status_code_t *status_code,
                                     char **response_body,
                                     size_t *response_body_len) {
-  XMLDocument doc;
+  tinyxml2::XMLDocument doc;
   initDoc(doc);
 
   auto prop_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "prop");
@@ -1307,9 +1306,9 @@ xml_parse_code_t
 parse_proppatch_request(const char *body, size_t body_len,
                         linked_list_t *out_proppatch_directives) {
   xml_parse_code_t toret;
-  XMLElement *root_element;
+  tinyxml2::XMLElement *root_element;
 
-  XMLDocument doc;
+  tinyxml2::XMLDocument doc;
 
   auto error_parse = parseXML(doc, body, body_len);
   if (error_parse) {
@@ -1392,7 +1391,7 @@ generate_proppatch_response(const char *uri,
                             linked_list_t props_to_patch,
                             char **output, size_t *output_size,
                             http_status_code_t *status_code) {
-  XMLDocument doc;
+  tinyxml2::XMLDocument doc;
   initDoc(doc);
 
   auto multistatus_elt = newChildElement(&doc, DAV_XML_NS_PREFIX, "multistatus");
@@ -1471,7 +1470,7 @@ pretty_print_xml(const char *xml_body, size_t len, log_level_t level) {
     return;
   }
 
-  XMLDocument doc;
+  tinyxml2::XMLDocument doc;
 
   auto xml_error = doc.Parse(xml_body, len);
   if (xml_error) {
@@ -1480,7 +1479,7 @@ pretty_print_xml(const char *xml_body, size_t len, log_level_t level) {
     return;
   }
 
-  XMLPrinter printer;
+  tinyxml2::XMLPrinter printer;
 
   doc.Print(&printer);
 
