@@ -270,13 +270,10 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
        find select wait time
      */
     bool select_stop_clock_is_enabled = false;
-    uint64_t select_stop_clock;
+    uint64_t select_stop_clock = UINT64_MAX;
     for (EventLoopSelectTimeoutLink *ll = loop->timeout_ll; ll;) {
       if (ll->is_active) {
-        select_stop_clock = select_stop_clock_is_enabled
-          ? MIN(ll->timeout.end_clock, select_stop_clock)
-          : ll->timeout.end_clock;
-
+        select_stop_clock = MIN(ll->timeout.end_clock, select_stop_clock);
         if (!select_stop_clock_is_enabled) select_stop_clock_is_enabled = true;
         ll = ll->next;
       }

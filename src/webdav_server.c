@@ -668,16 +668,23 @@ _can_modify_path(struct handler_context *hc,
 
   /* check if the path is locked or is a descendant of a locked path
      (directly or indirectly locked) */
-  const char *locked_path;
-  const char *locked_lock_token;
+  const char *locked_path = NULL;
+  const char *locked_lock_token = NULL;
   bool is_locked;
-  bool path_is_collection;
+  /* NB: normally wouldn't have to set this but there
+     is a bug in the GCC optimizer that doesn't realize that:
+     is_locked => defined(path_is_collection)
+  */
+  bool path_is_collection = false;
   bool success_locked =
     is_resource_locked(hc->serv, fpath, &is_locked, &locked_path, &locked_lock_token, &path_is_collection);
   if (!success_locked) {
     *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     return;
   }
+
+  assert(locked_path);
+  assert(locked_lock_token);
 
   char *lock_token_fpath = NULL;
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS) {

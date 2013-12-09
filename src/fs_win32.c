@@ -420,6 +420,7 @@ fs_win32_opendir(fs_win32_handle_t fs, const char *path_,
   fs_error_t toret;
   LPWSTR wpath = NULL;
   char *path = NULL;
+  FsWin32DirectoryHandle *h = NULL;
 
   *dir_handle = 0;
 
@@ -439,7 +440,7 @@ fs_win32_opendir(fs_win32_handle_t fs, const char *path_,
     goto error;
   }
 
-  FsWin32DirectoryHandle *h = malloc(sizeof(*h));
+  h = malloc(sizeof(*h));
   if (!h) {
     toret = FS_ERROR_NO_MEM;
     goto error;
