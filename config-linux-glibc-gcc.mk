@@ -33,17 +33,14 @@ EVENT_LOOP_IMPL_EXTRA_IFACE_DEFS = SOCKETS_DEF=${SOCKETS_IMPL} UPTIME_DEF=${UPTI
 # flags
 # this is used on linux for seamless 64-bit filesystem usage
 # on 32-bit systems
+CPPFLAGS ?= $(if $(RELEASE),-DNDEBUG,-D_FORTIFY_SOURCE=2)
 CPPFLAGS += -D_FILE_OFFSET_BITS=64
-CPPFLAGS_RELEASE = -DNDEBUG
-CPPFLAGS_DEBUG = -D_FORTIFY_SOURCE=2
 
+CFLAGS ?= $(if $(RELEASE),-O3,-g)
 CFLAGS += -std=c99 -Wall -Wextra -Werror
-CFLAGS_DEBUG = -g
-CFLAGS_RELEASE = -O3 -flto
 
+CXXFLAGS ?= $(if $(RELEASE),-O3,-g)
 CXXFLAGS += -std=c++11 -Wall -Wextra -Werror
-CXXFLAGS_DEBUG = -g
-CXXFLAGS_RELEASE = -O3 -flto
 
 CFLAGS_DYN = -fPIC
 CXXFLAGS_DYN = -fPIC

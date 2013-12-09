@@ -31,15 +31,11 @@ EVENT_LOOP_IMPL_EXTRA_GEN_HEADERS = sockets.h uptime.h
 EVENT_LOOP_IMPL_EXTRA_IFACE_DEFS = SOCKETS_DEF=${SOCKETS_IMPL} UPTIME_DEF=${UPTIME_IMPL}
 
 # flags
-CPPFLAGS_RELEASE ?= -DNDEBUG
-
+CFLAGS ?= $(if $(RELEASE),-O3,-g -ftrapv -fcatch-undefined-behavior)
 CFLAGS += -std=c99 -Wall -Wextra -Werror
-CFLAGS_DEBUG ?= -g -ftrapv -fcatch-undefined-behavior
-CFLAGS_RELEASE ?= -O4
 
+CXXFLAGS ?= $(if $(RELEASE),-O3,-g -ftrapv)
 CXXFLAGS += -std=c++11 -Wall -Wextra -Werror -stdlib=libc++
-CXXFLAGS_DEBUG ?= -g -ftrapv
-CXXFLAGS_RELEASE ?= -O4
 
 CFLAGS_DYN ?= -fPIC -fvisibility=hidden
 CXXFLAGS_DYN ?= -fPIC -fvisibility=hidden

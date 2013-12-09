@@ -31,10 +31,6 @@ SRCROOT := src
 
 CPPFLAGS += -I${SRCROOT}
 
-CFLAGS += $(if ${RELEASE}, ${CFLAGS_RELEASE}, ${CFLAGS_DEBUG})
-CXXFLAGS += $(if ${RELEASE}, ${CXXFLAGS_RELEASE}, ${CXXFLAGS_DEBUG})
-CPPFLAGS += $(if ${RELEASE}, ${CPPFLAGS_RELEASE}, ${CPPFLAGS_DEBUG})
-
 # Different xml backends for the webdav server
 WEBDAV_SERVER_XML_IMPL := webdav_server_xml_tinyxml2.cpp tinyxml2.cpp
 WEBDAV_LIBS := ${CXX_LIBS}

@@ -32,18 +32,14 @@ SOCKETS_LIBS = -lws2_32
 WEBDAV_SERVER_CLINKFLAGS = -static
 
 # flags
-CPPFLAGS_RELEASE = -DNDEBUG
-
 # http://utf8everywhere.org/#how
 CPPFLAGS += -D_UNICODE -DUNICODE
 
+CFLAGS ?= $(if $(RELEASE),-O3,-g)
 CFLAGS += -std=c99 -Wall -Wextra -Werror
-CFLAGS_DEBUG = -g
-CFLAGS_RELEASE = -O3 -flto
 
+CXXFLAGS ?= $(if $(RELEASE),-O3,-g)
 CXXFLAGS += -std=c++11 -Wall -Wextra -Werror
-CXXFLAGS_DEBUG = -g
-CXXFLAGS_RELEASE = -O3 -flto
 
 # compiler and linker
 CC ?= gcc
