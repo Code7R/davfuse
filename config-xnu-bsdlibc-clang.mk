@@ -34,8 +34,8 @@ EVENT_LOOP_IMPL_EXTRA_IFACE_DEFS = SOCKETS_DEF=${SOCKETS_IMPL} UPTIME_DEF=${UPTI
 CFLAGS ?= $(if $(RELEASE),-O3,-g -ftrapv -fcatch-undefined-behavior)
 CFLAGS += -std=c99 -Wall -Wextra -Werror
 
-CXXFLAGS ?= $(if $(RELEASE),-O3,-g -ftrapv)
-CXXFLAGS += -std=c++11 -Wall -Wextra -Werror -stdlib=libc++
+CXXFLAGS ?= $(if $(RELEASE),-O3,-g -ftrapv) -stdlib=libc++
+CXXFLAGS += -std=c++11 -Wall -Wextra -Werror
 
 CFLAGS_DYN ?= -fPIC -fvisibility=hidden
 CXXFLAGS_DYN ?= -fPIC -fvisibility=hidden
