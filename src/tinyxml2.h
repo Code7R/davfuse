@@ -26,6 +26,7 @@ distribution.
 #define TINYXML2_INCLUDED
 
 #if defined(ANDROID_NDK) || defined(__BORLANDC__)
+#   include <assert.h>
 #   include <ctype.h>
 #   include <limits.h>
 #   include <stdio.h>
@@ -33,6 +34,7 @@ distribution.
 #   include <string.h>
 #   include <stdarg.h>
 #else
+#   include <cassert>
 #   include <cctype>
 #   include <climits>
 #   include <cstdio>

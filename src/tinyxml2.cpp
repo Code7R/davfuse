@@ -152,8 +152,9 @@ void StrPair::CollapseWhitespace()
 {
     // Trim leading space.
     _start = XMLUtil::SkipWhiteSpace( _start );
+    assert(_start);
 
-    if ( _start && *_start ) {
+    if ( *_start ) {
         char* p = _start;	// the read pointer
         char* q = _start;	// the write pointer
 
@@ -492,7 +493,8 @@ char* XMLDocument::Identify( char* p, XMLNode** node )
     XMLNode* returnNode = 0;
     char* start = p;
     p = XMLUtil::SkipWhiteSpace( p );
-    if( !p || !*p ) {
+    assert(p);
+    if( !*p ) {
         return p;
     }
 
@@ -1050,7 +1052,8 @@ char* XMLAttribute::ParseDeep( char* p, bool processEntities )
 
     // Skip white space before =
     p = XMLUtil::SkipWhiteSpace( p );
-    if ( !p || *p != '=' ) {
+    assert(p);
+    if ( !*p || *p != '=' ) {
         return 0;
     }
 
@@ -1347,7 +1350,8 @@ char* XMLElement::ParseAttributes( char* p )
     // Read the attributes.
     while( p ) {
         p = XMLUtil::SkipWhiteSpace( p );
-        if ( !p || !(*p) ) {
+        assert(p);
+        if ( !*p ) {
             _document->SetError( XML_ERROR_PARSING_ELEMENT, start, Name() );
             return 0;
         }
@@ -1404,7 +1408,8 @@ char* XMLElement::ParseDeep( char* p, StrPair* strPair )
 {
     // Read the element name.
     p = XMLUtil::SkipWhiteSpace( p );
-    if ( !p ) {
+    assert(p);
+    if ( !*p ) {
         return 0;
     }
 
