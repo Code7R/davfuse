@@ -36,12 +36,13 @@
 #ifdef __DARWIN_FD_ISSET
 static int
 __my_darwin_fd_isset(int _n, const struct fd_set *_p) {
-  return (_p->fds_bits[(unsigned long)_n/__DARWIN_NFDBITS] &
-          ((int32_t)(((unsigned long)1)<<((unsigned long)_n % __DARWIN_NFDBITS))));
+  assert(_n >= 0);
+  return (_p->fds_bits[_n/__DARWIN_NFDBITS] &
+          (1U<<(_n % __DARWIN_NFDBITS)));
 }
 
 #define MY_FD_ISSET(n, p) __my_darwin_fd_isset(n, p)
-#define MY_FD_SET(n, p) do { int __fd = (n); ((p)->fds_bits[__fd/__DARWIN_NFDBITS] |= ((unsigned long)1<<(__fd % __DARWIN_NFDBITS))); } while(0)
+#define MY_FD_SET(n, p) do { assert((n) >= 0); int __fd = (n); ((p)->fds_bits[__fd/__DARWIN_NFDBITS] |= (1U<<(__fd % __DARWIN_NFDBITS))); } while(0)
 #else
 #define MY_FD_ISSET(n, p) FD_ISSET(n, p)
 #define MY_FD_SET(n, p) FD_SET(n, p)
