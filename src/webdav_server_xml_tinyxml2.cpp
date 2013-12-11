@@ -30,6 +30,7 @@
 
 #include "tinyxml2.h"
 
+#include "c_util.h"
 #include "http_server.h"
 #include "util.h"
 #include "_webdav_server_types.h"
@@ -289,8 +290,12 @@ unlinkNode(tinyxml2::XMLNode *elt) {
   elt->Parent()->DeleteChild(elt);
 }
 
+NON_NULL_ARGS2(2, 3)
 static bool
 serializeDoc(const tinyxml2::XMLDocument & doc, char **out_data, size_t *out_size) {
+  assert(out_data);
+  assert(out_size);
+
   /* Windows XP can't handle newlines in XML gracefully... */
   bool compact = true;
   tinyxml2::XMLPrinter streamer(NULL, compact);
@@ -300,7 +305,7 @@ serializeDoc(const tinyxml2::XMLDocument & doc, char **out_data, size_t *out_siz
      can own,
      TODO: make this more efficient */
   *out_data = (char *) malloc(streamer.CStrSize() - 1);
-  if (!out_data) {
+  if (!*out_data) {
     return false;
   }
 
