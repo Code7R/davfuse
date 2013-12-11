@@ -789,8 +789,9 @@ can_unlink_path(struct handler_context *hc,
                    status_code,
                    response_body, response_body_len);
 
-  if (!status_code) {
-    /* check if any descendant is locked */
+  if (!*status_code) {
+    /* if we haven't gotten a status code yet,
+       then check if any descendant is locked */
     bool is_descendant_locked;
     const char *locked_descendant;
     bool locked_descendant_is_collection;
