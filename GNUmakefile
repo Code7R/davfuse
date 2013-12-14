@@ -35,7 +35,7 @@ CPPFLAGS += -I${SRCROOT}
 WEBDAV_SERVER_XML_IMPL := webdav_server_xml_tinyxml2.cpp tinyxml2.cpp
 WEBDAV_LIBS := ${CXX_LIBS}
 
-MAKEFILES := config.mk Makefile
+MAKEFILES := config.mk GNUmakefile
 
 HTTP_SERVER_SRC := http_server.c coroutine_io.c logging.c util.c \
 	http_helpers.c util_event_loop.c \
