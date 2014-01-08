@@ -351,4 +351,4 @@ MAKEDEPEND_CXX = \
 -include $(WEBDAV_SERVER_FS_MAIN_SRC:%=${OUTROOT}/webdav_server_fs_main/deps/%.P)
 -include $(LIBDAVFUSE_SRC:%=${OUTROOT}/libdavfuse/deps/%.P)
 
-.PHONY: all options webdav_server_fs_main libdavfuse http_server_test_main
+.PHONY: all options webdav_server_fs_main libdavfuse http_server_test_main libwebdav_server_fs.a
