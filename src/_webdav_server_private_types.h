@@ -104,8 +104,6 @@ struct webdav_server {
   webdav_backend_t fs;
   char *public_uri_root;
   char *internal_root;
-  event_handler_t stop_cb;
-  void *stop_ud;
 };
 
 struct handler_context {
