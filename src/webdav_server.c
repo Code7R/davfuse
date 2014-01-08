@@ -47,8 +47,8 @@
 #include "webdav_server.h"
 #undef _IS_WEBDAV_SERVER_C
 
-const char *const WEBDAV_SERVER_QUIT_URL = "/____quit_handler____";
-const char *const WEBDAV_SERVER_DISCONNECT_URL = "/____disconnect_handler____";
+static const char *const WEBDAV_SERVER_QUIT_URL = "/____quit_handler____";
+static const char *const WEBDAV_SERVER_DISCONNECT_URL = "/____disconnect_handler____";
 
 static const char *const WEBDAV_HEADER_DEPTH = "Depth";
 static const char *const WEBDAV_HEADER_DESTINATION = "Destination";
@@ -880,6 +880,7 @@ UTHR_DEFINE(request_proc) {
     }
   }
 
+#ifndef NDEBUG
   /* handle quit message */
   if (str_equals(hc->rhs.uri, WEBDAV_SERVER_QUIT_URL)) {
     webdav_server_stop(hc->serv);
@@ -887,6 +888,7 @@ UTHR_DEFINE(request_proc) {
   else if (str_equals(hc->rhs.uri, WEBDAV_SERVER_DISCONNECT_URL)) {
     webdav_server_disconnect_existing_clients(hc->serv);
   }
+#endif
 
   /* check if path isn't in our namespace so we can return 404 */
   if (!is_relative_uri_parent(hc->rhs.uri, hc->serv->internal_root) &&

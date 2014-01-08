@@ -31,11 +31,6 @@
 extern "C" {
 #endif
 
-#ifndef _IS_WEBDAV_SERVER_C
-extern const char *const WEBDAV_SERVER_QUIT_URL;
-extern const char *const WEBDAV_SERVER_DISCONNECT_URL;
-#endif
-
 enum {
   MAX_FILE_NAME_LENGTH=256,
 };
