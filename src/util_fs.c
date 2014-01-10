@@ -302,14 +302,18 @@ reparent_path(fs_handle_t fs,
     char *basename = fs_path_basename(fs, p);
     if (!basename) goto err;
     ll = linked_list_prepend(ll, basename);
-    p = fs_path_dirname(fs, p);
-    if (!p) goto err;
+
+    char *temp_p = fs_path_dirname(fs, p);
+    if (!temp_p) goto err;
+    free(p);
+    p = temp_p;
   }
 
   new_path = davfuse_util_strdup(to_path);
   LINKED_LIST_FOR(char, comp, ll) {
     char *new_new_path = util_fs_path_join(fs, new_path, comp);
     if (!new_new_path) goto err;
+    free(new_path);
     new_path = new_new_path;
   }
 
