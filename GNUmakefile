@@ -39,25 +39,29 @@ MAKEFILES := config.mk GNUmakefile
 
 HTTP_SERVER_SRC := http_server.c coroutine_io.c logging.c util.c \
 	http_helpers.c util_event_loop.c \
-	util_sockets.c
+	util_sockets.c uptime_${UPTIME_IMPL}.c \
+	event_loop_${EVENT_LOOP_IMPL}.c sockets_${SOCKETS_IMPL}.c \
+	log_printer_${LOG_PRINTER_IMPL}.c
+GEN_HEADERS_HTTP_SERVER := \
+    event_loop.h \
+    sockets.h \
+    log_printer.h \
+    uptime.h \
+    ${EVENT_LOOP_IMPL_EXTRA_GEN_HEADERS}
+HTTP_SERVER_IFACE_DEFS := \
+    EVENT_LOOP_DEF=${EVENT_LOOP_IMPL} \
+    SOCKETS_DEF=${SOCKETS_IMPL} \
+    LOG_PRINTER_DEF=${LOG_PRINTER_IMPL} \
+    UPTIME_DEF=${UPTIME_IMPL} \
+    ${EVENT_LOOP_IMPL_EXTRA_IFACE_DEFS}
+
 WEBDAV_SERVER_SRC := webdav_server.c ${WEBDAV_SERVER_XML_IMPL}
 
 # http_server_test_main vars
 
-HTTP_SERVER_TEST_MAIN_SRC := http_server_test_main.c \
-    ${HTTP_SERVER_SRC} \
-    event_loop_${EVENT_LOOP_IMPL}.c sockets_${SOCKETS_IMPL}.c \
-    log_printer_${LOG_PRINTER_IMPL}.c
-GEN_HEADERS_HTTP_SERVER_TEST_MAIN_ := \
-    event_loop.h \
-    sockets.h \
-    log_printer.h \
-    ${EVENT_LOOP_IMPL_EXTRA_GEN_HEADERS}
-HTTP_SERVER_TEST_MAIN_IFACE_DEFS := \
-    EVENT_LOOP_DEF=${EVENT_LOOP_IMPL} \
-    SOCKETS_DEF=${SOCKETS_IMPL} \
-    LOG_PRINTER_DEF=${LOG_PRINTER_IMPL} \
-    ${EVENT_LOOP_IMPL_EXTRA_IFACE_DEFS}
+HTTP_SERVER_TEST_MAIN_SRC := http_server_test_main.c ${HTTP_SERVER_SRC}
+GEN_HEADERS_HTTP_SERVER_TEST_MAIN_ := ${GEN_HEADERS_HTTP_SERVER}
+HTTP_SERVER_TEST_MAIN_IFACE_DEFS := ${HTTP_SERVER_IFACE_DEFS}
 
 GEN_HEADERS_HTTP_SERVER_TEST_MAIN := $(call unique_fn,$(patsubst %,${OUTROOT}/http_server_test_main/headers/%,${GEN_HEADERS_HTTP_SERVER_TEST_MAIN_}))
 HTTP_SERVER_TEST_MAIN_OBJ := $(patsubst %,${OUTROOT}/http_server_test_main/obj/%.o,${HTTP_SERVER_TEST_MAIN_SRC})
@@ -72,34 +76,22 @@ LIBWEBDAV_SERVER_FS_SRC_ = \
     webdav_backend_fs.c \
     util_fs.c \
     dfs.c \
-    log_printer_${LOG_PRINTER_IMPL}.c \
-    sockets_${SOCKETS_IMPL}.c \
-    event_loop_${EVENT_LOOP_IMPL}.c \
     fs_${FS_IMPL}.c \
     fs_${MAIN_FS_IMPL}.c \
-    uptime_${UPTIME_IMPL}.c \
-    ${EVENT_LOOP_IMPL_EXTRA_SOURCES} \
     ${FS_IMPL_EXTRA_SOURCES}
 GEN_HEADERS_LIBWEBDAV_SERVER_FS_ := \
-    event_loop.h \
-    sockets.h \
-    log_printer.h \
     webdav_backend.h \
     fs.h \
     fs_native.h \
-    uptime.h \
     ${EVENT_LOOP_IMPL_EXTRA_GEN_HEADERS} \
-    ${FS_IMPL_EXTRA_GEN_HEADERS}
+    ${FS_IMPL_EXTRA_GEN_HEADERS} \
+    ${GEN_HEADERS_HTTP_SERVER}
 LIBWEBDAV_SERVER_FS_IFACE_DEFS := \
-    EVENT_LOOP_DEF=${EVENT_LOOP_IMPL} \
-    SOCKETS_DEF=${SOCKETS_IMPL} \
-    LOG_PRINTER_DEF=${LOG_PRINTER_IMPL} \
     WEBDAV_BACKEND_DEF=fs \
     FS_DEF=${MAIN_FS_IMPL} \
     FS_NATIVE_DEF=${FS_IMPL}/fs \
-    UPTIME_DEF=${UPTIME_IMPL} \
-    ${EVENT_LOOP_IMPL_EXTRA_IFACE_DEFS} \
-    ${FS_IMPL_EXTRA_IFACE_DEFS}
+    ${FS_IMPL_EXTRA_IFACE_DEFS} \
+    ${HTTP_SERVER_IFACE_DEFS}
 
 LIBWEBDAV_SERVER_FS_SRC = $(call unique_fn,$(LIBWEBDAV_SERVER_FS_SRC_))
 GEN_HEADERS_LIBWEBDAV_SERVER_FS = $(call unique_fn,$(patsubst %,${OUTROOT}/libwebdav_server_fs/headers/%,${GEN_HEADERS_LIBWEBDAV_SERVER_FS_}))
@@ -129,24 +121,13 @@ LIBDAVFUSE_SRC := \
     async_fuse_fs_helpers.c async_rdwr_lock.c async_tree.c \
     fd_utils.c \
     ${HTTP_SERVER_SRC} \
-    event_loop_${EVENT_LOOP_IMPL}.c sockets_${SOCKETS_IMPL}.c \
-    log_printer_${LOG_PRINTER_IMPL}.c \
-    uptime_${UPTIME_IMPL}.c \
     ${WEBDAV_SERVER_SRC} webdav_backend_async_fuse.c
 GEN_HEADERS_LIBDAVFUSE_ := \
-    event_loop.h \
-    sockets.h \
-    log_printer.h \
     webdav_backend.h \
-    uptime.h \
-    ${EVENT_LOOP_IMPL_EXTRA_GEN_HEADERS}
+    ${GEN_HEADERS_HTTP_SERVER}
 LIBDAVFUSE_IFACE_DEFS := \
-    EVENT_LOOP_DEF=${EVENT_LOOP_IMPL} \
-    SOCKETS_DEF=${SOCKETS_IMPL} \
-    LOG_PRINTER_DEF=${LOG_PRINTER_IMPL} \
     WEBDAV_BACKEND_DEF=async_fuse \
-    UPTIME_DEF=${UPTIME_IMPL} \
-    ${EVENT_LOOP_IMPL_EXTRA_IFACE_DEFS}
+    ${HTTP_SERVER_IFACE_DEFS}
 
 GEN_HEADERS_LIBDAVFUSE = $(call unique_fn,$(patsubst %,${OUTROOT}/libdavfuse/headers/%,${GEN_HEADERS_LIBDAVFUSE_}))
 LIBDAVFUSE_OBJ := $(patsubst %,${OUTROOT}/libdavfuse/obj/%.o,${LIBDAVFUSE_SRC})
