@@ -364,19 +364,28 @@ generate_http_date(char *buf, size_t buf_size, time_t time_) {
   return num_chars && num_chars < buf_size;
 }
 
-/* NB: this function is hell */
+
+static time_t
+get_gm_offset() {
+  time_t currtime = time(NULL);
+
+  struct tm *timeinfo = gmtime(&currtime);
+  /* mktime() assumes timeinfo is in localtime,
+     this is how we get the offset */
+  time_t utc = mktime(timeinfo);
+
+  return difftime(utc, currtime);
+}
+
 static time_t
 my_timegm(struct tm *tm) {
-  enum {
-    /* XXX: HARDCODED TO CALIFORNIA */
-    GM_OFFSET=7*3600,
-  };
-  time_t ret = mktime(tm);
-  if (ret == (time_t) -1) {
-    return ret;
-  }
+  time_t gm_offset = get_gm_offset();
+  if (gm_offset == (time_t) -1) return -1;
 
-  return ret - GM_OFFSET;
+  time_t ret = mktime(tm);
+  if (ret == (time_t) -1) return -1;
+
+  return ret - gm_offset;
 }
 
 bool
