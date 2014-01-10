@@ -212,9 +212,13 @@ int main() {
                                       sizeof(listen_addr));
   ASSERT_TRUE(sock != INVALID_SOCKET);
 
-  /* start http server */
-  http_server_t server = http_server_start(loop, sock, handle_request, NULL);
+  /* create http server */
+  http_server_t server = http_server_new(loop, sock, handle_request, NULL);
   ASSERT_TRUE(server);
+
+  /* start http server */
+  bool started = http_server_start(server);
+  ASSERT_TRUE(started);
 
   log_info("Starting main loop");
   event_loop_main_loop(loop);
