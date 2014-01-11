@@ -730,10 +730,9 @@ is_valid_attribute(const tinyxml2::XMLElement & elt, const tinyxml2::XMLAttribut
 bool
 XMLNamespaceVerifier::VisitEnter(const tinyxml2::XMLElement & elt, const tinyxml2::XMLAttribute *attrs) {
   /* verify tag name and all attributes names */
-  if (!is_valid_element(elt)) {
-    m_is_valid = false;
-  }
-  else {
+
+  /* first check if all attributes are valid */
+  {
     std::unordered_set<std::pair<std::string,std::string> > seen_attrs;
     for (const tinyxml2::XMLAttribute *curattrs = attrs;
          curattrs && m_is_valid;
@@ -761,6 +760,10 @@ XMLNamespaceVerifier::VisitEnter(const tinyxml2::XMLElement & elt, const tinyxml
       }
     }
   }
+
+  /* then check if tag is valid
+   (this is because tag checking depends on first check attributes) */
+  if (m_is_valid && !is_valid_element(elt)) m_is_valid = false;
 
   return m_is_valid;
 }
