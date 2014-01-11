@@ -683,8 +683,8 @@ _can_modify_path(struct handler_context *hc,
     return;
   }
 
-  assert(locked_path);
-  assert(locked_lock_token);
+  assert(!is_locked || locked_path);
+  assert(!is_locked || locked_lock_token);
 
   char *lock_token_fpath = NULL;
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS) {
