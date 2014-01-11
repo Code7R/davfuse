@@ -226,3 +226,30 @@ super_strcat(const char *first, ...) {
 
   return toret;
 }
+
+char *
+davfuse_util_asprintf(const char *format, ...) {
+  va_list ap;
+
+  va_start(ap, format);
+#if defined(_MSC_VER) || defined(__MSVCRT_VERSION__)
+  int len = _vscprintf(format, ap);
+#else
+  int len = vsnprintf(0, 0, format, ap);
+#endif
+  va_end( ap );
+
+  char* p = malloc(len + 1);
+  if (!p) return NULL;
+
+  va_start(ap, format);
+  int len2 = vsnprintf(p, len + 1, format, ap);
+  va_end(ap);
+
+  if (len2 < 0) {
+    free(p);
+    return NULL;
+  }
+
+  return p;
+}

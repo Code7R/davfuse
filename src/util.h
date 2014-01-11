@@ -235,6 +235,9 @@ callback_deconstruct(Callback *cbud,
 char *
 super_strcat(const char *first, ...);
 
+char *
+davfuse_util_asprintf(const char *format, ...);
+
 #ifdef __cplusplus
 }
 
