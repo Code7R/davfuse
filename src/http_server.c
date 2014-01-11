@@ -1122,29 +1122,35 @@ http_get_header_value(const HTTPRequestHeaders *rhs, const char *header_name) {
 
 static
 EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
+  socket_t sock = INVALID_SOCKET;
+  HTTPConnection *ctx = NULL;
+
   UNUSED(ev_type);
   assert(ev_type == _HTTP_SERVER_ACCEPT_DONE_EVENT);
   HTTPServer *const http = ud;
+  assert(!http->shutting_down);
+
   /* our key has been invalidated */
   http->accept_watch_key = (event_loop_watch_key_t) 0;
 
-  const socket_t sock = _http_server_sock_from_accept_event(ev);
-  if (sock == INVALID_SOCKET) {
-    log_error("accept() client connection failed, shutting down server!");
+  /* accept again before running client
+     (which could stop the server) */
+  const bool success_accept = _http_server_accept(http);
+  if (!success_accept) {
+    log_error("couldn't accept again, shutting down server!");
     bool success_http_stop = http_server_stop(http);
     /* TODO: handle more gracefully */
     ASSERT_TRUE(success_http_stop);
     return;
   }
 
-  /* accept again before running client
-     (which could stop the server) */
-  assert(!http->shutting_down);
-  const bool success_accept = _http_server_accept(http);
-  if (!success_accept) log_error("Couldn't accept again!");
+  sock = _http_server_sock_from_accept_event(ev);
+  if (sock == INVALID_SOCKET) goto error;
+
+  ctx = malloc(sizeof(*ctx));
+  if (!ctx) goto error;
 
   /* run client */
-  HTTPConnection *const ctx = malloc_or_abort(sizeof(*ctx));
   *ctx = (HTTPConnection) {
     .sock = sock,
     .f = {
@@ -1156,6 +1162,18 @@ EVENT_HANDLER_DEFINE(accept_handler, ev_type, ev, ud) {
     .client_generation = http->client_generation,
   };
   UTHR_RUN(client_coroutine, ctx);
+
+  if (false) {
+  error:
+    log_error("Couldn't allocate resources for new client, dropping connection...");
+    free(ctx);
+    if (sock != INVALID_SOCKET) {
+      int ret = closesocket(sock);
+      if (ret == SOCKET_ERROR) {
+        log_error("Couldnt' close socket %d, leaking", (int) sock);
+      }
+    }
+  }
 }
 
 static void
