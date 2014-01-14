@@ -1193,7 +1193,7 @@ UTHR_DEFINE(client_coroutine) {
 
   log_debug("conn %p new connection!", cc);
 
-  while (_http_connection_do_another_request(cc)) {
+  do {
     /* (re-)initialize the request context */
     cc->rctx = (HTTPRequestContext) {
       .conn = cc,
@@ -1286,7 +1286,7 @@ UTHR_DEFINE(client_coroutine) {
         assert(UTHR_EVENT_TYPE() == HTTP_REQUEST_WRITE_DONE_EVENT);
       }
     }
-  }
+  } while (_http_connection_do_another_request(cc));
 
   log_debug("conn %p Client done, closing conn", cc);
   bool success_close = _http_connection_close(cc);
