@@ -167,6 +167,44 @@ event_loop_select_destroy(event_loop_select_handle_t a) {
 }
 
 static
+void
+_count_watched(event_loop_select_handle_t loop,
+	       size_t *new_reads_watched,
+	       size_t *new_writes_watched,
+	       socket_t sock, StreamEvents events) {
+  assert(loop && new_reads_watched && new_writes_watched);
+
+  fd_set readfds, writefds;
+
+  FD_ZERO(&readfds);
+  FD_ZERO(&writefds);
+
+  for (EventLoopSelectLink *ll = loop->ll; ll; ll = ll->next) {
+    if (!ll->is_active) continue;
+
+    if (ll->watch.events.read &&
+	!MY_FD_ISSET(ll->watch.sock, &readfds)) {
+      *new_reads_watched += 1;
+      MY_FD_SET(ll->watch.sock, &readfds);
+    }
+
+    if (ll->watch.events.write &&
+	!MY_FD_ISSET(ll->watch.sock, &writefds)) {
+      *new_writes_watched += 1;
+      MY_FD_SET(ll->watch.sock, &writefds);
+    }
+  }
+
+  if (events.read && !MY_FD_ISSET(sock, &readfds)) {
+    *new_reads_watched += 1;
+  }
+
+  if (events.write && !MY_FD_ISSET(sock, &writefds)) {
+    *new_writes_watched += 1;
+  }
+}
+
+static
 bool
 _event_loop_select_watch_add(event_loop_select_handle_t loop,
                              bool is_fd_watch,
@@ -177,6 +215,15 @@ _event_loop_select_watch_add(event_loop_select_handle_t loop,
                              event_loop_select_watch_key_t *key) {
   assert(loop);
   assert(handler);
+
+  size_t new_reads_watched = 0, new_writes_watched = 0;
+  _count_watched(loop, &new_reads_watched, &new_writes_watched,
+		 sock, events);
+
+  if (new_reads_watched >= FD_SETSIZE ||
+      new_writes_watched >= FD_SETSIZE) {
+    return false;
+  }
 
   EventLoopSelectWatcher watch = {
     .is_fd_watch = is_fd_watch,
@@ -321,18 +368,6 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
       }
 
       ll = ll->next;
-    }
-
-    if (writefds_watched >= FD_SETSIZE) {
-      log_critical("Too many write fds being watched: %d vs MAX %d",
-                   writefds_watched, FD_SETSIZE);
-      abort();
-    }
-
-    if (readfds_watched >= FD_SETSIZE) {
-      log_critical("Too many read fds being watched: %d vs MAX %d",
-                   readfds_watched, FD_SETSIZE);
-      abort();
     }
 
     /* if there is nothing to select for, then stop the main loop */
