@@ -354,7 +354,7 @@ EVENT_HANDLER_DEFINE(wait_until_ready_start_handler, ev_type, ev_, ud) {
   return;
 
  fail:
-  log_error("wait_until_ready failed!");
+  log_error("failed to add a watch, yielding and trying again later...");
 
   if (conn->spare.wait_until.read_key) {
     const bool success_remove_watch =
@@ -374,7 +374,20 @@ EVENT_HANDLER_DEFINE(wait_until_ready_start_handler, ev_type, ev_, ud) {
     if (!success_remove_timeout) log_error("Error removing read timeout");
   }
 
-  client_coroutine(GENERIC_EVENT, NULL, conn);
+  /* we failed to add a watch so yield and try again later */
+  {
+    const EventLoopTimeout to = {0, 0};
+    const bool success_add_watch_4 =
+      event_loop_timeout_add(http->loop,
+			     &to,
+			     wait_until_ready_start_handler,
+			     conn,
+			     NULL);
+    if (!success_add_watch_4) {
+      log_error("failed to add timeout, client coroutine will spin");
+      client_coroutine(GENERIC_EVENT, NULL, conn);
+    }
+  }
 }
 
 void
