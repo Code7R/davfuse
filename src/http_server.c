@@ -147,9 +147,9 @@ EVENT_HANDLER_DECLARE(client_coroutine);
 static
 UTHR_DECLARE(c_get_request);
 
-/* TODO: make this runtime configurable, 5 minutes is a decent default */
+/* TODO: make this runtime configurable, 5 seconds is a decent default */
 enum {
-  CONN_READ_TIMEOUT = 300,
+  CONN_READ_TIMEOUT = 5,
 };
 
 static const EventLoopTimeout HTTP_READ_TIMEOUT = {CONN_READ_TIMEOUT, 0};
