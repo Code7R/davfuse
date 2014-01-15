@@ -153,6 +153,7 @@ enum {
 };
 
 static const EventLoopTimeout HTTP_READ_TIMEOUT = {CONN_READ_TIMEOUT, 0};
+static const EventLoopTimeout CLIENT_STOP_WATCH_RETRY_TIMEOUT = {1, 0};
 
 enum {
   STOP_SOCKET_RECV,
@@ -376,10 +377,9 @@ EVENT_HANDLER_DEFINE(wait_until_ready_start_handler, ev_type, ev_, ud) {
 
   /* we failed to add a watch so yield and try again later */
   {
-    const EventLoopTimeout to = {0, 0};
     const bool success_add_watch_4 =
       event_loop_timeout_add(http->loop,
-			     &to,
+			     &CLIENT_STOP_WATCH_RETRY_TIMEOUT,
 			     wait_until_ready_start_handler,
 			     conn,
 			     NULL);
