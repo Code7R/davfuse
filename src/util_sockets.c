@@ -62,7 +62,7 @@ create_bound_socket(const struct sockaddr *addr, socklen_t addr_len) {
     goto error;
   }
 
-  ret = listen(socket_fd, 5);
+  ret = listen(socket_fd, SOMAXCONN);
   if (ret) {
     log_error("listen: %s", last_socket_error_message());
     goto error;
