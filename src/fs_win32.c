@@ -360,7 +360,8 @@ fs_win32_read(fs_win32_handle_t fs, fs_win32_file_handle_t file_handle,
     return windows_error_to_fs_error();
   }
 
-  assert(bytes_read <= SIZE_MAX);
+  STATIC_ASSERT(sizeof(bytes_read) <= sizeof(*amt_read),
+		"sizeof(bytes_read) > sizeof(*amt_read)");
   *amt_read = bytes_read;
 
   return FS_ERROR_SUCCESS;

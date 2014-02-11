@@ -350,14 +350,14 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
       }
 
       if (ll->watch.events.read && !MY_FD_ISSET(ll->watch.sock, &readfds)) {
-        log_debug("Adding fd %d to read set", ll->watch.sock);
+        log_debug("Adding fd %d to read set", (int) ll->watch.sock);
         MY_FD_SET(ll->watch.sock, &readfds);
         MY_FD_SET(ll->watch.sock, &errorfds);
         readfds_watched += 1;
       }
 
       if (ll->watch.events.write && !MY_FD_ISSET(ll->watch.sock, &writefds)) {
-        log_debug("Adding fd %d to write set", ll->watch.sock);
+        log_debug("Adding fd %d to write set", (int) ll->watch.sock);
         MY_FD_SET(ll->watch.sock, &writefds);
         MY_FD_SET(ll->watch.sock, &errorfds);
         writefds_watched += 1;
