@@ -558,7 +558,7 @@ unlock_resource(struct webdav_server *ws,
                 bool *unlocked) {
   *unlocked = false;
 
-  for (linked_list_t *llp = &ws->locks; *llp; llp = &(*llp)->next) {
+  for (linked_list_t *llp = &ws->locks; *llp; llp = *llp ? &(*llp)->next : llp) {
     WebdavLockDescriptor *elt = (*llp)->elt;
     if (str_equals(elt->path, file_path) &&
         str_equals(elt->lock_token, lock_token)) {
@@ -566,6 +566,21 @@ unlock_resource(struct webdav_server *ws,
       free_webdav_lock_descriptor(popped_elt);
       *unlocked = true;
       break;
+    }
+  }
+
+  return true;
+}
+
+static bool
+unconditionally_unlock_resource_and_descendants(struct webdav_server *ws,
+                                                const char *file_path) {
+  for (linked_list_t *llp = &ws->locks; *llp; llp = *llp ? &(*llp)->next : llp) {
+    WebdavLockDescriptor *elt = (*llp)->elt;
+    if (str_equals(file_path, elt->path) ||
+        is_parent_path(file_path, elt->path)) {
+      WebdavLockDescriptor *popped_elt = linked_list_pop_link(llp);
+      free_webdav_lock_descriptor(popped_elt);
     }
   }
 
@@ -1168,15 +1183,13 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
     goto done;
   }
 
-  /* TODO: XXX: destroy all locks held for the source resource,
-     for now just assert there is are no source locks
-  */
-  bool is_locked;
-  bool success_is_locked =
-    is_resource_locked(hc->serv, ctx->request_relative_uri,
-                       &is_locked, NULL, NULL, NULL);
-  if (!success_is_locked || is_locked) {
-    abort();
+  /* at this point we know this path (and all descendants) can be unlinked
+     now destroy our lock and all descendant locks */
+  bool success_unlock =
+    unconditionally_unlock_resource_and_descendants(hc->serv, ctx->request_relative_uri);
+  if (!success_unlock) {
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
   }
 
   CRYIELD(ctx->pos,
@@ -1617,8 +1630,15 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
     assert(WEBDAV_TOUCH_DONE_EVENT == ev_type);
     WebdavTouchDoneEvent *touch_done_ev = ev;
     if (touch_done_ev->error) {
-      /* TODO: handle error while touching */
-      abort();
+      // failed to touch file
+      // unlock and return
+      bool performed_unlock = false;
+      bool success_unlock =
+        unlock_resource(hc->serv, ctx->file_path, ctx->lock_token, &performed_unlock);
+      assert(!success_unlock || performed_unlock);
+      ASSERT_TRUE(success_unlock);
+      status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+      goto done;
     }
 
     if (!touch_done_ev->error &&
@@ -2405,6 +2425,12 @@ EVENT_HANDLER_DEFINE(handle_unlock_request, ev_type, ev, ud) {
   char *lock_token = NULL;
   char *file_path = NULL;
 
+  file_path = path_from_request_uri(hc, hc->rhs.uri);
+  if (!file_path) {
+    status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+    goto done;
+  }
+
   const char *lock_token_header = http_get_header_value(&hc->rhs, WEBDAV_HEADER_LOCK_TOKEN);
   if (!lock_token_header) {
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
@@ -2425,7 +2451,6 @@ EVENT_HANDLER_DEFINE(handle_unlock_request, ev_type, ev, ud) {
   }
 
   /* unlock based on token */
-  file_path = path_from_request_uri(hc, hc->rhs.uri);
   bool unlocked;
   bool success_unlock =
     unlock_resource(hc->serv, file_path, lock_token, &unlocked);
