@@ -24,6 +24,10 @@
 #include <stdlib.h>
 #include <time.h>
 
+#ifndef _WIN32
+#include <pthread.h>
+#endif
+
 #include "c_util.h"
 #include "util.h"
 
@@ -75,6 +79,10 @@ color_for_filename(const char *filename) {
   return color_table[x % NELEMS(color_table)];
 }
 
+#ifndef _WIN32
+pthread_mutex_t _print_mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
+
 void
 log_printer_stdio_print(const char *filename, int lineno,
                         log_level_t level,
@@ -82,6 +90,16 @@ log_printer_stdio_print(const char *filename, int lineno,
   /* TODO: we should be able to register log handlers,
      to make this more extensible, for now it's formatted to look like
      how encfs does its logging */
+#ifndef _WIN32
+  int ret = pthread_mutex_lock(&_print_mutex);
+  if (ret) {
+    /* this may interleave with other log output,
+       but it's better to output this than not */
+    fprintf(stderr, "FAILED TO GET PRINT MUTEX LOCK\n");
+    return;
+  }
+#endif
+
 
   if (!_logging_dest) {
     fprintf(stderr, "Must set _logging_dest before logging!");
@@ -135,4 +153,10 @@ log_printer_stdio_print(const char *filename, int lineno,
   }
 
   fprintf(_logging_dest, "\n");
+
+#ifndef _WIN32
+  int ret2 = pthread_mutex_unlock(&_print_mutex);
+  /* things are probably really messed up */
+  if (ret2) abort();
+#endif
 }
