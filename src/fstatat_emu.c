@@ -25,8 +25,104 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <dlfcn.h>
+#include <pthread.h>
+
+#include <assert.h>
 #include <errno.h>
 #include <stdlib.h>
+
+#include "logging.h"
+
+/* NB: for this fstatat_x emulation to work,
+   we need to make sure the current directory is only changed
+   while holding a lock, so we redefine chdir, fchdir since they
+   aren't thread-safe
+   NB: if you don't like this, then don't use this emulation
+       but you have to fix code that relies on the functionality of fstatat_x()
+*/
+
+int
+chdir(const char *path) {
+  (void) path;
+  assert(false);
+  errno = ENOSYS;
+  return -1;
+}
+
+int
+fchdir(int fildes) {
+  (void) fildes;
+  assert(false);
+  errno = ENOSYS;
+  return -1;
+}
+
+typedef int (*fchdir_t)(int);
+static fchdir_t _old_fchdir;
+static pthread_mutex_t _fchdir_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+int
+fchdir_acquire(int fildes) {
+  /* save the current working directory */
+  int cwd_fd = -1;
+  int ret_pthread = -1;
+
+  cwd_fd = open(".", O_RDONLY);
+  if (cwd_fd < 0) goto fail;
+
+  ret_pthread = pthread_mutex_lock(&_fchdir_mutex);
+  if (ret_pthread) goto fail;
+
+  if (!_old_fchdir) {
+    _old_fchdir = (fchdir_t) dlsym(RTLD_NEXT, "fchdir");
+    if (!_old_fchdir) goto fail;
+  }
+
+  int ret_fchdir = _old_fchdir(fildes);
+  if (ret_fchdir) goto fail;
+
+  return cwd_fd;
+
+  int _pre_errno;
+ fail:
+  _pre_errno = errno;
+
+  if (!ret_pthread) {
+    int ret2 = pthread_mutex_unlock(&_fchdir_mutex);
+    if (ret2) abort();
+  }
+
+  if (cwd_fd >= 0) {
+    int ret2 = close(cwd_fd);
+    if (ret2) log_error("failed to close: %d, leaking...", cwd_fd);
+  }
+
+  errno = _pre_errno;
+
+  return -1;
+}
+
+int
+fchdir_release(int cwd_fd) {
+  if (!_old_fchdir) {
+    _old_fchdir = (fchdir_t) dlsym(RTLD_NEXT, "fchdir");
+    if (!_old_fchdir) return -1;
+  }
+
+  int ret_fchdir = _old_fchdir(cwd_fd);
+  if (ret_fchdir) return -1;
+
+  int ret_unlock = pthread_mutex_unlock(&_fchdir_mutex);
+  if (ret_unlock) abort();
+
+  int ret_close = close(cwd_fd);
+  if (ret_close) {
+    log_error("failed to close: %d, leaking...", cwd_fd);
+  }
+
+  return 0;
+}
 
 int fstatat_x(int dirfd, const char *pathname, struct stat *buf,
               int flags) {
@@ -35,16 +131,10 @@ int fstatat_x(int dirfd, const char *pathname, struct stat *buf,
     return -1;
   }
 
-  /* save the current working directory */
-  int cwd_fd = open(".", O_RDONLY);
-  if (cwd_fd < 0) {
-    return -1;
-  }
-
   int toret;
 
   /* okay now switch to dirfd */
-  int fchdir_ret = fchdir(dirfd);
+  int fchdir_ret = fchdir_acquire(dirfd);
   if (fchdir_ret < 0) {
     toret = -1;
     goto done;
@@ -58,18 +148,10 @@ int fstatat_x(int dirfd, const char *pathname, struct stat *buf,
 
   toret = 0;
 
-  int fchdir_ret_2;
  done:
-  fchdir_ret_2 = fchdir(cwd_fd);
-  if (fchdir_ret_2) {
-    /* if we couldn't preserve the cwd, let's just die */
-    abort();
-  }
-
-  int close_ret = close(cwd_fd);
-  if (close_ret) {
-    /* failing on close is a leak */
-    abort();
+  if (fchdir_ret >= 0) {
+    int ret = fchdir_release(fchdir_ret);
+    if (ret) abort();
   }
 
   return toret;

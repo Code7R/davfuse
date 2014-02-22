@@ -366,6 +366,9 @@ fs_posix_readdir(fs_posix_handle_t fs, fs_posix_directory_handle_t dir_handle,
           fill_attrs(attrs, &entry_st);
         }
       }
+      else {
+        log_warning("fstatat_x failed: %s", strerror(errno));
+      }
     }
     else {
       log_warning("Couldn't get the fd of the directory pointer: %s",
