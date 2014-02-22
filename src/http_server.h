@@ -125,7 +125,7 @@ typedef enum {
 
 typedef struct {
   http_request_handle_t request_handle;
-  int err;
+  http_error_code_t err;
 } _SimpleRequestActionDoneEvent;
 
 typedef struct {
@@ -244,6 +244,20 @@ http_response_set_code(HTTPResponseHeaders *rsp, http_status_code_t code) {
   return true;
 #undef SET_MSG
 }
+
+const char *
+http_error_to_string(http_error_code_t e);
+
+/* we use the ##__VA_ARGS__ GCC extension here,
+   if not supported you have to implement http_request_log differently
+   (probably as a static header function) */
+#define http_request_log(rh, level, fmt, ...)                           \
+  logging_log(level, "HTTP %p " fmt, rh, ##__VA_ARGS__)
+
+#define http_request_log_error(rh, ...) http_request_log(rh, LOG_ERROR, __VA_ARGS__)
+#define http_request_log_warning(rh, ...) http_request_log(rh, LOG_WARNING, __VA_ARGS__)
+#define http_request_log_info(rh, ...) http_request_log(rh, LOG_INFO, __VA_ARGS__)
+#define http_request_log_debug(rh, ...) http_request_log(rh, LOG_DEBUG, __VA_ARGS__)
 
 #ifdef __cplusplus
 }

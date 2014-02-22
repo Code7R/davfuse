@@ -76,10 +76,10 @@ path_from_request_uri(struct handler_context *hc, const char *uri) {
 
   if (!str_startswith(uri, "/")) {
     /* we don't handle non-relative URIs */
-    log_info("Invalid request path (\"%s\")! "
-             "we currently only support relative paths",
-             uri);
-
+    http_request_log_info(hc->rh,
+                          "Invalid request path (\"%s\")! "
+                          "we currently only support relative paths",
+                          uri);
     return NULL;
   }
 
@@ -96,9 +96,10 @@ path_from_request_uri(struct handler_context *hc, const char *uri) {
        otherwise this isn't a mapped resource */
     if (!str_startswith(abs_path_start, hc->serv->internal_root) ||
         abs_path_start[internal_root_len] != '/') {
-      log_info("Invalid request path (\"%s\")! "
-               "doesn't start with internal root: (\"%s\")",
-               abs_path_start, hc->serv->internal_root);
+      http_request_log_info(hc->rh,
+                            "Invalid request path (\"%s\")! "
+                            "doesn't start with internal root: (\"%s\")",
+                            abs_path_start, hc->serv->internal_root);
       return NULL;
     }
     abs_path_start += internal_root_len;
@@ -265,7 +266,7 @@ UTHR_DEFINE(_request_uri_is_collection_uthr) {
 
   ctx->path = path_from_request_uri(ctx->hc, ctx->hc->rhs.uri);
   if (!ctx->path) {
-    log_info("Couldn't make file path from \"%s\"", ctx->hc->rhs.uri);
+    http_request_log_info(ctx->hc->rh, "Couldn't make file path from \"%s\"", ctx->hc->rhs.uri);
     goto done;
   }
 
@@ -847,7 +848,7 @@ UTHR_DEFINE(request_proc) {
 
   UTHR_HEADER(struct handler_context, hc);
 
-  log_info("New request! %p", hc);
+  http_request_log_info(hc->rh, "New request!");
 
   /* read out headers */
   UTHR_YIELD(hc,
@@ -859,7 +860,8 @@ UTHR_DEFINE(request_proc) {
   UNUSED(read_headers_ev);
   assert(read_headers_ev->request_handle == hc->rh);
   if (read_headers_ev->err != HTTP_SUCCESS) {
-    log_info("Reading headers failed: %d", (int) read_headers_ev->err);
+    http_request_log_info(hc->rh, "Reading headers failed: %s",
+                          http_error_to_string(read_headers_ev->err));
     goto done;
   }
 
@@ -978,7 +980,7 @@ UTHR_DEFINE(request_proc) {
   }
 
  done:
-  log_info("Request done! %p", hc);
+  http_request_log_info(hc->rh, "Request done!");
 
   http_request_end(hc->rh);
 
@@ -1001,7 +1003,7 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
 #define HANDLE_ERROR(if_err, status_code_, ...) \
   do {                                          \
     if (if_err) {                               \
-      log_debug("copy failed: " __VA_ARGS__);   \
+      http_request_log_debug(hc->rh, "copy failed: " __VA_ARGS__);       \
       status_code = status_code_;               \
       goto done;                                \
     }                                           \
@@ -1114,11 +1116,12 @@ EVENT_HANDLER_DEFINE(handle_copy_request, ev_type, ev, ud) {
     status_code = HTTP_STATUS_CODE_PRECONDITION_FAILED;
     break;
   default:
-    log_info("Error while %s \"%s\" to \"%s\": %d",
-             ctx->is_move ? "moving" : "copying",
-             ctx->src_relative_uri,
-             ctx->dst_relative_uri,
-             err);
+    http_request_log_info(hc->rh,
+                          "Error while %s \"%s\" to \"%s\": %s",
+                          ctx->is_move ? "moving" : "copying",
+                          ctx->src_relative_uri,
+                          ctx->dst_relative_uri,
+                          webdav_error_to_string(err));
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     break;
   }
@@ -1162,14 +1165,14 @@ EVENT_HANDLER_DEFINE(handle_delete_request, ev_type, ev, ud) {
 
   webdav_depth_t depth = webdav_get_depth(&hc->rhs);
   if (depth != DEPTH_INF) {
-    log_info("Invalid ctx->depth sent %d", depth);
+    http_request_log_info(hc->rh, "Invalid ctx->depth sent %d", depth);
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
   }
 
   ctx->request_relative_uri = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->request_relative_uri) {
-    log_info("Couldn't make file path from %s", hc->rhs.uri);
+    http_request_log_info(hc->rh, "Couldn't make file path from %s", hc->rhs.uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1306,8 +1309,9 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
 
   ctx->resource_uri = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->resource_uri) {
-    log_info("Error while getting resourece uri for request: \"%s\"",
-             hc->rhs.uri);
+    http_request_log_info(hc->rh,
+                          "Error while getting resourece uri for request: \"%s\"",
+                          hc->rhs.uri);
     code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1320,8 +1324,9 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   assert(ev_type == UTIL_WEBDAV_BACKEND_SINGLE_PROPFIND_DONE_EVENT);
   UtilWebdavBackendSinglePropfindDoneEvent *propfind_done_event = ev;
   if (propfind_done_event->error) {
-    log_info("Error while getting properties for resource \"%s\"",
-             ctx->resource_uri);
+    http_request_log_info(hc->rh,
+                          "Error while getting properties for resource \"%s\"",
+                          ctx->resource_uri);
     code = propfind_done_event->error == WEBDAV_ERROR_DOES_NOT_EXIST
       ? HTTP_STATUS_CODE_NOT_FOUND
       : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -1339,15 +1344,17 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
       parse_http_date(if_modified_since_value,
                       &if_modified_since_time_value);
     if (!success_parse) {
-      log_info("Bad if-modified-since header: \"%s\"",
-               if_modified_since_value);
+      http_request_log_info(hc->rh,
+                            "Bad if-modified-since header: \"%s\"",
+                            if_modified_since_value);
       code = HTTP_STATUS_CODE_BAD_REQUEST;
       goto done;
     }
 
-    log_debug("If modified since: %lu vs %lu",
-              (unsigned long) ctx->entry.modified_time,
-              (unsigned long) if_modified_since_time_value);
+    http_request_log_debug(hc->rh,
+                           "If modified since: %lu vs %lu",
+                           (unsigned long) ctx->entry.modified_time,
+                           (unsigned long) if_modified_since_time_value);
 
     if (ctx->entry.modified_time <= if_modified_since_time_value) {
       /* hasn't been modified recently, allow the request to skip */
@@ -1365,6 +1372,7 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
 
     if (!ctx->set_size_hint) {
       /* this is an error */
+      http_request_log_error(hc->rh, "Backend did not set size hint, failing write request");
       goto loop_error;
     }
 
@@ -1376,6 +1384,9 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
       HTTPRequestWriteHeadersDoneEvent *write_headers_ev = ev;
       assert(write_headers_ev->request_handle == hc->rh);
       if (write_headers_ev->err != HTTP_SUCCESS) {
+        http_request_log_error(hc->rh,
+                               "Error while writing headers, failing write request: %s",
+                               http_error_to_string(write_headers_ev->err));
         goto loop_error;
       }
       ctx->sent_headers = true;
@@ -1388,6 +1399,9 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
     HTTPRequestWriteDoneEvent *write_ev = ev;
     assert(write_ev->request_handle == hc->rh);
     if (write_ev->err != HTTP_SUCCESS) {
+        http_request_log_error(hc->rh,
+                               "Error while writing data, failing write request: %s",
+                               http_error_to_string(write_ev->err));
       goto loop_error;
     }
 
@@ -1406,8 +1420,9 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
   switch (request_end_ev->error){
   case WEBDAV_ERROR_NONE:
     assert(ctx->amt_sent <= ULONG_MAX);
-    log_debug("Sent %lu bytes of \"%s\"",
-              (long unsigned) ctx->amt_sent, ctx->resource_uri);
+    http_request_log_debug(hc->rh,
+                           "Sent %lu bytes of \"%s\"",
+                           (long unsigned) ctx->amt_sent, ctx->resource_uri);
     code = HTTP_STATUS_CODE_OK;
     break;
   case WEBDAV_ERROR_IS_COL:
@@ -1420,6 +1435,9 @@ EVENT_HANDLER_DEFINE(handle_get_request, ev_type, ev, ud) {
     code = HTTP_STATUS_CODE_NOT_FOUND;
     break;
   default:
+    http_request_log_info(hc->rh,
+                          "Error on completion backend's completion of \"%s\": %s",
+                          ctx->resource_uri, webdav_error_to_string(request_end_ev->error));
     code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     break;
   }
@@ -1473,7 +1491,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
 
   HTTPRequestReadBodyDoneEvent *rbev = ev;
   if (rbev->error) {
-    log_info("Error while reading body of request");
+    http_request_log_info(hc->rh, "Error while reading body of request");
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1481,7 +1499,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   ctx->request_body = rbev->body;
   ctx->request_body_len = rbev->length;
 
-  log_debug("Incoming lock request XML");
+  http_request_log_debug(hc->rh, "Incoming lock request XML");
   pretty_print_xml(ctx->request_body, ctx->request_body_len, LOG_DEBUG);
 
   /* get timeout */
@@ -1494,8 +1512,9 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   RequestUriIsCollectionDoneEvent *is_collection_done_ev = ev;
   if (is_collection_done_ev->error &&
       is_collection_done_ev->error != WEBDAV_ERROR_DOES_NOT_EXIST) {
-    log_debug("Couldn't determine if uri was a collection \"%s\": %d",
-              hc->rhs.uri, is_collection_done_ev->error);
+    http_request_log_debug(hc->rh,
+                           "Couldn't determine if uri was a collection \"%s\": %d",
+                           hc->rhs.uri, is_collection_done_ev->error);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1507,7 +1526,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   /* get path */
   ctx->file_path = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->file_path) {
-    log_debug("Invalid file path %s", hc->rhs.uri);
+    http_request_log_debug(hc->rh, "Invalid file path %s", hc->rhs.uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1516,13 +1535,13 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   if_lock_token_err_t if_lock_token_err =
     webdav_get_if_lock_token(hc, &ctx->resource_tag, &ctx->refresh_uri);
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_BAD_PARSE) {
-    log_debug("Bad XML!");
+    http_request_log_debug(hc->rh, "Bad XML!");
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
   }
 
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_INTERNAL) {
-    log_debug("XML Parse failed...");
+    http_request_log_debug(hc->rh, "XML Parse failed...");
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1530,8 +1549,9 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   if (if_lock_token_err == IF_LOCK_TOKEN_ERR_SUCCESS) {
     ctx->resource_tag_path = path_from_public_uri(hc, ctx->resource_tag);
     if (!ctx->resource_tag_path) {
-      log_debug("Couldn't get normalized resource path from uri ...: %s",
-                ctx->resource_tag);
+      http_request_log_debug(hc->rh,
+                             "Couldn't get normalized resource path from uri ...: %s",
+                             ctx->resource_tag);
       status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
       goto done;
     }
@@ -1582,7 +1602,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   /* get webdav depth */
   ctx->depth = webdav_get_depth(&hc->rhs);
   if (ctx->depth != DEPTH_0 && ctx->depth != DEPTH_INF) {
-    log_debug("Invalid ctx->depth sent %d", ctx->depth);
+    http_request_log_debug(hc->rh, "Invalid ctx->depth sent %d", ctx->depth);
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
   }
@@ -1594,12 +1614,12 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
     : XML_PARSE_ERROR_NONE;
   if (error_parse == XML_PARSE_ERROR_STRUCTURE ||
       error_parse == XML_PARSE_ERROR_SYNTAX) {
-    log_debug("Bad request body");
+    http_request_log_debug(hc->rh, "Bad request body");
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
   }
   else if (error_parse) {
-    log_debug("Internal error while parsing request");
+    http_request_log_debug(hc->rh, "Internal error while parsing request");
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1616,7 +1636,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
                        ctx->timeout_in_seconds, ctx->depth, ctx->is_exclusive, ctx->owner_xml,
                        &ctx->is_locked, &ctx->lock_token, &ctx->status_path, &ctx->status_path_is_collection);
   if (!success_perform) {
-    log_debug("Error while performing lock");
+    http_request_log_debug(hc->rh, "Error while performing lock");
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1652,7 +1672,7 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   /* generate lock attempt response */
   bool success_generate;
   if (ctx->is_locked) {
-    log_debug("Resource is already locked");
+    http_request_log_debug(hc->rh, "Resource is already locked");
     if (str_equals(ctx->status_path, ctx->file_path)) {
       char *const public_uri = public_uri_from_path(hc, ctx->status_path, ctx->status_path_is_collection);
       ASSERT_NOT_NULL(public_uri);
@@ -1709,15 +1729,16 @@ EVENT_HANDLER_DEFINE(handle_lock_request, ev_type, ev, ud) {
   }
 
   if (!success_generate) {
-    log_debug("Error while sending back response");
+    http_request_log_debug(hc->rh, "Error while sending back response");
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
   }
 
  done:
   assert(status_code);
-  log_debug("Response with status code: %d", status_code);
-  log_debug("Outgoing lock response XML (%lu bytes):",
-            (unsigned long) ctx->response_body_len);
+  http_request_log_debug(hc->rh, "Response with status code: %d", status_code);
+  http_request_log_debug(hc->rh,
+                         "Outgoing lock response XML (%lu bytes):",
+                         (unsigned long) ctx->response_body_len);
   pretty_print_xml(ctx->response_body, ctx->response_body_len, LOG_DEBUG);
 
   free(ctx->request_body);
@@ -1768,20 +1789,20 @@ EVENT_HANDLER_DEFINE(handle_mkcol_request, ev_type, ev, ud) {
                                    handle_mkcol_request, hc));
   HTTPRequestReadBodyDoneEvent *rbev = ev;
   if (rbev->error) {
-    log_info("Error while reading body of request");
+    http_request_log_info(hc->rh, "Error while reading body of request");
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
 
   if (rbev->length) {
-    log_info("Request had a body!");
+    http_request_log_info(hc->rh, "Request had a body!");
     status_code = HTTP_STATUS_CODE_UNSUPPORTED_MEDIA_TYPE;
     goto done;
   }
 
   ctx->request_relative_uri = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->request_relative_uri) {
-    log_info("Couldn't make file path from %s", hc->rhs.uri);
+    http_request_log_info(hc->rh, "Couldn't make file path from %s", hc->rhs.uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -1848,7 +1869,7 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
                                    handle_options_request, hc));
   HTTPRequestReadBodyDoneEvent *rbev = ev;
   if (rbev->error) {
-    log_info("Error while reading body of request");
+    http_request_log_info(hc->rh, "Error while reading body of request");
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto error;
   }
@@ -1867,8 +1888,9 @@ EVENT_HANDLER_DEFINE(handle_options_request, ev_type, ev, ud) {
     RequestUriIsCollectionDoneEvent *is_collection_done_ev = ev;
     if (is_collection_done_ev->error &&
         is_collection_done_ev->error != WEBDAV_ERROR_DOES_NOT_EXIST) {
-      log_info("Error while checking if \"%s\" was a collection: %d",
-               hc->rhs.uri, is_collection_done_ev->error);
+      http_request_log_info(hc->rh,
+                            "Error while checking if \"%s\" was a collection: %d",
+                            hc->rhs.uri, is_collection_done_ev->error);
       status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
       goto error;
     }
@@ -1983,15 +2005,15 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   ctx->out_buf_size = 0;
 
   if (is_relative_uri_parent(hc->rhs.uri, hc->serv->internal_root)) {
-    log_debug("URI is a parent of us and we don't allow PROPFIND");
+    http_request_log_debug(hc->rh, "URI is a parent of us and we don't allow PROPFIND");
     status_code = HTTP_STATUS_CODE_METHOD_NOT_ALLOWED;
     goto done;
   }
 
   ctx->request_relative_uri = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->request_relative_uri) {
-    log_info("couldn't create request relative uri: %s",
-             hc->rhs.uri);
+    http_request_log_info(hc->rh, "couldn't create request relative uri: %s",
+                          hc->rhs.uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -2001,8 +2023,8 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
           http_request_read_body(hc->rh, handle_propfind_request, hc));
   const HTTPRequestReadBodyDoneEvent *rbev = ev;
   if (rbev->error) {
-    log_info("propfind request had a body: %s",
-             ctx->request_relative_uri);
+    http_request_log_info(hc->rh, "propfind request had a body: %s",
+                          ctx->request_relative_uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -2012,13 +2034,13 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   /* figure out depth */
   const webdav_depth_t depth = webdav_get_depth(&hc->rhs);
   if (depth == DEPTH_INVALID) {
-    log_info("bad depth header!");
+    http_request_log_info(hc->rh, "bad depth header!");
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
   }
 
   assert(ctx->buf_used <= INT_MAX);
-  log_debug("XML request: Depth: %d", depth);
+  http_request_log_debug(hc->rh,"XML request: Depth: %d", depth);
   pretty_print_xml(ctx->buf, ctx->buf_used, LOG_DEBUG);
 
   /* parse request */
@@ -2029,12 +2051,12 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
                            &ctx->props_to_get);
   if (success_parse == XML_PARSE_ERROR_SYNTAX ||
       success_parse == XML_PARSE_ERROR_STRUCTURE) {
-    log_info("bad syntax for propfind request!");
+    http_request_log_info(hc->rh, "bad syntax for propfind request!");
     status_code = HTTP_STATUS_CODE_BAD_REQUEST;
     goto done;
   }
   else if (success_parse == XML_PARSE_ERROR_INTERNAL) {
-    log_info("internal parser error!");
+    http_request_log_info(hc->rh, "internal parser error!");
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -2048,7 +2070,7 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
   assert(ev_type == WEBDAV_PROPFIND_DONE_EVENT);
   const WebdavPropfindDoneEvent *run_propfind_ev = ev;
   if (run_propfind_ev->error) {
-    log_info("error while doing propfind: %d!", run_propfind_ev->error);
+    http_request_log_info(hc->rh, "error while doing propfind: %d!", run_propfind_ev->error);
     status_code = run_propfind_ev->error == WEBDAV_ERROR_DOES_NOT_EXIST
       ? HTTP_STATUS_CODE_NOT_FOUND
       : HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
@@ -2093,10 +2115,10 @@ EVENT_HANDLER_DEFINE(handle_propfind_request, ev_type, ev, ud) {
                    (linked_list_elt_handler_t) free_webdav_property);
 
   assert(status_code);
-  log_debug("Responding with status: %d", status_code);
+  http_request_log_debug(hc->rh, "Responding with status: %d", status_code);
   assert(ctx->out_buf_size <= ULONG_MAX);
-  log_debug("XML response will be: (%lu bytes)",
-            (unsigned long) ctx->out_buf_size);
+  http_request_log_debug(hc->rh, "XML response will be: (%lu bytes)",
+                         (unsigned long) ctx->out_buf_size);
   pretty_print_xml(ctx->out_buf, ctx->out_buf_size, LOG_DEBUG);
 
   if (status_code == HTTP_STATUS_CODE_METHOD_NOT_ALLOWED) {
@@ -2180,8 +2202,9 @@ EVENT_HANDLER_DEFINE(handle_proppatch_request, ev_type, ev, ud) {
   assert(status_code);
 
   assert(hc->sub.proppatch.response_body_size <= INT_MAX);
-  log_debug("XML response will be: (%d bytes)",
-            (int) hc->sub.proppatch.response_body_size);
+  http_request_log_debug(hc->rh,
+                         "XML response will be: (%d bytes)",
+                         (int) hc->sub.proppatch.response_body_size);
   pretty_print_xml(hc->sub.proppatch.response_body,
                    hc->sub.proppatch.response_body_size,
                    LOG_DEBUG);
@@ -2214,7 +2237,7 @@ run_proppatch(struct handler_context *hc, const char *uri,
      setting arbitrary properties */
   char *file_path = path_from_request_uri(hc, uri);
   if (!file_path) {
-    log_warning("Couldn't make file path from %s", uri);
+    http_request_log_warning(hc->rh, "Couldn't make file path from %s", uri);
     *status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -2229,7 +2252,7 @@ run_proppatch(struct handler_context *hc, const char *uri,
 
   /* now parse the xml */
   assert(input_size <= INT_MAX);
-  log_debug("XML request:");
+  http_request_log_debug(hc->rh, "XML request:");
   pretty_print_xml(input, input_size, LOG_DEBUG);
 
   linked_list_t props_to_patch;
@@ -2302,7 +2325,7 @@ EVENT_HANDLER_DEFINE(handle_put_request, ev_type, ev, ud) {
 
   ctx->request_relative_uri = path_from_request_uri(hc, hc->rhs.uri);
   if (!ctx->request_relative_uri) {
-    log_warning("Couldn't make file path from %s", hc->rhs.uri);
+    http_request_log_warning(hc->rh, "Couldn't make file path from %s", hc->rhs.uri);
     status_code = HTTP_STATUS_CODE_INTERNAL_SERVER_ERROR;
     goto done;
   }
@@ -2685,4 +2708,24 @@ free_webdav_proppatch_directive(WebdavProppatchDirective *wp) {
   free(wp->ns_href);
   free(wp->value);
   free(wp);
+}
+
+const char *
+webdav_error_to_string(webdav_error_t error) {
+#define _EV(e) case e: return #e
+  switch (error) {
+    _EV(WEBDAV_ERROR_NONE);
+    _EV(WEBDAV_ERROR_GENERAL);
+    _EV(WEBDAV_ERROR_NO_MEM);
+    _EV(WEBDAV_ERROR_IS_COL);
+    _EV(WEBDAV_ERROR_DOES_NOT_EXIST);
+    _EV(WEBDAV_ERROR_NOT_COLLECTION);
+    _EV(WEBDAV_ERROR_DESTINATION_DOES_NOT_EXIST);
+    _EV(WEBDAV_ERROR_DESTINATION_NOT_COLLECTION);
+    _EV(WEBDAV_ERROR_DESTINATION_EXISTS);
+    _EV(WEBDAV_ERROR_PERM);
+    _EV(WEBDAV_ERROR_NO_SPACE);
+    _EV(WEBDAV_ERROR_EXISTS);
+  default: assert(false); return NULL;
+  }
 }

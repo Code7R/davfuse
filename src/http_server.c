@@ -575,7 +575,7 @@ http_request_read_headers(http_request_handle_t rh,
     return cb(HTTP_REQUEST_READ_HEADERS_DONE_EVENT, &read_headers_ev, cb_ud);
   }
 
-  log_debug("conn %p Reading header", rctx->conn);
+  http_request_log_debug(rctx, "Reading header");
 
   /* read out client http request */
   rctx->read_state = HTTP_REQUEST_READ_STATE_READING_HEADERS;
@@ -864,10 +864,10 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
     myerrno = ENOMEM;
     goto done;
   }
-  log_debug("conn %p Writing HTTP response, %d %s",
-            whs->request_context->conn,
-            whs->response_headers->code,
-            whs->response_headers->message);
+  http_request_log_debug(whs->request_context,
+                         "Writing HTTP response, %d %s",
+                         whs->response_headers->code,
+                         whs->response_headers->message);
   EMITN(whs->response_line, ret);
 
   /* add date header */
@@ -880,40 +880,40 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
     myerrno = ENOMEM;
     goto done;
   }
-  log_debug("conn %p Writing response header: %.*s",
-            whs->request_context->conn,
-            ret_sprint2 - 2, whs->response_line);
+  http_request_log_debug(whs->request_context,
+                         "Writing response header: %.*s",
+                         ret_sprint2 - 2, whs->response_line);
   EMITN(whs->response_line, ret_sprint2);
 
   if (!_get_header_value(whs->response_headers->headers,
                          whs->response_headers->num_headers,
                          "Server")) {
-    log_debug("conn %p Writing response header: Server: Rian's HTTP Server",
-              whs->request_context->conn);
+    http_request_log_debug(whs->request_context,
+                           "Writing response header: Server: Rian's HTTP Server");
     EMITS("Server: Rian's HTTP Server\r\n");
   }
 
 
   if (!_http_connection_do_another_request(whs->request_context->conn)) {
-    log_debug("conn %p Writing response header: Connection: close",
-              whs->request_context->conn);
+    http_request_log_debug(whs->request_context,
+                           "Writing response header: Connection: close");
     EMITS("Connection: close\r\n");
   }
   else {
     /* TODO: only do this client sent "Connection: Keep-Alive",
        not harmful otherwise though, just unnecessary */
-    log_debug("conn %p Writing response header: Connection: Keep-Alive",
-              whs->request_context->conn);
+    http_request_log_debug(whs->request_context,
+                           "Writing response header: Connection: Keep-Alive");
     EMITS("Connection: Keep-Alive\r\n");
   }
 
   /* output each header */
   for (whs->header_idx = 0; whs->header_idx < whs->response_headers->num_headers;
        ++whs->header_idx) {
-    log_debug("conn %p Writing response header: %s: %s",
-              whs->request_context->conn,
-              whs->response_headers->headers[whs->header_idx].name,
-              whs->response_headers->headers[whs->header_idx].value);
+    http_request_log_debug(whs->request_context,
+                           "Writing response header: %s: %s",
+                           whs->response_headers->headers[whs->header_idx].name,
+                           whs->response_headers->headers[whs->header_idx].value);
     EMITS(whs->response_headers->headers[whs->header_idx].name);
     EMIT(": ");
     EMITS(whs->response_headers->headers[whs->header_idx].value);
@@ -925,8 +925,8 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
 
  done:
   if (myerrno) {
-    log_warning("conn %p Error while writing headers to client",
-                whs->request_context->conn);
+    http_request_log_warning(whs->request_context,
+                             "Error while writing headers to client");
   }
 
   whs->request_context->write_state = HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS;
@@ -1043,8 +1043,8 @@ EVENT_HANDLER_DEFINE(_handle_write_done, ev_type, ev, ud) {
   HTTPConnectionWriteDoneEvent *write_all_done_event = ev;
 
   if (write_all_done_event->error) {
-    log_warning("conn %p, http_request_write failed",
-                rws->request_context->conn);
+    http_request_log_warning(rws->request_context,
+                             "http_request_write failed");
     rws->request_context->conn->last_error_number = 1;
   }
   else {
@@ -1072,8 +1072,8 @@ http_request_write(http_request_handle_t rh,
 
   if (rctx->is_no_content) {
     /* this response was no content */
-    log_warning("conn %p, http_request_write called on a no content response",
-                rctx->conn);
+    http_request_log_warning(rctx,
+                             "http_request_write called on a no content response");
     goto error;
   }
 
@@ -1083,12 +1083,12 @@ http_request_write(http_request_handle_t rh,
     /* TODO: right now have no facility to do short writes,
        could return write amount when done
     */
-    log_warning("conn %p, "
-                "http_request_write will not do a short write, "
-                "request to write less. wanted to write %lu, "
-                "but there was only %lu left to write",
-                rctx->conn, (unsigned long) nbyte,
-                (unsigned long) left_to_write);
+    http_request_log_warning(rctx->conn,
+                             "http_request_write will not do a short write, "
+                             "request to write less. wanted to write %lu, "
+                             "but there was only %lu left to write",
+                             (unsigned long) nbyte,
+                             (unsigned long) left_to_write);
     goto error;
   }
 
@@ -1206,7 +1206,7 @@ static
 UTHR_DEFINE(client_coroutine) {
   UTHR_HEADER(HTTPConnection, cc);
 
-  log_debug("conn %p new connection!", cc);
+  http_request_log_debug(&cc->rctx, "new connection!");
 
   do {
     /* (re-)initialize the request context */
@@ -1231,18 +1231,18 @@ UTHR_DEFINE(client_coroutine) {
       .server = cc->server,
       .request_handle = &cc->rctx,
     };
-    log_debug("conn %p starting request", cc);
+    http_request_log_debug(&cc->rctx, "starting request");
     UTHR_YIELD(cc,
                cc->server->handler(HTTP_NEW_REQUEST_EVENT,
                                    &new_request_ev,
                                    cc->server->ud));
     assert(UTHR_EVENT_TYPE() == HTTP_END_REQUEST_EVENT);
-    log_debug("conn %p request is over!", cc);
+    http_request_log_debug(&cc->rctx, "request is over!");
 
     /* read headers if they were ignored */
     if (!_http_connection_has_error(cc) &&
         cc->rctx.read_state == HTTP_REQUEST_READ_STATE_NONE) {
-      log_debug("conn %p handler didn't read headers...", cc);
+      http_request_log_debug(&cc->rctx, "handler didn't read headers...");
       UTHR_YIELD(cc,
                  http_request_read_headers(&cc->rctx, &cc->spare.req,
                                            client_coroutine, cc));
@@ -1256,7 +1256,7 @@ UTHR_DEFINE(client_coroutine) {
           ? !cc->rctx.persist_ctx.chunked_coro_ctx.is_over
           : (cc->rctx.persist_ctx.content_length_read.bytes_read <
              cc->rctx.persist_ctx.content_length_read.content_length)) {
-        log_debug("conn %p handler didn't read entire body...", cc);
+        http_request_log_debug(&cc->rctx, "handler didn't read entire body...");
       }
       while (!_http_connection_has_error(cc)) {
         UTHR_YIELD(cc,
@@ -1274,7 +1274,7 @@ UTHR_DEFINE(client_coroutine) {
     /* clean up write side of request */
     if (!_http_connection_has_error(cc) &&
         cc->rctx.write_state == HTTP_REQUEST_WRITE_STATE_NONE) {
-      log_debug("conn %p handler didn't send a response...", cc);
+      http_request_log_debug(&cc->rctx, "handler didn't send a response...");
       UTHR_YIELD(cc,
                  _write_out_internal_server_error(&cc->rctx,
                                                   client_coroutine, cc));
@@ -1286,7 +1286,7 @@ UTHR_DEFINE(client_coroutine) {
         cc->rctx.write_state == HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS &&
         !cc->rctx.is_no_content) {
       if (cc->rctx.bytes_written < cc->rctx.out_content_length) {
-        log_debug("conn %p handler didn't finish response", cc);
+        http_request_log_debug(&cc->rctx, "handler didn't finish response");
       }
       while (!_http_connection_has_error(cc) &&
              cc->rctx.bytes_written < cc->rctx.out_content_length) {
@@ -1304,10 +1304,10 @@ UTHR_DEFINE(client_coroutine) {
     }
   } while (_http_connection_do_another_request(cc));
 
-  log_debug("conn %p Client done, closing conn", cc);
+  http_request_log_debug(&cc->rctx, "Client done, closing conn");
   bool success_close = _http_connection_close(cc);
   if (!success_close) {
-    log_error("conn %p, error while closing client connection, leaking...", cc);
+    http_request_log_error(&cc->rctx, "error while closing client connection, leaking...");
   }
 
   UTHR_RETURN(cc, 0);
@@ -1402,8 +1402,8 @@ UTHR_DEFINE(c_get_request) {
 
   EXPECT(' ');
 
-  log_debug("conn %p Got method '%s'",
-            state->rh->conn, state->request_headers->method);
+  http_request_log_debug(state->rh, "Got method '%s'",
+                         state->request_headers->method);
 
   /* request-uri = "*" | absoluteURI | abs_path | authority */
   /* we don't parse super intelligently here because
@@ -1412,8 +1412,8 @@ UTHR_DEFINE(c_get_request) {
   PARSEVAR(state->request_headers->uri, match_non_null_or_space);
   EXPECT(' ');
 
-  log_debug("conn %p Got uri '%s'",
-            state->rh->conn, state->request_headers->uri);
+  http_request_log_debug(state->rh, "Got uri '%s'",
+                         state->request_headers->uri);
 
   EXPECTS("HTTP/");
   PARSEINTVAR(state->request_headers->major_version);
@@ -1421,13 +1421,11 @@ UTHR_DEFINE(c_get_request) {
   PARSEINTVAR(state->request_headers->minor_version);
   EXPECTS("\r\n");
 
-  log_debug("conn %p Got version '%d.%d'",
-            state->rh->conn,
-            state->request_headers->major_version,
-            state->request_headers->minor_version);
+  http_request_log_debug(state->rh, "Got version '%d.%d'",
+                         state->request_headers->major_version,
+                         state->request_headers->minor_version);
 
-  log_debug("conn %p, Parsed request line",
-            state->rh->conn);
+  http_request_log_debug(state->rh, "Parsed request line");
 
   for (state->i = 0; state->i < (int) NELEMS(state->request_headers->headers);
        ++state->i) {
@@ -1470,10 +1468,9 @@ UTHR_DEFINE(c_get_request) {
 
     EXPECTS("\r\n");
 
-    log_debug("Conn %p, Parsed header %s: %s",
-              state->rh->conn,
-              state->request_headers->headers[state->i].name,
-              state->request_headers->headers[state->i].value);
+    http_request_log_debug(state->rh, "Parsed header %s: %s",
+                           state->request_headers->headers[state->i].name,
+                           state->request_headers->headers[state->i].value);
   }
   state->request_headers->num_headers = state->i;
 
@@ -1635,4 +1632,15 @@ http_response_add_header(HTTPResponseHeaders *rsp,
   rsp->num_headers += 1;
 
   return true;
+}
+
+const char *
+http_error_to_string(http_error_code_t e) {
+#define _EV(e) case e: return #e
+  switch (e) {
+    _EV(HTTP_SUCCESS);
+    _EV(HTTP_GENERIC_ERROR);
+  default: assert(false); return NULL;
+  }
+#undef _EV
 }

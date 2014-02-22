@@ -119,6 +119,9 @@ webdav_put_request_end(webdav_get_request_ctx_t put_ctx,
                        webdav_error_t error,
                        bool resource_existed);
 
+const char *
+webdav_error_to_string(webdav_error_t error);
+
 #ifdef __cplusplus
 }
 #endif
