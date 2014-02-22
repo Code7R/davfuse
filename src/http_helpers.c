@@ -57,9 +57,14 @@ UTHR_DEFINE(_simple_response_uthr) {
   bool ret = http_response_set_code(&ctx->resp, ctx->code);
   ASSERT_TRUE(ret);
 
-  ret = http_response_add_header(&ctx->resp, HTTP_HEADER_CONTENT_LENGTH,
-                                 "%zu", ctx->body_len);
-  ASSERT_TRUE(ret);
+  if (ctx->resp.code != HTTP_STATUS_CODE_NO_CONTENT) {
+    ret = http_response_add_header(&ctx->resp, HTTP_HEADER_CONTENT_LENGTH,
+                                   "%zu", ctx->body_len);
+    ASSERT_TRUE(ret);
+  }
+  /* we consider this an incorrect usage of the function
+     a programming error, so we assert */
+  else assert(!ctx->body_len);
 
   if (ctx->body_len) {
     ret = http_response_add_header(&ctx->resp, HTTP_HEADER_CONTENT_TYPE,

@@ -450,7 +450,12 @@ webdav_backend_fs_propfind(WebdavBackendFs *pbctx,
   char *new_uri = NULL;
   char *child_path = NULL;
 
-  /* TODO: support this */
+  /* TODO: support this,
+     TODO: instead of 500, return this:
+     "403 Forbidden - A server may reject PROPFIND requests on collections
+     with depth header of "Infinity", in which case it should use this error
+     with the precondition code 'propfind-finite-depth' inside the error body."
+  */
   if (depth == DEPTH_INF) {
     log_info("We don't support infinity propfind requests");
     ev.error = WEBDAV_ERROR_GENERAL;

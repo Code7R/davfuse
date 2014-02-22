@@ -969,26 +969,28 @@ http_request_write_headers(http_request_handle_t rh,
       _get_header_value(response_headers->headers,
                         response_headers->num_headers,
                         HTTP_HEADER_CONTENT_LENGTH);
-    if (!content_length_str) {
-      log_error("Handler did not use a valid content length string!");
-      goto error;
-    }
+    if (!rctx->is_no_content) {
+      if (!content_length_str) {
+        log_error("Handler did not use a valid content length string!");
+        goto error;
+      }
 
-    long content_length = strtol(content_length_str, NULL, 10);
-    if ((content_length == 0 && errno == EINVAL) ||
-        content_length < 0) {
-      log_error("Handler did not use a valid content length string!");
-      goto error;
-    }
+      long content_length = strtol(content_length_str, NULL, 10);
+      if ((content_length == 0 && errno == EINVAL) ||
+          content_length < 0) {
+        log_error("Handler did not use a valid content length string!");
+        goto error;
+      }
 
-    if (rctx->is_no_content && content_length) {
-      log_error("Handler had a non-zero content-length "
-                "when the code was no-content");
-      goto error;
+      rctx->out_content_length = content_length;
     }
-
-    rctx->out_content_length = content_length;
-    rctx->is_no_content = false;
+    else {
+      if (content_length_str) {
+        log_error("Handler had a content-length header"
+                  "when the code was no-content");
+        goto error;
+      }
+    }
   }
 
   if (response_headers->code == HTTP_STATUS_CODE_METHOD_NOT_ALLOWED &&
@@ -1281,7 +1283,8 @@ UTHR_DEFINE(client_coroutine) {
 
     /* write out rest of garbage if request ended prematurely */
     if (!_http_connection_has_error(cc) &&
-        cc->rctx.write_state == HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS) {
+        cc->rctx.write_state == HTTP_REQUEST_WRITE_STATE_WROTE_HEADERS &&
+        !cc->rctx.is_no_content) {
       if (cc->rctx.bytes_written < cc->rctx.out_content_length) {
         log_debug("conn %p handler didn't finish response", cc);
       }
