@@ -176,6 +176,10 @@ http_request_read(http_request_handle_t rh,
 		  void *buf, size_t nbyte,
 		  event_handler_t cb, void *cb_ud);
 
+NON_NULL_ARGS1(1)
+http_error_code_t
+http_request_force_connection_close(http_request_handle_t rh);
+
 NON_NULL_ARGS3(1, 2, 3) void
 http_request_write_headers(http_request_handle_t rh,
 			   const HTTPResponseHeaders *response_headers,

@@ -946,6 +946,22 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
 #undef EMITS
 }
 
+http_error_code_t
+http_request_force_connection_close(http_request_handle_t rh) {
+  HTTPRequestContext *const rctx = rh;
+
+  // TODO: this should possibly be an assert()
+  // this must happen before anything is done on this connection
+  if (rctx->write_state != HTTP_REQUEST_WRITE_STATE_NONE) {
+    log_error("Must set connection close before anything!");
+    return HTTP_GENERIC_ERROR;
+  }
+
+  rctx->is_connection_close = true;
+
+  return HTTP_SUCCESS;
+}
+
 void
 http_request_write_headers(http_request_handle_t rh,
                            const HTTPResponseHeaders *response_headers,
@@ -1483,7 +1499,8 @@ UTHR_DEFINE(c_get_request) {
     err = HTTP_GENERIC_ERROR;
   }
 
-  if (!err) {
+  if (!err &&
+      !state->rh->is_connection_close) {
     const char *connection_header;
     state->rh->is_connection_close =
       ((connection_header =
