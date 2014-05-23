@@ -312,7 +312,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
   log_info("fdevent select main loop started");
 
   while (true) {
-    log_debug("Looping...");
+    //    log_debug("Looping...");
 
     /* first clear out inactive timeouts and
        find select wait time
@@ -350,14 +350,14 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
       }
 
       if (ll->watch.events.read && !MY_FD_ISSET(ll->watch.sock, &readfds)) {
-        log_debug("Adding fd %d to read set", (int) ll->watch.sock);
+        //        log_debug("Adding fd %d to read set", (int) ll->watch.sock);
         MY_FD_SET(ll->watch.sock, &readfds);
         MY_FD_SET(ll->watch.sock, &errorfds);
         readfds_watched += 1;
       }
 
       if (ll->watch.events.write && !MY_FD_ISSET(ll->watch.sock, &writefds)) {
-        log_debug("Adding fd %d to write set", (int) ll->watch.sock);
+        //        log_debug("Adding fd %d to write set", (int) ll->watch.sock);
         MY_FD_SET(ll->watch.sock, &writefds);
         MY_FD_SET(ll->watch.sock, &errorfds);
         writefds_watched += 1;
@@ -375,7 +375,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
       return true;
     }
 
-    log_debug("before select");
+    //    log_debug("before select");
     bool select_error = false;
     while (true) {
       struct timeval *select_timeout_p;
@@ -395,8 +395,8 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
             0,
           };
         }
-        log_debug("Select will wait for %lu seconds",
-                  (long unsigned) select_timeout.tv_sec);
+        //        log_debug("Select will wait for %lu seconds",
+        //                  (long unsigned) select_timeout.tv_sec);
         select_timeout_p = &select_timeout;
       }
       else select_timeout_p = NULL;
@@ -430,7 +430,7 @@ event_loop_select_main_loop(event_loop_select_handle_t loop) {
 
       break;
     }
-    log_debug("after select");
+    //    log_debug("after select");
 
     /* dispatch io events */
     for (EventLoopSelectLink *ll = loop->ll; ll; ll = ll->next) {
