@@ -848,6 +848,10 @@ UTHR_DEFINE(request_proc) {
 
   UTHR_HEADER(struct handler_context, hc);
 
+  const http_error_code_t err = http_request_force_connection_close(hc->rh);
+  (void) err;
+  assert(err == HTTP_SUCCESS);
+
   http_request_log_info(hc->rh, "New request!");
 
   /* read out headers */
