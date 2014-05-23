@@ -235,12 +235,12 @@ EVENT_HANDLER_DEFINE(wait_until_ready_handler, ev_type, ev_, ud) {
        waiting for the first one to arrive */
     event_loop_watch_key_t to_remove = 0;
     if (ev->socket == conn->sock) {
-      log_debug("Client request socket has ready data!");
+      http_request_log_debug(&conn->rctx, "Client request socket has ready data!");
       to_remove = conn->spare.wait_until.stop_key;
       if (!ev->error) data_is_available = (void *) 0x1;
     }
     else {
-      log_debug("received server stop signal!!");
+      http_request_log_debug(&conn->rctx, "received server stop signal!!");
       assert(ev->socket == conn->server->stop_sockets[STOP_SOCKET_RECV]);
       to_remove = conn->spare.wait_until.read_key;
     }
@@ -266,6 +266,8 @@ EVENT_HANDLER_DEFINE(wait_until_ready_handler, ev_type, ev_, ud) {
     ASSERT_TRUE(success_remove_2);
 
     /* read timeout ran out, we consider this an error */
+    http_request_log_debug(&conn->rctx, "Timeout waiting for client, closing connection...");
+
     conn->last_error_number = 1;
   }
   else {
