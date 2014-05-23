@@ -899,6 +899,12 @@ UTHR_DEFINE(_http_request_write_headers_coroutine) {
     http_request_log_debug(whs->request_context,
                            "Writing response header: Connection: Keep-Alive");
     EMITS("Connection: Keep-Alive\r\n");
+    char out[256];
+    int str_len = snprintf(out, sizeof(out), "Keep-Alive: timeout=%d\r\n",
+                           CONN_READ_TIMEOUT);
+    http_request_log_debug(whs->request_context,
+                           "Writing response header: %s", out);
+    EMITN(out, str_len);
   }
 
   /* output each header */
