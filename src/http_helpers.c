@@ -142,7 +142,11 @@ http_request_string_response(http_request_handle_t rh,
                              http_status_code_t code,
                              const char *body,
                              event_handler_t cb, void *cb_ud) {
-  const size_t body_len = body ? strlen(body) : 0;
+  size_t body_len = 0;
+#ifndef __GNUC__ // ensured by nonnull attribute already, would emit warning otherwise
+    if(body)
+#endif
+      body_len = strlen(body);
   http_request_simple_response(rh, code, body, body_len, "text/plain",
                                LINKED_LIST_INITIALIZER, cb, cb_ud);
 }

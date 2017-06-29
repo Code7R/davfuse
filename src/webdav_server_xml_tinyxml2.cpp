@@ -293,8 +293,10 @@ unlinkNode(tinyxml2::XMLNode *elt) {
 NON_NULL_ARGS2(2, 3)
 static bool
 serializeDoc(const tinyxml2::XMLDocument & doc, char **out_data, size_t *out_size) {
+#ifndef __GNUC__ // ensured by nonnull attribute
   assert(out_data);
   assert(out_size);
+#endif
 
   /* Windows XP can't handle newlines in XML gracefully... */
   bool compact = true;

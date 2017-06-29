@@ -18,6 +18,7 @@
 
 #define _ISOC99_SOURCE
 #define _BSD_SOURCE
+#define _DEFAULT_SOURCE
 
 #include <assert.h>
 #include <stdbool.h>

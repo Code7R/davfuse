@@ -20,6 +20,7 @@
   An async webdav server
 */
 #define _ISOC99_SOURCE
+#define _DEFAULT_SOURCE
 
 #include <assert.h>
 #include <limits.h>

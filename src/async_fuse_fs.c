@@ -19,6 +19,7 @@
 #define _ISOC99_SOURCE
 #define _POSIX_C_SOURCE 199309L
 #define _BSD_SOURCE
+#define _DEFAULT_SOURCE
 
 #include <unistd.h>
 
